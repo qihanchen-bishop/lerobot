@@ -21,10 +21,16 @@ import time
 import warnings
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
 
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
@@ -377,6 +383,71 @@ def save_checkpoint(output_dir: Path, step: int, model: MaskACTPolicy, optimizer
     )
 
 
+class TrainingMetricsLogger:
+    """Persist scalar training metrics as JSON and TensorBoard event files."""
+
+    def __init__(self, output_dir: Path, run_config: dict[str, Any]):
+        self.output_dir = output_dir
+        self.metrics_dir = output_dir / "metrics"
+        self.tensorboard_dir = output_dir / "tensorboard"
+        self.metrics_dir.mkdir(parents=True, exist_ok=True)
+        self.records: list[dict[str, Any]] = []
+        self.jsonl_path = self.metrics_dir / "train_metrics.jsonl"
+        self.json_path = self.metrics_dir / "train_metrics.json"
+        self.writer = SummaryWriter(log_dir=str(self.tensorboard_dir)) if SummaryWriter is not None else None
+
+        self.metadata = {
+            "run_config": run_config,
+            "jsonl_path": str(self.jsonl_path),
+            "tensorboard_logdir": str(self.tensorboard_dir),
+            "created_at_unix": time.time(),
+        }
+        self._write_json()
+
+    def log(self, step: int, logs: dict[str, float], grad_norm: float, elapsed_s: float, lr: float) -> None:
+        record = {
+            "step": step,
+            "wall_time_unix": time.time(),
+            "elapsed_s": elapsed_s,
+            "lr": lr,
+            "grad_norm": grad_norm,
+            **{key: float(value) for key, value in logs.items() if isinstance(value, (int, float))},
+        }
+        self.records.append(record)
+
+        with open(self.jsonl_path, "a") as f:
+            f.write(json.dumps(record, sort_keys=True) + "\n")
+        self._write_json()
+
+        if self.writer is not None:
+            for key, value in record.items():
+                if key in {"step", "wall_time_unix"} or not isinstance(value, (int, float)):
+                    continue
+                tag = self._tensorboard_tag(key)
+                self.writer.add_scalar(tag, value, step)
+            self.writer.flush()
+
+    def close(self) -> None:
+        self._write_json()
+        if self.writer is not None:
+            self.writer.close()
+
+    def _write_json(self) -> None:
+        with open(self.json_path, "w") as f:
+            json.dump({"metadata": self.metadata, "records": self.records}, f, indent=4)
+            f.write("\n")
+
+    @staticmethod
+    def _tensorboard_tag(key: str) -> str:
+        if key in {"loss", "action_loss", "seg_loss"}:
+            return f"train/{key}"
+        if key in {"grad_norm", "lr"}:
+            return f"optim/{key}"
+        if key == "elapsed_s":
+            return "time/elapsed_s_per_log_interval"
+        return f"train/{key}"
+
+
 def main() -> None:
     args = parse_args()
     if isinstance(args.pretrained_backbone_weights, str) and args.pretrained_backbone_weights.lower() in {
@@ -437,29 +508,42 @@ def main() -> None:
     print(f"ACT image keys: {act_image_keys_for_experiment(args)}")
     print(f"Mask supervision keys: {args.mask_target_keys}")
     print(f"Output dir: {args.output_dir}")
+    run_config_path = args.output_dir / "mask_act_run_config.json"
+    with open(run_config_path) as f:
+        metrics_run_config = json.load(f)
+    metrics_logger = TrainingMetricsLogger(args.output_dir, metrics_run_config)
+    print(f"Metrics JSON: {metrics_logger.json_path}")
+    print(f"Metrics JSONL: {metrics_logger.jsonl_path}")
+    print(f"TensorBoard logdir: {metrics_logger.tensorboard_dir}")
 
     model.train()
     start_time = time.perf_counter()
-    for step in range(1, args.steps + 1):
-        raw_batch = next(dl_iter)
-        batch = preprocessor(raw_batch)
+    try:
+        for step in range(1, args.steps + 1):
+            raw_batch = next(dl_iter)
+            batch = preprocessor(raw_batch)
 
-        optimizer.zero_grad(set_to_none=True)
-        loss, logs = model(batch, raw_batch)
-        loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_norm)
-        optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            loss, logs = model(batch, raw_batch)
+            loss.backward()
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_norm)
+            optimizer.step()
 
-        if args.log_freq > 0 and step % args.log_freq == 0:
-            elapsed = time.perf_counter() - start_time
-            print(
-                f"step={step} loss={logs['loss']:.4f} action={logs['action_loss']:.4f} "
-                f"seg={logs['seg_loss']:.4f} grad={float(grad_norm):.3f} elapsed_s={elapsed:.1f}"
-            )
-            start_time = time.perf_counter()
+            if args.log_freq > 0 and step % args.log_freq == 0:
+                elapsed = time.perf_counter() - start_time
+                grad_norm_float = float(grad_norm.detach().cpu() if isinstance(grad_norm, Tensor) else grad_norm)
+                lr = float(optimizer.param_groups[0]["lr"])
+                metrics_logger.log(step=step, logs=logs, grad_norm=grad_norm_float, elapsed_s=elapsed, lr=lr)
+                print(
+                    f"step={step} loss={logs['loss']:.4f} action={logs['action_loss']:.4f} "
+                    f"seg={logs['seg_loss']:.4f} grad={grad_norm_float:.3f} elapsed_s={elapsed:.1f}"
+                )
+                start_time = time.perf_counter()
 
-        if args.save_freq > 0 and (step % args.save_freq == 0 or step == args.steps):
-            save_checkpoint(args.output_dir, step, model, optimizer)
+            if args.save_freq > 0 and (step % args.save_freq == 0 or step == args.steps):
+                save_checkpoint(args.output_dir, step, model, optimizer)
+    finally:
+        metrics_logger.close()
 
 
 if __name__ == "__main__":
