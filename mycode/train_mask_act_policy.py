@@ -4,6 +4,9 @@
 Experiments:
   1A: RGB -> U-Net -> predicted masks -> ACT. Seg loss trains U-Net; action loss trains ACT only.
   1B: Same as 1A, but action loss also backpropagates through the U-Net mask path.
+  4A: Same as 1B, with sqrt(object area ratio) and object-region centroid distance as ACT env state.
+  4B: Same as 1B, with two ACT encoder metric tokens supervised to predict the two mask metrics.
+  4C: Same as 1B, with the two metrics predicted by the ACT decoder and fed back chunk-autoregressively.
   2A: ACT sees predicted masks plus a pooled RGB encoder latent. Seg loss trains U-Net; action loss
       trains ACT only.
   2B: ACT sees predicted masks plus a pooled RGB encoder latent. Action loss trains the latent encoder
@@ -24,8 +27,10 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
+from PIL import Image, ImageDraw
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -36,6 +41,7 @@ from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import cycle, dataset_to_policy_features
 from lerobot.policies.act.modeling_act import ACTPolicy
+from lerobot.policies.act.modeling_act import METRIC_INPUT, METRIC_PRED, METRIC_SEED
 from lerobot.policies.factory import make_policy_config, make_pre_post_processors
 from lerobot.utils.constants import OBS_ENV_STATE
 
@@ -79,6 +85,8 @@ class MaskActRunConfig:
     unet_base_channels: int
     seg_loss_weight: float
     action_loss_weight: float
+    metric_loss_weight: float
+    metric_eps: float
     chunk_size: int
     n_action_steps: int
     pretrained_backbone_weights: str | None
@@ -167,6 +175,8 @@ class MaskACTPolicy(nn.Module):
         unet_base_channels: int,
         seg_loss_weight: float,
         action_loss_weight: float,
+        metric_loss_weight: float,
+        metric_eps: float,
     ):
         super().__init__()
         self.act_policy = act_policy
@@ -177,10 +187,12 @@ class MaskACTPolicy(nn.Module):
         self.latent_dim = latent_dim
         self.seg_loss_weight = seg_loss_weight
         self.action_loss_weight = action_loss_weight
+        self.metric_loss_weight = metric_loss_weight
+        self.metric_eps = metric_eps
         self.bce = nn.BCEWithLogitsLoss()
 
-        if self.experiment not in {"1A", "1B", "2A", "2B", "3"}:
-            raise ValueError(f"Unknown experiment '{experiment}'. Choose 1A, 1B, 2A, 2B, or 3.")
+        if self.experiment not in {"1A", "1B", "2A", "2B", "3", "4A", "4B", "4C"}:
+            raise ValueError(f"Unknown experiment '{experiment}'. Choose 1A, 1B, 2A, 2B, 3, 4A, 4B, or 4C.")
         self.seg_net = UNetSegNet(
             out_masks=len(mask_keys),
             latent_dim=latent_dim,
@@ -192,16 +204,19 @@ class MaskACTPolicy(nn.Module):
         return self.act_policy.config
 
     def mask_action_grad_enabled(self) -> bool:
-        return self.experiment == "1B"
+        return self.experiment in {"1B", "4A", "4B", "4C"}
 
     def latent_action_grad_enabled(self) -> bool:
         return self.experiment in {"2B", "3"}
 
     def act_uses_masks(self) -> bool:
-        return self.experiment in {"1A", "1B", "2A", "2B"}
+        return self.experiment in {"1A", "1B", "2A", "2B", "4A", "4B", "4C"}
 
     def act_uses_latent(self) -> bool:
         return self.experiment in {"2A", "2B", "3"}
+
+    def uses_mask_metrics(self) -> bool:
+        return self.experiment in {"4A", "4B", "4C"}
 
     def normalize_visual_like(self, image: Tensor, key: str) -> Tensor:
         key_stats = self.stats[key]
@@ -224,11 +239,39 @@ class MaskACTPolicy(nn.Module):
         rgb = raw_batch[self.rgb_key].to(device=device, dtype=torch.float32)
         return self.seg_net(rgb)
 
+    def compute_mask_metrics(self, masks: Tensor) -> Tensor:
+        object_idx = self.mask_keys.index("observation.images.object")
+        region_idx = self.mask_keys.index("observation.images.region")
+        object_mask = masks[:, object_idx]
+        region_mask = masks[:, region_idx]
+
+        object_area_ratio = object_mask.mean(dim=(-2, -1)).clamp_min(0.0)
+        object_exposure = torch.sqrt(object_area_ratio.clamp_min(self.metric_eps))
+
+        height, width = object_mask.shape[-2:]
+        y_coords = torch.linspace(0.0, float(height - 1), height, device=masks.device, dtype=masks.dtype)
+        x_coords = torch.linspace(0.0, float(width - 1), width, device=masks.device, dtype=masks.dtype)
+        yy, xx = torch.meshgrid(y_coords, x_coords, indexing="ij")
+
+        object_sum = object_mask.sum(dim=(-2, -1)).clamp_min(self.metric_eps)
+        region_sum = region_mask.sum(dim=(-2, -1)).clamp_min(self.metric_eps)
+        object_x = (object_mask * xx).sum(dim=(-2, -1)) / object_sum
+        object_y = (object_mask * yy).sum(dim=(-2, -1)) / object_sum
+        region_x = (region_mask * xx).sum(dim=(-2, -1)) / region_sum
+        region_y = (region_mask * yy).sum(dim=(-2, -1)) / region_sum
+
+        diagonal = torch.sqrt(
+            torch.as_tensor((height - 1) ** 2 + (width - 1) ** 2, device=masks.device, dtype=masks.dtype)
+        ).clamp_min(self.metric_eps)
+        distance = torch.sqrt((object_x - region_x).square() + (object_y - region_y).square()) / diagonal
+        return torch.stack([object_exposure, distance.clamp(0.0, 1.0)], dim=-1)
+
     def forward(self, batch: dict[str, Tensor], raw_batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, float]]:
         device = batch["action"].device
         mask_targets = self.build_mask_targets(raw_batch, device=device)
         mask_logits, rgb_latent = self.predict_masks_and_latent(raw_batch, device=device)
         seg_loss = self.bce(mask_logits, mask_targets)
+        metric_targets = self.compute_mask_metrics(mask_targets) if self.uses_mask_metrics() else None
 
         act_batch = dict(batch)
         if self.act_uses_latent():
@@ -245,20 +288,50 @@ class MaskACTPolicy(nn.Module):
                 mask_image = mask_probs[:, idx : idx + 1].repeat(1, 3, 1, 1)
                 act_batch[key] = self.normalize_visual_like(mask_image, key)
 
+            if self.uses_mask_metrics():
+                metric_inputs = self.compute_mask_metrics(mask_probs)
+                if self.experiment == "4A":
+                    act_batch[OBS_ENV_STATE] = metric_inputs
+                elif self.experiment == "4B":
+                    act_batch["metric_target"] = metric_targets
+                elif self.experiment == "4C":
+                    metric_chunk = metric_targets.unsqueeze(1).expand(-1, self.config.chunk_size, -1)
+                    act_batch[METRIC_INPUT] = metric_chunk
+                    act_batch[METRIC_SEED] = metric_inputs
+                    act_batch["metric_target"] = metric_chunk
+
         action_loss, action_logs = self.act_policy(act_batch)
+        metric_loss = None
+        metric_pred = action_logs.pop(METRIC_PRED, None)
+        if metric_targets is not None and metric_pred is not None:
+            target = act_batch["metric_target"]
+            metric_loss = F.smooth_l1_loss(metric_pred, target)
+
         loss = self.action_loss_weight * action_loss + self.seg_loss_weight * seg_loss
+        if metric_loss is not None:
+            loss = loss + self.metric_loss_weight * metric_loss
         logs = {
             "loss": float(loss.detach().cpu()),
             "action_loss": float(action_loss.detach().cpu()),
             "seg_loss": float(seg_loss.detach().cpu()),
         }
+        if metric_loss is not None:
+            pred_for_mae = metric_pred
+            target_for_mae = act_batch["metric_target"]
+            if pred_for_mae.ndim == 3:
+                pred_for_mae = pred_for_mae[:, 0]
+                target_for_mae = target_for_mae[:, 0]
+            metric_mae = (pred_for_mae.detach() - target_for_mae.detach()).abs().mean(dim=0)
+            logs["metric_loss"] = float(metric_loss.detach().cpu())
+            logs["object_exposure_mae"] = float(metric_mae[0].cpu())
+            logs["object_region_distance_mae"] = float(metric_mae[1].cpu())
         logs.update({key: float(value) for key, value in action_logs.items() if isinstance(value, (int, float))})
         return loss, logs
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--experiment", choices=["1A", "1B", "2A", "2B", "3"], required=True)
+    parser.add_argument("--experiment", choices=["1A", "1B", "2A", "2B", "3", "4A", "4B", "4C"], required=True)
     parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--rgb-key", default=DEFAULT_RGB_KEY)
@@ -280,6 +353,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad-clip-norm", type=float, default=10.0)
     parser.add_argument("--seg-loss-weight", type=float, default=1.0)
     parser.add_argument("--action-loss-weight", type=float, default=1.0)
+    parser.add_argument("--metric-loss-weight", type=float, default=1.0)
+    parser.add_argument("--metric-eps", type=float, default=1e-6)
     parser.add_argument("--chunk-size", type=int, default=100)
     parser.add_argument("--n-action-steps", type=int, default=100)
     parser.add_argument("--pretrained-backbone-weights", default="ResNet18_Weights.IMAGENET1K_V1")
@@ -295,6 +370,8 @@ def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
         return list(args.mask_target_keys)
     if experiment in {"2A", "2B"}:
         return list(args.mask_target_keys)
+    if experiment in {"4A", "4B", "4C"}:
+        return list(args.mask_target_keys)
     if experiment == "3":
         return []
     raise ValueError(experiment)
@@ -302,6 +379,19 @@ def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
 
 def act_uses_latent(experiment: str) -> bool:
     return experiment.upper() in {"2A", "2B", "3"}
+
+
+def act_uses_metric_env_state(experiment: str) -> bool:
+    return experiment.upper() == "4A"
+
+
+def act_metric_mode(experiment: str) -> str | None:
+    experiment = experiment.upper()
+    if experiment == "4B":
+        return "encoder_tokens"
+    if experiment == "4C":
+        return "decoder_autoregressive"
+    return None
 
 
 def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: dict) -> MaskACTPolicy:
@@ -315,6 +405,8 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
     input_features = {key: features[key] for key in input_keys}
     if act_uses_latent(args.experiment):
         input_features[OBS_ENV_STATE] = PolicyFeature(type=FeatureType.ENV, shape=(args.latent_dim,))
+    if act_uses_metric_env_state(args.experiment):
+        input_features[OBS_ENV_STATE] = PolicyFeature(type=FeatureType.ENV, shape=(2,))
 
     policy_cfg = make_policy_config(
         "act",
@@ -325,6 +417,8 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         chunk_size=args.chunk_size,
         n_action_steps=args.n_action_steps,
         pretrained_backbone_weights=args.pretrained_backbone_weights,
+        metric_mode=act_metric_mode(args.experiment),
+        metric_dim=2,
     )
     act_policy = ACTPolicy(policy_cfg)
     return MaskACTPolicy(
@@ -337,6 +431,8 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         unet_base_channels=args.unet_base_channels,
         seg_loss_weight=args.seg_loss_weight,
         action_loss_weight=args.action_loss_weight,
+        metric_loss_weight=args.metric_loss_weight,
+        metric_eps=args.metric_eps,
     )
 
 
@@ -357,6 +453,8 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         unet_base_channels=args.unet_base_channels,
         seg_loss_weight=args.seg_loss_weight,
         action_loss_weight=args.action_loss_weight,
+        metric_loss_weight=args.metric_loss_weight,
+        metric_eps=args.metric_eps,
         chunk_size=args.chunk_size,
         n_action_steps=args.n_action_steps,
         pretrained_backbone_weights=args.pretrained_backbone_weights,
@@ -370,7 +468,7 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         f.write("\n")
 
 
-def save_checkpoint(output_dir: Path, step: int, model: MaskACTPolicy, optimizer: torch.optim.Optimizer) -> None:
+def save_checkpoint(output_dir: Path, step: int, model: MaskACTPolicy, optimizer: torch.optim.Optimizer) -> Path:
     checkpoint_dir = output_dir / f"checkpoint_step_{step:06d}"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -381,6 +479,60 @@ def save_checkpoint(output_dir: Path, step: int, model: MaskACTPolicy, optimizer
         },
         checkpoint_dir / "training_state.pt",
     )
+    return checkpoint_dir
+
+
+def tensor_image_to_uint8(image: Tensor) -> Tensor:
+    image = image.detach().cpu().float()
+    if image.ndim == 3 and image.shape[0] in {1, 3}:
+        image = image.permute(1, 2, 0)
+    if image.shape[-1] == 1:
+        image = image.repeat(1, 1, 3)
+    if image.max() <= 1.5:
+        image = image * 255.0
+    return image.clamp(0, 255).to(torch.uint8)
+
+
+def make_labeled_tile(image: Tensor, label: str, size: tuple[int, int] = (192, 144)) -> Image.Image:
+    array = tensor_image_to_uint8(image).numpy()
+    tile = Image.fromarray(array).resize(size, Image.Resampling.BILINEAR)
+    canvas = Image.new("RGB", (size[0], size[1] + 20), "white")
+    canvas.paste(tile, (0, 20))
+    draw = ImageDraw.Draw(canvas)
+    draw.text((4, 3), label, fill=(0, 0, 0))
+    return canvas
+
+
+@torch.no_grad()
+def save_mask_preview(checkpoint_dir: Path, step: int, model: MaskACTPolicy, raw_batch: dict[str, Tensor]) -> None:
+    was_training = model.training
+    model.eval()
+    device = next(model.parameters()).device
+    mask_targets = model.build_mask_targets(raw_batch, device=device)
+    mask_logits, _ = model.predict_masks_and_latent(raw_batch, device=device)
+    mask_probs = torch.sigmoid(mask_logits)
+
+    rgb = raw_batch[model.rgb_key][0]
+    tiles = [make_labeled_tile(rgb, "rgb")]
+    for idx, key in enumerate(model.mask_keys):
+        name = key.rsplit(".", 1)[-1]
+        gt = mask_targets[0, idx : idx + 1].repeat(3, 1, 1)
+        pred = mask_probs[0, idx : idx + 1].repeat(3, 1, 1)
+        tiles.append(make_labeled_tile(gt, f"gt {name}"))
+        tiles.append(make_labeled_tile(pred, f"pred {name}"))
+
+    columns = 4
+    rows = (len(tiles) + columns - 1) // columns
+    tile_w, tile_h = tiles[0].size
+    grid = Image.new("RGB", (columns * tile_w, rows * tile_h), "white")
+    for idx, tile in enumerate(tiles):
+        x = (idx % columns) * tile_w
+        y = (idx // columns) * tile_h
+        grid.paste(tile, (x, y))
+    grid.save(checkpoint_dir / f"mask_preview_step_{step:06d}.png")
+
+    if was_training:
+        model.train()
 
 
 class TrainingMetricsLogger:
@@ -541,7 +693,8 @@ def main() -> None:
                 start_time = time.perf_counter()
 
             if args.save_freq > 0 and (step % args.save_freq == 0 or step == args.steps):
-                save_checkpoint(args.output_dir, step, model, optimizer)
+                checkpoint_dir = save_checkpoint(args.output_dir, step, model, optimizer)
+                save_mask_preview(checkpoint_dir, step, model, raw_batch)
     finally:
         metrics_logger.close()
 

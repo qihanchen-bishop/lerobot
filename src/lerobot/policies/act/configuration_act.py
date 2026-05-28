@@ -122,6 +122,8 @@ class ACTConfig(PreTrainedConfig):
     # Training and loss computation.
     dropout: float = 0.1
     kl_weight: float = 10.0
+    metric_mode: str | None = None
+    metric_dim: int = 2
 
     # Training preset
     optimizer_lr: float = 1e-5
@@ -150,6 +152,13 @@ class ACTConfig(PreTrainedConfig):
             raise ValueError(
                 f"Multiple observation steps not handled yet. Got `nobs_steps={self.n_obs_steps}`"
             )
+        if self.metric_mode not in {None, "encoder_tokens", "decoder_autoregressive"}:
+            raise ValueError(
+                "`metric_mode` must be None, 'encoder_tokens', or 'decoder_autoregressive'. "
+                f"Got {self.metric_mode}."
+            )
+        if self.metric_dim <= 0:
+            raise ValueError(f"`metric_dim` must be positive. Got {self.metric_dim}.")
 
     def get_optimizer_preset(self) -> AdamWConfig:
         return AdamWConfig(

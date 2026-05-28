@@ -37,6 +37,10 @@ from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
 
+METRIC_INPUT = "metric_input"
+METRIC_PRED = "metric_pred"
+METRIC_SEED = "metric_seed"
+
 
 class ACTPolicy(PreTrainedPolicy):
     """
@@ -139,7 +143,9 @@ class ACTPolicy(PreTrainedPolicy):
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
-        actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
+        model_out = self.model(batch)
+        actions_hat, (mu_hat, log_sigma_x2_hat) = model_out[:2]
+        aux_outputs = model_out[2] if len(model_out) > 2 else {}
 
         l1_loss = (
             F.l1_loss(batch[ACTION], actions_hat, reduction="none") * ~batch["action_is_pad"].unsqueeze(-1)
@@ -158,6 +164,9 @@ class ACTPolicy(PreTrainedPolicy):
             loss = l1_loss + mean_kld * self.config.kl_weight
         else:
             loss = l1_loss
+
+        if METRIC_PRED in aux_outputs:
+            loss_dict[METRIC_PRED] = aux_outputs[METRIC_PRED]
 
         return loss, loss_dict
 
@@ -336,7 +345,7 @@ class ACT(nn.Module):
         self.decoder = ACTDecoder(config)
 
         # Transformer encoder input projections. The tokens will be structured like
-        # [latent, (robot_state), (env_state), (image_feature_map_pixels)].
+        # [latent, (robot_state), (env_state), (metric_tokens), (image_feature_map_pixels)].
         if self.config.robot_state_feature:
             self.encoder_robot_state_input_proj = nn.Linear(
                 self.config.robot_state_feature.shape[0], config.dim_model
@@ -356,6 +365,13 @@ class ACT(nn.Module):
             n_1d_tokens += 1
         if self.config.env_state_feature:
             n_1d_tokens += 1
+        if self.config.metric_mode == "encoder_tokens":
+            self.encoder_metric_token_embed = nn.Embedding(config.metric_dim, config.dim_model)
+            self.metric_head = nn.Linear(config.dim_model, 1)
+            n_1d_tokens += config.metric_dim
+        elif self.config.metric_mode == "decoder_autoregressive":
+            self.decoder_metric_input_proj = nn.Linear(config.metric_dim, config.dim_model)
+            self.metric_head = nn.Linear(config.dim_model, config.metric_dim)
         self.encoder_1d_feature_pos_embed = nn.Embedding(n_1d_tokens, config.dim_model)
         if self.config.image_features:
             self.encoder_cam_feat_pos_embed = ACTSinusoidalPositionEmbedding2d(config.dim_model // 2)
@@ -375,7 +391,9 @@ class ACT(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
+    def forward(
+        self, batch: dict[str, Tensor]
+    ) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None], dict[str, Tensor]]:
         """A forward pass through the Action Chunking Transformer (with optional VAE encoder).
 
         `batch` should have the following structure:
@@ -464,6 +482,15 @@ class ACT(nn.Module):
         # Environment state token.
         if self.config.env_state_feature:
             encoder_in_tokens.append(self.encoder_env_state_input_proj(batch[OBS_ENV_STATE]))
+        metric_token_start = None
+        if self.config.metric_mode == "encoder_tokens":
+            metric_token_start = len(encoder_in_tokens)
+            metric_tokens = einops.repeat(
+                self.encoder_metric_token_embed.weight,
+                "m d -> m b d",
+                b=batch_size,
+            )
+            encoder_in_tokens.extend(list(metric_tokens))
 
         if self.config.image_features:
             # For a list of images, the H and W may vary but H*W is constant.
@@ -489,25 +516,76 @@ class ACT(nn.Module):
 
         # Forward pass through the transformer modules.
         encoder_out = self.encoder(encoder_in_tokens, pos_embed=encoder_in_pos_embed)
+        aux_outputs = {}
+        if self.config.metric_mode == "encoder_tokens":
+            metric_out = encoder_out[metric_token_start : metric_token_start + self.config.metric_dim]
+            metric_out = metric_out.transpose(0, 1)
+            aux_outputs[METRIC_PRED] = self.metric_head(metric_out).squeeze(-1)
+
         # TODO(rcadene, alexander-soare): remove call to `device` ; precompute and use buffer
         decoder_in = torch.zeros(
             (self.config.chunk_size, batch_size, self.config.dim_model),
             dtype=encoder_in_pos_embed.dtype,
             device=encoder_in_pos_embed.device,
         )
-        decoder_out = self.decoder(
-            decoder_in,
-            encoder_out,
-            encoder_pos_embed=encoder_in_pos_embed,
-            decoder_pos_embed=self.decoder_pos_embed.weight.unsqueeze(1),
-        )
+        if self.config.metric_mode == "decoder_autoregressive":
+            decoder_out = self._forward_metric_decoder(batch, decoder_in, encoder_out, encoder_in_pos_embed)
+        else:
+            decoder_out = self.decoder(
+                decoder_in,
+                encoder_out,
+                encoder_pos_embed=encoder_in_pos_embed,
+                decoder_pos_embed=self.decoder_pos_embed.weight.unsqueeze(1),
+            )
 
         # Move back to (B, S, C).
         decoder_out = decoder_out.transpose(0, 1)
 
         actions = self.action_head(decoder_out)
+        if self.config.metric_mode == "decoder_autoregressive":
+            aux_outputs[METRIC_PRED] = self.metric_head(decoder_out)
 
-        return actions, (mu, log_sigma_x2)
+        return actions, (mu, log_sigma_x2), aux_outputs
+
+    def _forward_metric_decoder(
+        self,
+        batch: dict[str, Tensor],
+        decoder_in: Tensor,
+        encoder_out: Tensor,
+        encoder_pos_embed: Tensor,
+    ) -> Tensor:
+        if self.training and METRIC_INPUT in batch:
+            metric_embed = self.decoder_metric_input_proj(batch[METRIC_INPUT]).transpose(0, 1)
+            return self.decoder(
+                decoder_in + metric_embed,
+                encoder_out,
+                encoder_pos_embed=encoder_pos_embed,
+                decoder_pos_embed=self.decoder_pos_embed.weight.unsqueeze(1),
+            )
+
+        seed = batch.get(METRIC_SEED)
+        if seed is None:
+            seed = torch.zeros(
+                (decoder_in.shape[1], self.config.metric_dim),
+                dtype=decoder_in.dtype,
+                device=decoder_in.device,
+            )
+        metrics = [seed]
+        decoder_outputs = []
+        for step in range(self.config.chunk_size):
+            metric_input = torch.stack(metrics, dim=1)
+            prefix_in = decoder_in[: step + 1] + self.decoder_metric_input_proj(metric_input).transpose(0, 1)
+            prefix_out = self.decoder(
+                prefix_in,
+                encoder_out,
+                encoder_pos_embed=encoder_pos_embed,
+                decoder_pos_embed=self.decoder_pos_embed.weight[: step + 1].unsqueeze(1),
+            )
+            last_out = prefix_out[-1]
+            decoder_outputs.append(last_out)
+            if step < self.config.chunk_size - 1:
+                metrics.append(self.metric_head(last_out))
+        return torch.stack(decoder_outputs, dim=0)
 
 
 class ACTEncoder(nn.Module):
