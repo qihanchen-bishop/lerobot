@@ -7,6 +7,8 @@ Experiments:
   4A: Same as 1B, with sqrt(object area ratio) and object-region centroid distance as ACT env state.
   4B: Same as 1B, with two ACT encoder metric tokens supervised to predict the two mask metrics.
   4C: Same as 1B, with the two metrics predicted by the ACT decoder and fed back chunk-autoregressively.
+  5:  RGB-only inference with latent semantic distillation. During training, ACT receives an RGB main latent
+      plus five mask-encoder semantic teacher latents; RGB semantic heads are aligned to those teacher latents.
   2A: ACT sees predicted masks plus a pooled RGB encoder latent. Seg loss trains U-Net; action loss
       trains ACT only.
   2B: ACT sees predicted masks plus a pooled RGB encoder latent. Action loss trains the latent encoder
@@ -28,6 +30,7 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
+import torchvision
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 from PIL import Image, ImageDraw
@@ -85,6 +88,7 @@ class MaskActRunConfig:
     unet_base_channels: int
     seg_loss_weight: float
     action_loss_weight: float
+    semantic_loss_weight: float
     metric_loss_weight: float
     metric_eps: float
     chunk_size: int
@@ -163,6 +167,58 @@ class UNetSegNet(nn.Module):
         return self.out_conv(x), latent
 
 
+class MaskSemanticEncoder(nn.Module):
+    """Shared encoder that maps each binary semantic mask to one latent vector."""
+
+    def __init__(self, latent_dim: int, base_channels: int):
+        super().__init__()
+        c1, c2, c3, c4 = base_channels, base_channels * 2, base_channels * 4, base_channels * 8
+        self.net = nn.Sequential(
+            DoubleConv(1, c1),
+            Down(c1, c2),
+            Down(c2, c3),
+            Down(c3, c4),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(c4, latent_dim),
+            nn.LayerNorm(latent_dim),
+        )
+
+    def forward(self, masks: Tensor) -> Tensor:
+        batch_size, num_masks = masks.shape[:2]
+        latents = self.net(masks.reshape(batch_size * num_masks, 1, *masks.shape[-2:]))
+        return latents.reshape(batch_size, num_masks, -1)
+
+
+class SemanticLatentNet(nn.Module):
+    """RGB ResNet latent plus per-class RGB semantic heads and mask semantic teachers."""
+
+    def __init__(
+        self,
+        num_masks: int,
+        latent_dim: int,
+        mask_base_channels: int,
+        pretrained_backbone_weights: str | None,
+    ):
+        super().__init__()
+        resnet = torchvision.models.resnet18(weights=pretrained_backbone_weights)
+        self.rgb_encoder = nn.Sequential(*list(resnet.children())[:-2])
+        self.rgb_pool = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Flatten())
+        self.rgb_main_proj = nn.Sequential(nn.Linear(resnet.fc.in_features, latent_dim), nn.LayerNorm(latent_dim))
+        self.rgb_semantic_heads = nn.ModuleList(
+            nn.Sequential(nn.Linear(resnet.fc.in_features, latent_dim), nn.LayerNorm(latent_dim))
+            for _ in range(num_masks)
+        )
+        self.mask_encoder = MaskSemanticEncoder(latent_dim=latent_dim, base_channels=mask_base_channels)
+
+    def forward(self, rgb: Tensor, masks: Tensor | None = None) -> tuple[Tensor, Tensor, Tensor | None]:
+        rgb_features = self.rgb_pool(self.rgb_encoder(rgb))
+        rgb_main_latent = self.rgb_main_proj(rgb_features)
+        rgb_semantic_latents = torch.stack([head(rgb_features) for head in self.rgb_semantic_heads], dim=1)
+        mask_semantic_latents = self.mask_encoder(masks) if masks is not None else None
+        return rgb_main_latent, rgb_semantic_latents, mask_semantic_latents
+
+
 class MaskACTPolicy(nn.Module):
     def __init__(
         self,
@@ -175,8 +231,10 @@ class MaskACTPolicy(nn.Module):
         unet_base_channels: int,
         seg_loss_weight: float,
         action_loss_weight: float,
+        semantic_loss_weight: float,
         metric_loss_weight: float,
         metric_eps: float,
+        pretrained_backbone_weights: str | None,
     ):
         super().__init__()
         self.act_policy = act_policy
@@ -187,16 +245,27 @@ class MaskACTPolicy(nn.Module):
         self.latent_dim = latent_dim
         self.seg_loss_weight = seg_loss_weight
         self.action_loss_weight = action_loss_weight
+        self.semantic_loss_weight = semantic_loss_weight
         self.metric_loss_weight = metric_loss_weight
         self.metric_eps = metric_eps
         self.bce = nn.BCEWithLogitsLoss()
 
-        if self.experiment not in {"1A", "1B", "2A", "2B", "3", "4A", "4B", "4C"}:
-            raise ValueError(f"Unknown experiment '{experiment}'. Choose 1A, 1B, 2A, 2B, 3, 4A, 4B, or 4C.")
+        if self.experiment not in {"1A", "1B", "2A", "2B", "3", "4A", "4B", "4C", "5"}:
+            raise ValueError(f"Unknown experiment '{experiment}'. Choose 1A, 1B, 2A, 2B, 3, 4A, 4B, 4C, or 5.")
         self.seg_net = UNetSegNet(
             out_masks=len(mask_keys),
             latent_dim=latent_dim,
             base_channels=unet_base_channels,
+        )
+        self.semantic_net = (
+            SemanticLatentNet(
+                num_masks=len(mask_keys),
+                latent_dim=latent_dim,
+                mask_base_channels=unet_base_channels,
+                pretrained_backbone_weights=pretrained_backbone_weights,
+            )
+            if self.experiment == "5"
+            else None
         )
 
     @property
@@ -218,6 +287,9 @@ class MaskACTPolicy(nn.Module):
     def uses_mask_metrics(self) -> bool:
         return self.experiment in {"4A", "4B", "4C"}
 
+    def uses_semantic_latents(self) -> bool:
+        return self.experiment == "5"
+
     def normalize_visual_like(self, image: Tensor, key: str) -> Tensor:
         key_stats = self.stats[key]
         mean = torch.as_tensor(key_stats["mean"], dtype=image.dtype, device=image.device)
@@ -238,6 +310,17 @@ class MaskACTPolicy(nn.Module):
     def predict_masks_and_latent(self, raw_batch: dict[str, Tensor], device: torch.device) -> tuple[Tensor, Tensor]:
         rgb = raw_batch[self.rgb_key].to(device=device, dtype=torch.float32)
         return self.seg_net(rgb)
+
+    def predict_semantic_latents(
+        self,
+        raw_batch: dict[str, Tensor],
+        device: torch.device,
+        masks: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor | None]:
+        rgb = raw_batch[self.rgb_key].to(device=device, dtype=torch.float32)
+        if self.semantic_net is None:
+            raise RuntimeError("Semantic latent prediction is only available for experiment 5.")
+        return self.semantic_net(rgb, masks)
 
     def compute_mask_metrics(self, masks: Tensor) -> Tensor:
         object_idx = self.mask_keys.index("observation.images.object")
@@ -269,6 +352,35 @@ class MaskACTPolicy(nn.Module):
     def forward(self, batch: dict[str, Tensor], raw_batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, float]]:
         device = batch["action"].device
         mask_targets = self.build_mask_targets(raw_batch, device=device)
+
+        if self.uses_semantic_latents():
+            rgb_main_latent, rgb_semantic_latents, mask_semantic_latents = self.predict_semantic_latents(
+                raw_batch,
+                device=device,
+                masks=mask_targets,
+            )
+            if mask_semantic_latents is None:
+                raise RuntimeError("Experiment 5 requires mask teacher latents during training.")
+            semantic_loss = F.smooth_l1_loss(rgb_semantic_latents, mask_semantic_latents.detach())
+            act_batch = dict(batch)
+            teacher_semantic_latents = mask_semantic_latents.reshape(mask_semantic_latents.shape[0], -1)
+            act_batch[OBS_ENV_STATE] = torch.cat([rgb_main_latent, teacher_semantic_latents], dim=-1)
+            action_loss, action_logs = self.act_policy(act_batch)
+            loss = self.action_loss_weight * action_loss + self.semantic_loss_weight * semantic_loss
+            semantic_cosine = F.cosine_similarity(
+                rgb_semantic_latents.detach().flatten(1),
+                mask_semantic_latents.detach().flatten(1),
+                dim=-1,
+            ).mean()
+            logs = {
+                "loss": float(loss.detach().cpu()),
+                "action_loss": float(action_loss.detach().cpu()),
+                "semantic_loss": float(semantic_loss.detach().cpu()),
+                "semantic_cosine": float(semantic_cosine.cpu()),
+            }
+            logs.update({key: float(value) for key, value in action_logs.items() if isinstance(value, (int, float))})
+            return loss, logs
+
         mask_logits, rgb_latent = self.predict_masks_and_latent(raw_batch, device=device)
         seg_loss = self.bce(mask_logits, mask_targets)
         metric_targets = self.compute_mask_metrics(mask_targets) if self.uses_mask_metrics() else None
@@ -331,7 +443,7 @@ class MaskACTPolicy(nn.Module):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--experiment", choices=["1A", "1B", "2A", "2B", "3", "4A", "4B", "4C"], required=True)
+    parser.add_argument("--experiment", choices=["1A", "1B", "2A", "2B", "3", "4A", "4B", "4C", "5"], required=True)
     parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--rgb-key", default=DEFAULT_RGB_KEY)
@@ -353,6 +465,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad-clip-norm", type=float, default=10.0)
     parser.add_argument("--seg-loss-weight", type=float, default=1.0)
     parser.add_argument("--action-loss-weight", type=float, default=1.0)
+    parser.add_argument("--semantic-loss-weight", type=float, default=1.0)
     parser.add_argument("--metric-loss-weight", type=float, default=1.0)
     parser.add_argument("--metric-eps", type=float, default=1e-6)
     parser.add_argument("--chunk-size", type=int, default=100)
@@ -372,13 +485,17 @@ def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
         return list(args.mask_target_keys)
     if experiment in {"4A", "4B", "4C"}:
         return list(args.mask_target_keys)
-    if experiment == "3":
+    if experiment in {"3", "5"}:
         return []
     raise ValueError(experiment)
 
 
 def act_uses_latent(experiment: str) -> bool:
     return experiment.upper() in {"2A", "2B", "3"}
+
+
+def act_uses_semantic_env_state(experiment: str) -> bool:
+    return experiment.upper() == "5"
 
 
 def act_uses_metric_env_state(experiment: str) -> bool:
@@ -407,6 +524,11 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         input_features[OBS_ENV_STATE] = PolicyFeature(type=FeatureType.ENV, shape=(args.latent_dim,))
     if act_uses_metric_env_state(args.experiment):
         input_features[OBS_ENV_STATE] = PolicyFeature(type=FeatureType.ENV, shape=(2,))
+    if act_uses_semantic_env_state(args.experiment):
+        input_features[OBS_ENV_STATE] = PolicyFeature(
+            type=FeatureType.ENV,
+            shape=(args.latent_dim * (1 + len(args.mask_target_keys)),),
+        )
 
     policy_cfg = make_policy_config(
         "act",
@@ -431,8 +553,10 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         unet_base_channels=args.unet_base_channels,
         seg_loss_weight=args.seg_loss_weight,
         action_loss_weight=args.action_loss_weight,
+        semantic_loss_weight=args.semantic_loss_weight,
         metric_loss_weight=args.metric_loss_weight,
         metric_eps=args.metric_eps,
+        pretrained_backbone_weights=args.pretrained_backbone_weights,
     )
 
 
@@ -453,6 +577,7 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         unet_base_channels=args.unet_base_channels,
         seg_loss_weight=args.seg_loss_weight,
         action_loss_weight=args.action_loss_weight,
+        semantic_loss_weight=args.semantic_loss_weight,
         metric_loss_weight=args.metric_loss_weight,
         metric_eps=args.metric_eps,
         chunk_size=args.chunk_size,
@@ -505,6 +630,9 @@ def make_labeled_tile(image: Tensor, label: str, size: tuple[int, int] = (192, 1
 
 @torch.no_grad()
 def save_mask_preview(checkpoint_dir: Path, step: int, model: MaskACTPolicy, raw_batch: dict[str, Tensor]) -> None:
+    if model.uses_semantic_latents():
+        return
+
     was_training = model.training
     model.eval()
     device = next(model.parameters()).device
@@ -686,9 +814,11 @@ def main() -> None:
                 grad_norm_float = float(grad_norm.detach().cpu() if isinstance(grad_norm, Tensor) else grad_norm)
                 lr = float(optimizer.param_groups[0]["lr"])
                 metrics_logger.log(step=step, logs=logs, grad_norm=grad_norm_float, elapsed_s=elapsed, lr=lr)
+                extra_loss = logs.get("seg_loss", logs.get("semantic_loss", 0.0))
+                extra_name = "seg" if "seg_loss" in logs else "semantic"
                 print(
                     f"step={step} loss={logs['loss']:.4f} action={logs['action_loss']:.4f} "
-                    f"seg={logs['seg_loss']:.4f} grad={grad_norm_float:.3f} elapsed_s={elapsed:.1f}"
+                    f"{extra_name}={extra_loss:.4f} grad={grad_norm_float:.3f} elapsed_s={elapsed:.1f}"
                 )
                 start_time = time.perf_counter()
 

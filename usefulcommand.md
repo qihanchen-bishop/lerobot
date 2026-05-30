@@ -24,3 +24,5 @@ conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.
 
 3: ACT 只看 U-Net encoder latent，不显式输入 Mask，decoder 子任务训练仍保留
 conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 3 --root simdata/cube1 --repo-id cube1 --output-dir outputs/train/mask_act_3_all --mask-target-keys observation.images.occluder observation.images.object observation.images.region observation.images.left_arm observation.images.right_arm --batch-size 2 --steps 100000 --device cuda
+
+conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 4A --root simdata/cube1 --repo-id cube1 --output-dir outputs/train/mask_act_4a_object --batch-size 8 --steps 100000 --device cuda
