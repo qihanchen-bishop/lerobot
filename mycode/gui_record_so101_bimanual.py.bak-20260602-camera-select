@@ -11,7 +11,6 @@ from __future__ import annotations
 import queue
 import json
 import shutil
-import subprocess
 import sys
 import threading
 import time
@@ -21,17 +20,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
-from types import MethodType
 from typing import Any
 
 import cv2
 import numpy as np
 import pandas as pd
 from PIL import Image, ImageTk
-
-CURRENT_REPO_SRC = Path(__file__).resolve().parents[1] / "src"
-if str(CURRENT_REPO_SRC) not in sys.path:
-    sys.path.insert(0, str(CURRENT_REPO_SRC))
 
 try:
     from mycode.gui_view_lerobot_dataset import read_nested_parquets, rewrite_dataset, video_keys_from_info
@@ -46,7 +40,7 @@ from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraCon
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.pipeline_features import aggregate_pipeline_dataset_features, create_initial_features
 from lerobot.datasets.utils import build_dataset_frame, combine_feature_dicts
-from lerobot.datasets.video_utils import VideoEncodingManager, get_video_duration_in_s
+from lerobot.datasets.video_utils import VideoEncodingManager
 from lerobot.processor import make_default_processors
 from lerobot.robots.so_follower import SO101Follower, SOFollowerRobotConfig
 from lerobot.teleoperators.so_leader import SO101Leader, SOLeaderTeleopConfig
@@ -55,13 +49,12 @@ from lerobot.utils.utils import init_logging
 
 
 FPS = 30
-CAMERA_WIDTH = 1280
-CAMERA_HEIGHT = 720
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
 PREVIEW_SIZE = (1280, 720)
 DEFAULT_CALIBRATION_PATH = Path(__file__).resolve().parents[1] / "calibration"
 DEFAULT_DATASET_ROOT = Path(__file__).resolve().parents[1] / "datanew"
 TASK_CHOICES = ("cube1", "cube2", "cube3")
-EPISODE_FILE_SIZE_MB = 1e-6
 
 
 def depth_to_rgb(depth: np.ndarray) -> np.ndarray:
@@ -318,9 +311,6 @@ class RecorderSettings:
     right_leader_id: str
     opencv_front: str
     opencv_side: str
-    record_opencv_front: bool
-    record_opencv_side: bool
-    record_realsense: bool
     enable_realsense: bool
     realsense_serial: str
     repo_id: str
@@ -365,8 +355,6 @@ class BimanualRecorder:
         self.recording = False
         self.ready = False
         self.failed = False
-        self.saving_episode = False
-        self.save_thread: threading.Thread | None = None
         self.episode_count = 0
         self.current_episode_task = settings.task
         self.dataset: LeRobotDataset | None = None
@@ -380,9 +368,6 @@ class BimanualRecorder:
     def request_record(self, task: str) -> None:
         if not self.ready:
             self._put_status("Not ready yet. Wait until status says preview and teleoperation are running.")
-            return
-        if self.saving_episode:
-            self._put_status("Episode is still saving. Wait until save completes before recording again.")
             return
         self.command_queue.put(("record", task))
 
@@ -411,9 +396,6 @@ class BimanualRecorder:
     def _put_episode(self, episode_index: int, recording: bool = False) -> None:
         self.status_queue.put(f"EPISODE|{episode_index}|{int(recording)}")
 
-    def _put_save_state(self, saving: bool) -> None:
-        self.status_queue.put(f"SAVE_STATE|{int(saving)}")
-
     def _run(self) -> None:
         robot = None
         teleop = None
@@ -441,8 +423,6 @@ class BimanualRecorder:
             root = Path(self.settings.dataset_root).expanduser() if self.settings.dataset_root else None
             self._put_status("Creating/opening LeRobot dataset...")
             self.dataset = self._open_or_create_dataset(root, robot, dataset_features)
-            self._configure_episode_file_storage(self.dataset)
-            self._install_episode_video_saver(self.dataset)
             self.episode_count = self.dataset.num_episodes
             self._put_episode(self.episode_count)
             self._put_status(f"Dataset root: {self.dataset.root}")
@@ -484,13 +464,11 @@ class BimanualRecorder:
                 time.sleep(max(1 / FPS - dt_s, 0.0))
 
             self._end_episode_if_needed()
-            self._wait_for_save_if_needed()
         except Exception as exc:
             self.failed = True
             self._put_status(f"ERROR: {exc}")
         finally:
             self.ready = False
-            self._wait_for_save_if_needed()
             try:
                 if video_manager is not None:
                     video_manager.__exit__(None, None, None)
@@ -598,51 +576,6 @@ class BimanualRecorder:
                     image_writer_threads=image_writer_threads,
                     vcodec="h264",
                 )
-
-    def _configure_episode_file_storage(self, dataset: LeRobotDataset) -> None:
-        dataset.meta.update_chunk_settings(
-            data_files_size_in_mb=EPISODE_FILE_SIZE_MB,
-            video_files_size_in_mb=EPISODE_FILE_SIZE_MB,
-        )
-        self._put_status(
-            "Dataset storage set to episode-per-file mode "
-            f"(data/video file limit {EPISODE_FILE_SIZE_MB} MB)."
-        )
-
-    def _install_episode_video_saver(self, dataset: LeRobotDataset) -> None:
-        def save_episode_video_per_file(
-            dataset_self: LeRobotDataset,
-            video_key: str,
-            episode_index: int,
-            temp_path: Path | None = None,
-        ) -> dict[str, float | int]:
-            ep_path = (
-                dataset_self._encode_temporary_episode_video(video_key, episode_index)
-                if temp_path is None
-                else temp_path
-            )
-            ep_duration_in_s = get_video_duration_in_s(ep_path)
-            chunk_idx = int(episode_index) // dataset_self.meta.chunks_size
-            file_idx = int(episode_index) % dataset_self.meta.chunks_size
-            new_path = dataset_self.root / dataset_self.meta.video_path.format(
-                video_key=video_key,
-                chunk_index=chunk_idx,
-                file_index=file_idx,
-            )
-            new_path.parent.mkdir(parents=True, exist_ok=True)
-            if new_path.exists():
-                new_path.unlink()
-            shutil.move(str(ep_path), str(new_path))
-            shutil.rmtree(str(ep_path.parent), ignore_errors=True)
-            return {
-                f"videos/{video_key}/chunk_index": chunk_idx,
-                f"videos/{video_key}/file_index": file_idx,
-                f"videos/{video_key}/from_timestamp": 0.0,
-                f"videos/{video_key}/to_timestamp": ep_duration_in_s,
-            }
-
-        dataset._save_episode_video = MethodType(save_episode_video_per_file, dataset)
-        self._put_status("Video storage set to strict episode-per-file mode.")
 
     def _load_existing_dataset(self, repo_id: str, root: Path | None, image_writer_threads: int) -> LeRobotDataset:
         dataset = LeRobotDataset(repo_id, root=root, revision=None, download_videos=False, vcodec="h264")
@@ -819,9 +752,7 @@ class BimanualRecorder:
 
     def _make_robot(self) -> LocalBimanualSOFollower:
         cameras = {}
-        serial = self._resolve_realsense_serial() if self.settings.record_realsense else ""
-        if self.settings.enable_realsense and not self.settings.record_realsense:
-            self._put_status("RealSense enabled but not selected for recording; skipping RealSense.")
+        serial = self._resolve_realsense_serial()
         if serial:
             cameras["front"] = RealSenseCameraConfig(
                 serial_number_or_name=serial,
@@ -833,10 +764,8 @@ class BimanualRecorder:
             )
             self._put_status("RealSense will be connected before OpenCV cameras.")
 
-        front_path = self.settings.opencv_front.strip() if self.settings.record_opencv_front else ""
-        if self.settings.opencv_front.strip() and not self.settings.record_opencv_front:
-            self._put_status("OpenCV front path is set but not selected for recording; skipping front RGB.")
-        if front_path and not serial:
+        front_path = self.settings.opencv_front.strip()
+        if front_path and not self.settings.enable_realsense:
             cameras["front"] = OpenCVCameraConfig(
                 index_or_path=front_path,
                 width=CAMERA_WIDTH,
@@ -844,18 +773,12 @@ class BimanualRecorder:
                 fps=FPS,
                 fourcc="MJPG",
             )
-        elif front_path and serial:
+        elif front_path and self.settings.enable_realsense:
             self._put_status(
                 f"RealSense is enabled as front; ignoring OpenCV front path {front_path}."
             )
 
-        side_path = (
-            self._resolve_opencv_side_path(self.settings.opencv_side.strip())
-            if self.settings.record_opencv_side
-            else ""
-        )
-        if self.settings.opencv_side.strip() and not self.settings.record_opencv_side:
-            self._put_status("OpenCV side path is set but not selected for recording; skipping side RGB.")
+        side_path = self._resolve_opencv_side_path(self.settings.opencv_side.strip())
         if side_path:
             side_description = self._describe_video_path(side_path)
             if side_description:
@@ -879,7 +802,6 @@ class BimanualRecorder:
                 id=self.settings.left_follower_id,
                 calibration_dir=robot_calibration_dir,
                 port=self.settings.left_follower_port,
-                disable_torque_on_disconnect=False,
                 cameras=cameras,
             )
         )
@@ -888,7 +810,6 @@ class BimanualRecorder:
                 id=self.settings.right_follower_id,
                 calibration_dir=robot_calibration_dir,
                 port=self.settings.right_follower_port,
-                disable_torque_on_disconnect=False,
             )
         )
         robot = LocalBimanualSOFollower(left_arm, right_arm)
@@ -1060,9 +981,7 @@ class BimanualRecorder:
             command_name = command[0] if isinstance(command, tuple) else command
 
             if command_name == "record":
-                if self.saving_episode:
-                    self._put_status("Episode is still saving. Wait until save completes before recording again.")
-                elif not self.recording:
+                if not self.recording:
                     requested_task = command[1] if isinstance(command, tuple) and len(command) > 1 else self.settings.task
                     self.current_episode_task = str(requested_task or self.settings.task)
                     self.recording = True
@@ -1081,50 +1000,25 @@ class BimanualRecorder:
 
     def _end_episode_if_needed(self) -> None:
         if not self.recording or self.dataset is None:
-            if self.saving_episode:
-                self._put_status("Episode is already saving. Teleoperation can continue, but Record is disabled.")
             return
         self.recording = False
         saved_episode_index = self.episode_count
         frame_count = int(self.dataset.episode_buffer["size"]) if self.dataset.episode_buffer else 0
-        raw_depth_frames = self.raw_depth_frames
-        raw_depth_metadata = self.raw_depth_metadata
-        self.raw_depth_frames = []
-        self.raw_depth_metadata = {}
-        self.saving_episode = True
-        self._put_save_state(True)
         self._put_episode(saved_episode_index, recording=False)
         self._put_progress(5, 100, f"Saving episode {saved_episode_index} ({frame_count} frames)...")
-        self._put_status(
-            f"Saving episode {saved_episode_index} ({frame_count} frames) in background. Teleoperation remains active."
-        )
-        self.save_thread = threading.Thread(
-            target=self._save_episode_worker,
-            args=(saved_episode_index, frame_count, raw_depth_frames, raw_depth_metadata),
-            daemon=True,
-        )
-        self.save_thread.start()
-
-    def _save_episode_worker(
-        self,
-        saved_episode_index: int,
-        frame_count: int,
-        raw_depth_frames: list[np.ndarray],
-        raw_depth_metadata: dict[str, np.ndarray],
-    ) -> None:
-        del frame_count
+        self._put_status(f"Saving episode {saved_episode_index} ({frame_count} frames)...")
         try:
-            if self.dataset is None:
-                raise RuntimeError("dataset is not available while saving episode")
             self._put_progress(20, 100, "Writing parquet data and encoding videos...")
             self.dataset.save_episode()
             self._put_progress(85, 100, "Saving raw depth sidecar...")
-            self._save_raw_depth_sidecar(saved_episode_index, raw_depth_frames, raw_depth_metadata)
+            self._save_raw_depth_sidecar(saved_episode_index)
             self.episode_count = self.dataset.num_episodes
             if self.episode_count != saved_episode_index + 1:
                 raise RuntimeError(
                     f"saved episode count mismatch: expected {saved_episode_index + 1}, dataset reports {self.episode_count}"
                 )
+            self.raw_depth_frames = []
+            self.raw_depth_metadata = {}
             self._put_episode(self.episode_count)
             self._put_progress(100, 100, f"Episode {saved_episode_index} saved successfully.")
             self._put_status(
@@ -1132,17 +1026,9 @@ class BimanualRecorder:
             )
         except Exception as exc:
             self.failed = True
-            self.stop_event.set()
             self._put_progress(0, 100, f"Save failed for episode {saved_episode_index}.")
             self._put_status(f"ERROR: failed to save episode {saved_episode_index}: {exc}")
-        finally:
-            self.saving_episode = False
-            self._put_save_state(False)
-
-    def _wait_for_save_if_needed(self) -> None:
-        if self.save_thread is not None and self.save_thread.is_alive():
-            self._put_status("Waiting for background episode save to finish...")
-            self.save_thread.join()
+            raise
 
     def _discard_episode_if_needed(self) -> None:
         if not self.recording or self.dataset is None:
@@ -1170,24 +1056,19 @@ class BimanualRecorder:
             if not self.raw_depth_metadata:
                 self.raw_depth_metadata = self._get_realsense_depth_metadata(rs_camera)
 
-    def _save_raw_depth_sidecar(
-        self,
-        episode_index: int,
-        raw_depth_frames: list[np.ndarray],
-        raw_depth_metadata: dict[str, np.ndarray],
-    ) -> None:
-        if self.dataset is None or not raw_depth_frames:
+    def _save_raw_depth_sidecar(self, episode_index: int) -> None:
+        if self.dataset is None or not self.raw_depth_frames:
             return
         depth_dir = self.dataset.root / "sidecar_depth" / "left_front_depth_mm"
         depth_dir.mkdir(parents=True, exist_ok=True)
         depth_path = depth_dir / f"episode_{episode_index:06d}.npz"
-        depth_stack = np.stack(raw_depth_frames, axis=0)
+        depth_stack = np.stack(self.raw_depth_frames, axis=0)
         np.savez_compressed(
             depth_path,
             depth_mm=depth_stack,
             fps=np.array(FPS, dtype=np.int32),
             episode_index=np.array(episode_index, dtype=np.int64),
-            **raw_depth_metadata,
+            **self.raw_depth_metadata,
         )
         self._put_status(f"Saved raw depth sidecar: {depth_path}")
 
@@ -1275,13 +1156,6 @@ class RecorderApp:
         self.playing_dataset = False
         self.play_offset_s = 0.0
         self.play_started_at = 0.0
-        self.preview_zoom = tk.DoubleVar(value=1.0)
-        self.live_frame_stats: dict[str, tuple[int, int, float]] = {}
-        self.live_frame_times: dict[str, float] = {}
-        self.active_dataset_root: Path | None = None
-        self.last_warned_ineffective_path = ""
-        self.dataset_root_warning_after: str | None = None
-        self.episode_save_active = False
 
         self.vars = {
             "left_follower_port": tk.StringVar(value="/dev/ttyACM0"),
@@ -1292,8 +1166,8 @@ class RecorderApp:
             "right_follower_id": tk.StringVar(value="my_awesome_follower_arm_r"),
             "left_leader_id": tk.StringVar(value="my_awesome_leader_arm"),
             "right_leader_id": tk.StringVar(value="my_awesome_leader_arm_r"),
-            "opencv_front": tk.StringVar(value="/dev/video4"),
-            "opencv_side": tk.StringVar(value=""),
+            "opencv_front": tk.StringVar(value=""),
+            "opencv_side": tk.StringVar(value="/dev/video4"),
             "realsense_serial": tk.StringVar(value=""),
             "repo_id": tk.StringVar(value=self._infer_repo_id(DEFAULT_DATASET_ROOT)),
             "dataset_root": tk.StringVar(value=str(DEFAULT_DATASET_ROOT)),
@@ -1304,19 +1178,12 @@ class RecorderApp:
         }
         self.resume = tk.BooleanVar(value=False)
         self.push_to_hub = tk.BooleanVar(value=False)
-        self.enable_realsense = tk.BooleanVar(value=False)
-        self.record_opencv_front = tk.BooleanVar(value=True)
-        self.record_opencv_side = tk.BooleanVar(value=False)
-        self.record_realsense = tk.BooleanVar(value=False)
+        self.enable_realsense = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value="Configure ports, then click Connect.")
         self.state_text = tk.StringVar(value="")
         self.episode_text = tk.StringVar(value="Episode: not connected")
         self.progress_text = tk.StringVar(value="Idle")
         self.progress_value = tk.DoubleVar(value=0.0)
-        self.selected_save_text = tk.StringVar()
-        self.active_save_text = tk.StringVar(value="Active save folder: not connected")
-        self.vars["dataset_root"].trace_add("write", self._on_dataset_root_changed)
-        self._refresh_selected_save_text()
 
         self._build_ui()
         self.root.after(30, self._poll_queues)
@@ -1348,7 +1215,7 @@ class RecorderApp:
             ("Follower R", "right_follower_port"),
             ("Leader L", "left_leader_port"),
             ("Leader R", "right_leader_port"),
-            ("OpenCV frontview", "opencv_front"),
+            ("OpenCV front", "opencv_front"),
             ("OpenCV side RGB", "opencv_side"),
             ("Front RealSense SN", "realsense_serial"),
             ("Dataset name/id", "repo_id"),
@@ -1396,15 +1263,6 @@ class RecorderApp:
         ttk.Checkbutton(options, text="Enable RealSense", variable=self.enable_realsense).pack(
             side=tk.LEFT, padx=(12, 0)
         )
-        ttk.Checkbutton(options, text="Record RealSense", variable=self.record_realsense).pack(
-            side=tk.LEFT, padx=(12, 0)
-        )
-        ttk.Checkbutton(options, text="Record frontview", variable=self.record_opencv_front).pack(
-            side=tk.LEFT, padx=(12, 0)
-        )
-        ttk.Checkbutton(options, text="Record side RGB", variable=self.record_opencv_side).pack(
-            side=tk.LEFT, padx=(12, 0)
-        )
         ttk.Label(options, text="Preview").pack(side=tk.LEFT, padx=(24, 6))
         self.preview_combo = ttk.Combobox(
             options,
@@ -1416,13 +1274,8 @@ class RecorderApp:
 
         buttons = ttk.Frame(controls)
         buttons.pack(fill=tk.X, pady=(12, 0))
-        ttk.Button(buttons, text="Preview Cameras", command=self.preview_cameras).pack(side=tk.LEFT, ipady=4)
-        ttk.Button(buttons, text="Calibrate Arms", command=self.open_calibration_dialog).pack(
-            side=tk.LEFT, padx=(10, 0), ipady=4
-        )
         ttk.Button(buttons, text="Connect", command=self.connect).pack(side=tk.LEFT, ipady=4)
-        self.record_button = ttk.Button(buttons, text="Record", command=self.record)
-        self.record_button.pack(side=tk.LEFT, padx=(10, 0), ipady=4)
+        ttk.Button(buttons, text="Record", command=self.record).pack(side=tk.LEFT, padx=(10, 0), ipady=4)
         ttk.Button(buttons, text="End", command=self.end_episode).pack(side=tk.LEFT, padx=(10, 0), ipady=4)
         ttk.Button(buttons, text="Discard", command=self.discard_episode).pack(side=tk.LEFT, padx=(10, 0), ipady=4)
         ttk.Button(buttons, text="Fullscreen", command=self.toggle_fullscreen).pack(
@@ -1495,13 +1348,6 @@ class RecorderApp:
         ttk.Button(playback_row, text="Stop Playback", command=self.stop_dataset_playback).pack(
             side=tk.LEFT, padx=(8, 0)
         )
-        ttk.Label(playback_row, text="Zoom").pack(side=tk.LEFT, padx=(18, 6))
-        ttk.Button(playback_row, text="-", width=3, command=lambda: self.adjust_preview_zoom(0.8)).pack(side=tk.LEFT)
-        ttk.Label(playback_row, textvariable=self.preview_zoom, width=4, anchor=tk.CENTER).pack(
-            side=tk.LEFT, padx=(4, 4)
-        )
-        ttk.Button(playback_row, text="+", width=3, command=lambda: self.adjust_preview_zoom(1.25)).pack(side=tk.LEFT)
-        ttk.Button(playback_row, text="Reset", command=self.reset_preview_zoom).pack(side=tk.LEFT, padx=(8, 0))
 
         bottom = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         bottom.pack(fill=tk.X)
@@ -1512,366 +1358,8 @@ class RecorderApp:
             side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8)
         )
         ttk.Label(progress_row, textvariable=self.progress_text, width=48, anchor=tk.W).pack(side=tk.LEFT)
-        ttk.Label(bottom, textvariable=self.selected_save_text, anchor=tk.W).pack(fill=tk.X)
-        ttk.Label(bottom, textvariable=self.active_save_text, anchor=tk.W).pack(fill=tk.X)
         ttk.Label(bottom, textvariable=self.status, anchor=tk.W).pack(fill=tk.X)
         ttk.Label(bottom, textvariable=self.state_text, anchor=tk.W).pack(fill=tk.X, pady=(4, 0))
-
-    def _on_dataset_root_changed(self, *_args: Any) -> None:
-        self._refresh_selected_save_text()
-        if self.dataset_root_warning_after is not None:
-            self.root.after_cancel(self.dataset_root_warning_after)
-        self.dataset_root_warning_after = self.root.after(600, self._warn_if_dataset_change_is_inactive)
-
-    def _refresh_selected_save_text(self) -> None:
-        selected = self.vars["dataset_root"].get().strip() or "(empty)"
-        self.selected_save_text.set(f"Selected save folder: {selected}")
-
-    def _set_active_dataset_root(self, dataset_root: Path | None) -> None:
-        self.active_dataset_root = dataset_root.expanduser().resolve() if dataset_root is not None else None
-        if self.active_dataset_root is None:
-            self.active_save_text.set("Active save folder: not connected")
-        else:
-            self.active_save_text.set(f"Active save folder: {self.active_dataset_root}")
-
-    def _is_recorder_alive(self) -> bool:
-        return self.recorder is not None and self.recorder.is_alive()
-
-    def _warn_if_dataset_change_is_inactive(self) -> None:
-        self.dataset_root_warning_after = None
-        if not self._is_recorder_alive() or self.active_dataset_root is None:
-            return
-        raw_path = self.vars["dataset_root"].get().strip()
-        if not raw_path:
-            return
-        selected = Path(raw_path).expanduser()
-        try:
-            selected_resolved = selected.resolve()
-        except OSError:
-            selected_resolved = selected
-        if selected_resolved == self.active_dataset_root:
-            return
-        warning_key = str(selected_resolved)
-        if warning_key == self.last_warned_ineffective_path:
-            return
-        self.last_warned_ineffective_path = warning_key
-        self.active_save_text.set(f"Active save folder: {self.active_dataset_root}")
-        self.status.set(
-            "Dataset folder was changed after Connect. The running recorder still saves to the active folder."
-        )
-        messagebox.showwarning(
-            "Reconnect required",
-            (
-                "You changed the dataset folder after Connect.\n\n"
-                f"Current recording still saves to:\n{self.active_dataset_root}\n\n"
-                f"Selected for next Connect:\n{selected_resolved}\n\n"
-                "Stop the recorder, then Connect again to apply the new save folder."
-            ),
-            parent=self.root,
-        )
-
-    def preview_cameras(self) -> None:
-        if self.recorder is not None and self.recorder.is_alive():
-            self.status.set("Stop the recorder before opening the standalone camera preview.")
-            return
-
-        dialog = tk.Toplevel(self.root)
-        dialog.title("OpenCV Camera Preview")
-        dialog.geometry("980x760")
-        dialog.minsize(780, 560)
-        dialog.transient(self.root)
-
-        state: dict[str, Any] = {
-            "capture": None,
-            "image": None,
-            "running": True,
-            "last_frame_t": 0.0,
-            "fps": 0.0,
-        }
-        camera_var = tk.StringVar(value=self.vars["opencv_front"].get() or "/dev/video4")
-        zoom_var = tk.DoubleVar(value=1.0)
-        status_var = tk.StringVar(value="Scan cameras, select one, then preview or assign it.")
-
-        frame = ttk.Frame(dialog, padding=12)
-        frame.pack(fill=tk.BOTH, expand=True)
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(2, weight=1)
-
-        top = ttk.Frame(frame)
-        top.grid(row=0, column=0, sticky=tk.EW)
-        top.columnconfigure(1, weight=1)
-        ttk.Label(top, text="Camera").grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
-        camera_combo = ttk.Combobox(top, textvariable=camera_var, width=48)
-        camera_combo.grid(row=0, column=1, sticky=tk.EW)
-
-        image_label = ttk.Label(frame, anchor=tk.CENTER)
-        image_label.grid(row=2, column=0, sticky=tk.NSEW, pady=(10, 8))
-        ttk.Label(frame, textvariable=status_var, anchor=tk.W).grid(row=3, column=0, sticky=tk.EW)
-
-        def describe(path: str) -> str:
-            description = BimanualRecorder._describe_video_path(path)
-            return f"{path}  ({description})" if description else path
-
-        def scan() -> None:
-            candidates: list[str] = []
-            try:
-                cameras = OpenCVCamera.find_cameras()
-                candidates.extend(str(camera.get("id")) for camera in cameras if camera.get("id") is not None)
-            except Exception as exc:
-                status_var.set(f"OpenCV scan failed: {exc}. You can still type a path manually.")
-            for path in sorted(Path("/dev").glob("video*")):
-                candidates.append(str(path))
-            candidates = sorted(dict.fromkeys(candidates))
-            camera_combo["values"] = candidates
-            if candidates and camera_var.get() not in candidates:
-                camera_var.set(candidates[0])
-            status_var.set(
-                f"Found {len(candidates)} OpenCV candidate(s)."
-                if candidates
-                else "No OpenCV camera found. Type a path like /dev/video4 manually."
-            )
-
-        def close_capture() -> None:
-            cap = state.get("capture")
-            if cap is not None:
-                cap.release()
-                state["capture"] = None
-
-        def start_preview() -> None:
-            close_capture()
-            path = camera_var.get().strip()
-            if not path:
-                status_var.set("Choose or type a camera path first.")
-                return
-            cap = cv2.VideoCapture(path)
-            if not cap.isOpened():
-                status_var.set(f"Failed to open {path}.")
-                cap.release()
-                return
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-            cap.set(cv2.CAP_PROP_FPS, FPS)
-            state["capture"] = cap
-            state["last_frame_t"] = 0.0
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            status_var.set(f"Previewing {describe(path)} | {width}x{height} | camera fps {fps:.1f}")
-
-        def assign_front() -> None:
-            path = camera_var.get().strip()
-            if not path:
-                return
-            self.vars["opencv_front"].set(path)
-            self.record_opencv_front.set(True)
-            self.enable_realsense.set(False)
-            self.record_realsense.set(False)
-            status_var.set(f"Assigned {path} to OpenCV frontview and enabled only front RGB recording.")
-
-        def assign_side() -> None:
-            path = camera_var.get().strip()
-            if not path:
-                return
-            self.vars["opencv_side"].set(path)
-            self.record_opencv_side.set(True)
-            status_var.set(f"Assigned {path} to OpenCV side RGB and enabled Record side RGB.")
-
-        def update_frame() -> None:
-            if not state["running"]:
-                return
-            cap = state.get("capture")
-            if cap is not None:
-                ok, frame_bgr = cap.read()
-                if ok:
-                    now = time.monotonic()
-                    previous_t = float(state.get("last_frame_t") or 0.0)
-                    if previous_t > 0 and now > previous_t:
-                        state["fps"] = 1.0 / (now - previous_t)
-                    state["last_frame_t"] = now
-                    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                    image = Image.fromarray(np.ascontiguousarray(frame_rgb))
-                    max_size = self._zoomed_preview_size(float(zoom_var.get()))
-                    image.thumbnail(max_size, Image.Resampling.LANCZOS)
-                    state["image"] = ImageTk.PhotoImage(image=image)
-                    image_label.configure(image=state["image"])
-                    status_var.set(
-                        f"Previewing {describe(camera_var.get().strip())} | "
-                        f"{frame_bgr.shape[1]}x{frame_bgr.shape[0]} | {float(state['fps']):.1f} fps | "
-                        f"zoom {zoom_var.get():.2f}x"
-                    )
-                else:
-                    status_var.set(f"No frame from {camera_var.get().strip()}.")
-            dialog.after(33, update_frame)
-
-        def on_close() -> None:
-            state["running"] = False
-            close_capture()
-            dialog.destroy()
-
-        row = ttk.Frame(frame)
-        row.grid(row=1, column=0, sticky=tk.EW, pady=(10, 0))
-        ttk.Button(row, text="Scan", command=scan).pack(side=tk.LEFT)
-        ttk.Button(row, text="Start Preview", command=start_preview).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(row, text="Use as front", command=assign_front).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(row, text="Use as side", command=assign_side).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Label(row, text="Zoom").pack(side=tk.LEFT, padx=(18, 6))
-        ttk.Button(row, text="-", width=3, command=lambda: zoom_var.set(max(0.25, zoom_var.get() * 0.8))).pack(
-            side=tk.LEFT
-        )
-        ttk.Button(row, text="+", width=3, command=lambda: zoom_var.set(min(4.0, zoom_var.get() * 1.25))).pack(
-            side=tk.LEFT, padx=(4, 0)
-        )
-        ttk.Button(row, text="Reset", command=lambda: zoom_var.set(1.0)).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(row, text="Close", command=on_close).pack(side=tk.RIGHT)
-
-        camera_combo.bind("<<ComboboxSelected>>", lambda _event: start_preview())
-        dialog.protocol("WM_DELETE_WINDOW", on_close)
-        scan()
-        start_preview()
-        update_frame()
-
-    def open_calibration_dialog(self) -> None:
-        if self.recorder is not None and self.recorder.is_alive():
-            self.status.set("Stop the recorder before recalibrating arms.")
-            return
-
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Calibrate SO101 Arms")
-        dialog.geometry("760x360")
-        dialog.minsize(640, 320)
-        dialog.transient(self.root)
-
-        frame = ttk.Frame(dialog, padding=14)
-        frame.pack(fill=tk.BOTH, expand=True)
-        frame.columnconfigure(1, weight=1)
-
-        ttk.Label(frame, text="Run one calibration at a time. Follow the prompts in the terminal that launched this GUI.").grid(
-            row=0, column=0, columnspan=3, sticky=tk.W, pady=(0, 12)
-        )
-
-        rows = (
-            ("Left follower", "robot", "left_follower_port", "left_follower_id"),
-            ("Right follower", "robot", "right_follower_port", "right_follower_id"),
-            ("Left leader", "teleop", "left_leader_port", "left_leader_id"),
-            ("Right leader", "teleop", "right_leader_port", "right_leader_id"),
-        )
-        for row_idx, (label, kind, port_key, id_key) in enumerate(rows, start=1):
-            ttk.Label(frame, text=label).grid(row=row_idx, column=0, sticky=tk.W, pady=5)
-            ttk.Label(frame, textvariable=self.vars[port_key]).grid(row=row_idx, column=1, sticky=tk.W, pady=5)
-            ttk.Button(
-                frame,
-                text="Calibrate",
-                command=lambda k=kind, p=port_key, i=id_key, name=label: self.start_calibration(k, p, i, name),
-            ).grid(row=row_idx, column=2, sticky=tk.E, pady=5)
-
-        ttk.Label(frame, text=f"Calibration path: {self.vars['calibration_dir'].get()}").grid(
-            row=5, column=0, columnspan=3, sticky=tk.W, pady=(16, 0)
-        )
-        ttk.Button(frame, text="Close", command=dialog.destroy).grid(row=6, column=2, sticky=tk.E, pady=(18, 0))
-
-    def start_calibration(self, kind: str, port_key: str, id_key: str, label: str) -> None:
-        port = self.vars[port_key].get().strip()
-        device_id = self.vars[id_key].get().strip()
-        if not port:
-            self.status.set(f"Set the port before calibrating {label}.")
-            return
-        if not device_id:
-            self.status.set(f"Set the id before calibrating {label}.")
-            return
-
-        robot_calibration_dir, teleop_calibration_dir = self._calibration_dirs_for_gui()
-        calibration_dir = robot_calibration_dir if kind == "robot" else teleop_calibration_dir
-        prefix = "--robot" if kind == "robot" else "--teleop"
-        device_type = "so101_follower" if kind == "robot" else "so101_leader"
-        cmd = [
-            sys.executable,
-            "-m",
-            "lerobot.scripts.lerobot_calibrate",
-            f"{prefix}.type={device_type}",
-            f"{prefix}.port={port}",
-            f"{prefix}.id={device_id}",
-        ]
-        if calibration_dir is not None:
-            cmd.append(f"{prefix}.calibration_dir={calibration_dir}")
-
-        if not self.ask_yes_no_english(
-            "Start calibration?",
-            (
-                f"Start calibration for {label} on {port}?\n\n"
-                "The interactive prompts will appear in the terminal. Do not connect or record while calibration is running."
-            ),
-        ):
-            return
-
-        self.status.set(f"Calibrating {label}; follow terminal prompts...")
-        threading.Thread(target=self._run_calibration_command, args=(cmd, label), daemon=True).start()
-
-    def _run_calibration_command(self, cmd: list[str], label: str) -> None:
-        try:
-            result = subprocess.run(cmd, cwd=Path(__file__).resolve().parents[1], check=False)
-        except Exception as exc:
-            self.status_queue.put(f"Calibration failed to start for {label}: {exc}")
-            return
-        if result.returncode == 0:
-            self.status_queue.put(f"Calibration finished for {label}.")
-        else:
-            self.status_queue.put(f"ERROR: calibration failed for {label} with exit code {result.returncode}.")
-
-    def _calibration_dirs_for_gui(self) -> tuple[Path | None, Path | None]:
-        raw_path = self.vars["calibration_dir"].get().strip()
-        if not raw_path:
-            return None, None
-
-        def existing_or_default(parent: Path, candidates: tuple[str, ...]) -> Path:
-            for candidate in candidates:
-                path = parent / candidate
-                if path.exists():
-                    return path
-            return parent / candidates[0]
-
-        path = Path(raw_path).expanduser()
-        if path.name == "calibration":
-            return (
-                existing_or_default(path / "robots", ("so_follower", "so101_follower")),
-                existing_or_default(path / "teleoperators", ("so_leader", "so101_leader")),
-            )
-        if path.name == "robots":
-            calibration_root = path.parent
-            return (
-                existing_or_default(path, ("so_follower", "so101_follower")),
-                existing_or_default(calibration_root / "teleoperators", ("so_leader", "so101_leader")),
-            )
-        if path.name in {"so_follower", "so101_follower"} and path.parent.name == "robots":
-            calibration_root = path.parent.parent
-            return path, existing_or_default(calibration_root / "teleoperators", ("so_leader", "so101_leader"))
-        return path, path
-
-    def ask_yes_no_english(self, title: str, message: str) -> bool:
-        dialog = tk.Toplevel(self.root)
-        dialog.title(title)
-        dialog.geometry("560x220")
-        dialog.minsize(480, 180)
-        dialog.transient(self.root)
-        dialog.grab_set()
-
-        result = {"yes": False}
-        frame = ttk.Frame(dialog, padding=18)
-        frame.pack(fill=tk.BOTH, expand=True)
-        frame.columnconfigure(0, weight=1)
-        ttk.Label(frame, text=message, justify=tk.LEFT, wraplength=520).grid(row=0, column=0, sticky=tk.NSEW)
-
-        buttons = ttk.Frame(frame)
-        buttons.grid(row=1, column=0, sticky=tk.E, pady=(18, 0))
-
-        def choose(value: bool) -> None:
-            result["yes"] = value
-            dialog.destroy()
-
-        ttk.Button(buttons, text="Start", command=lambda: choose(True)).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="Cancel", command=lambda: choose(False)).pack(side=tk.LEFT, padx=(10, 0))
-        dialog.protocol("WM_DELETE_WINDOW", lambda: choose(False))
-        dialog.wait_window()
-        return result["yes"]
 
     def browse_dataset_folder(self) -> None:
         folder = self._ask_directory("Select an existing LeRobot dataset folder")
@@ -2376,9 +1864,6 @@ class RecorderApp:
             right_leader_id=self.vars["right_leader_id"].get(),
             opencv_front=self.vars["opencv_front"].get(),
             opencv_side=self.vars["opencv_side"].get(),
-            record_opencv_front=self.record_opencv_front.get(),
-            record_opencv_side=self.record_opencv_side.get(),
-            record_realsense=self.record_realsense.get(),
             enable_realsense=self.enable_realsense.get(),
             realsense_serial=self.vars["realsense_serial"].get(),
             repo_id=self.vars["repo_id"].get(),
@@ -2389,10 +1874,6 @@ class RecorderApp:
             push_to_hub=self.push_to_hub.get(),
         )
         self.status.set("Connect clicked. Building devices and dataset...")
-        self.last_warned_ineffective_path = ""
-        self.episode_save_active = False
-        self._refresh_record_button_state()
-        self._set_active_dataset_root(normalized_root)
         self.root.update_idletasks()
         self.stop_dataset_playback()
         self.close_dataset_captures()
@@ -2407,9 +1888,6 @@ class RecorderApp:
             return
         if not self.recorder.ready:
             self.status.set("Not ready yet. Wait for: Ready. Preview and teleoperation are running.")
-            return
-        if self.episode_save_active:
-            self.status.set("Episode is still saving. Record is disabled until save completes.")
             return
         task = self.vars["task"].get()
         if task not in TASK_CHOICES:
@@ -2431,9 +1909,6 @@ class RecorderApp:
         if self.recorder is not None:
             self.recorder.stop()
             self.recorder = None
-            self.episode_save_active = False
-            self._refresh_record_button_state()
-            self._set_active_dataset_root(None)
             self.video_mode = "dataset"
             self._load_episode_browser(Path(self.vars["dataset_root"].get()).expanduser())
 
@@ -2454,20 +1929,10 @@ class RecorderApp:
             if self.recorder.failed:
                 self.status.set(f"{self.status.get()} You can fix the setting and click Connect again.")
             self.recorder = None
-            self.episode_save_active = False
-            self._refresh_record_button_state()
-            self._set_active_dataset_root(None)
 
         try:
             self.latest_frames = self.preview_queue.get_nowait()
-            now = time.monotonic()
             keys = sorted(self.latest_frames)
-            for frame_key, frame in self.latest_frames.items():
-                if isinstance(frame, np.ndarray) and frame.ndim >= 2:
-                    previous_t = self.live_frame_times.get(frame_key)
-                    fps = 0.0 if previous_t is None or now <= previous_t else 1.0 / (now - previous_t)
-                    self.live_frame_times[frame_key] = now
-                    self.live_frame_stats[frame_key] = (int(frame.shape[1]), int(frame.shape[0]), fps)
             self.preview_combo["values"] = keys
             if (not self.vars["preview_key"].get() or self.vars["preview_key"].get() not in keys) and keys:
                 self.vars["preview_key"].set(keys[0])
@@ -2477,10 +1942,7 @@ class RecorderApp:
 
         key = self.vars["preview_key"].get()
         if self.video_mode == "live" and key in self.latest_frames:
-            width, height, fps = self.live_frame_stats.get(key, (0, 0, 0.0))
-            self.video_title.set(
-                f"Live preview: {key} | {width}x{height} | {fps:.1f} fps | zoom {self.preview_zoom.get():.2f}x"
-            )
+            self.video_title.set(f"Live preview: {key}")
             self._show_frame(self.latest_frames[key])
 
         if self.playing_dataset and self.current_dataset_episode is not None:
@@ -2520,14 +1982,6 @@ class RecorderApp:
             except ValueError:
                 self.status.set(message)
             return
-        if message.startswith("SAVE_STATE|"):
-            try:
-                _kind, saving = message.split("|", 1)
-                self.episode_save_active = saving == "1"
-                self._refresh_record_button_state()
-            except ValueError:
-                self.status.set(message)
-            return
         if message.startswith("CLEAN_DONE|"):
             try:
                 _kind, dataset_root, backup = message.split("|", 2)
@@ -2553,37 +2007,18 @@ class RecorderApp:
             except ValueError:
                 self.status.set(message)
             return
-        if message.startswith("Dataset root:"):
-            raw_root = message.removeprefix("Dataset root:").strip()
-            if raw_root:
-                self._set_active_dataset_root(Path(raw_root))
         self.status.set(message)
-
-    def _refresh_record_button_state(self) -> None:
-        state = tk.DISABLED if self.episode_save_active else tk.NORMAL
-        self.record_button.configure(state=state)
-
-    def adjust_preview_zoom(self, factor: float) -> None:
-        self.preview_zoom.set(min(4.0, max(0.25, self.preview_zoom.get() * factor)))
-
-    def reset_preview_zoom(self) -> None:
-        self.preview_zoom.set(1.0)
-
-    @staticmethod
-    def _zoomed_preview_size(zoom: float) -> tuple[int, int]:
-        zoom = min(4.0, max(0.25, zoom))
-        return (max(1, int(PREVIEW_SIZE[0] * zoom)), max(1, int(PREVIEW_SIZE[1] * zoom)))
 
     def _show_frame(self, frame: np.ndarray) -> None:
         image = Image.fromarray(np.ascontiguousarray(frame))
-        image.thumbnail(self._zoomed_preview_size(self.preview_zoom.get()), Image.Resampling.LANCZOS)
+        image.thumbnail(PREVIEW_SIZE, Image.Resampling.LANCZOS)
         self.current_image = ImageTk.PhotoImage(image=image)
         self.preview_label.configure(image=self.current_image)
 
     def _show_bgr_frame(self, frame_bgr: np.ndarray) -> None:
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(np.ascontiguousarray(frame_rgb))
-        image.thumbnail(self._zoomed_preview_size(self.preview_zoom.get()), Image.Resampling.LANCZOS)
+        image.thumbnail(PREVIEW_SIZE, Image.Resampling.LANCZOS)
         self.dataset_image = ImageTk.PhotoImage(image=image)
         self.preview_label.configure(image=self.dataset_image)
 

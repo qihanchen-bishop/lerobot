@@ -26,3 +26,42 @@ conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.
 conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 3 --root simdata/cube1 --repo-id cube1 --output-dir outputs/train/mask_act_3_all --mask-target-keys observation.images.occluder observation.images.object observation.images.region observation.images.left_arm observation.images.right_arm --batch-size 2 --steps 100000 --device cuda
 
 conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 4A --root simdata/cube1 --repo-id cube1 --output-dir outputs/train/mask_act_4a_object --batch-size 8 --steps 100000 --device cuda
+
+conda run -n sam2 python tools/yolo_sam2/convert_sam2_masks_to_lerobot.py \
+  --source-root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277 \
+  --seg-task-dir /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277/seg/task1 \
+  --output-root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 \
+  --overwrite
+
+soarmcube277_mask_task1 普通 LeRobot ACT 训练，只使用真实 RGB left_front
+conda run --no-capture-output -n lerobot python -u mycode/train_lerobot_policy.py --policy-type act --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 --repo-id soarmcube277_mask_task1 --image-keys observation.images.left_front --state-keys observation.state --output-dir outputs/train/act_soarmcube277_mask_task1_left_front --job-name act_soarmcube277_mask_task1_left_front --batch-size 8 --steps 100000 --device cuda --rebuild-view
+
+soarmcube277_mask_task1 Mask ACT canonical 五 mask 定义
+mask 顺序: observation.images.occluder observation.images.object observation.images.region observation.images.left_arm observation.images.right_arm
+
+1A: RGB -> U-Net -> 五 mask -> ACT，action loss 不反传到 U-Net
+conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 1A --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 --repo-id soarmcube277_mask_task1 --rgb-key observation.images.left_front --output-dir outputs/train/mask_act_1a_soarmcube277_task1 --batch-size 2 --steps 100000 --device cuda --rebuild-view
+
+1B: RGB -> U-Net -> 五 mask -> ACT，seg loss + action loss 联合优化 U-Net mask 链路
+conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 1B --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 --repo-id soarmcube277_mask_task1 --rgb-key observation.images.left_front --output-dir outputs/train/mask_act_1b_soarmcube277_task1 --batch-size 2 --steps 100000 --device cuda --rebuild-view
+
+2A: ACT 看预测五 mask + U-Net encoder latent，action loss 不反传到 U-Net
+conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 2A --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 --repo-id soarmcube277_mask_task1 --rgb-key observation.images.left_front --output-dir outputs/train/mask_act_2a_soarmcube277_task1 --batch-size 2 --steps 100000 --device cuda --rebuild-view
+
+2B: ACT 看预测五 mask + U-Net encoder latent，action loss 优化 latent encoder，但不从 mask decoder 链路反传
+conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 2B --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 --repo-id soarmcube277_mask_task1 --rgb-key observation.images.left_front --output-dir outputs/train/mask_act_2b_soarmcube277_task1 --batch-size 2 --steps 100000 --device cuda --rebuild-view
+
+3: ACT 只看 U-Net encoder latent，不显式输入 mask，decoder 子任务训练仍保留
+conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 3 --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 --repo-id soarmcube277_mask_task1 --rgb-key observation.images.left_front --output-dir outputs/train/mask_act_3_soarmcube277_task1 --batch-size 2 --steps 100000 --device cuda --rebuild-view
+
+4A: 五 mask + object/region 指标作为 ACT env state
+conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 4A --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 --repo-id soarmcube277_mask_task1 --rgb-key observation.images.left_front --output-dir outputs/train/mask_act_4a_soarmcube277_task1 --batch-size 2 --steps 100000 --device cuda --rebuild-view
+
+4B: 五 mask + ACT encoder metric token 监督
+conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 4B --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 --repo-id soarmcube277_mask_task1 --rgb-key observation.images.left_front --output-dir outputs/train/mask_act_4b_soarmcube277_task1 --batch-size 2 --steps 100000 --device cuda --rebuild-view
+
+4C: 五 mask + ACT decoder chunk-autoregressive metric 反馈
+conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 4C --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 --repo-id soarmcube277_mask_task1 --rgb-key observation.images.left_front --output-dir outputs/train/mask_act_4c_soarmcube277_task1 --batch-size 2 --steps 100000 --device cuda --rebuild-view
+
+5: RGB-only inference，训练时用 canonical 五 mask 语义 latent teacher 蒸馏
+conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 5 --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 --repo-id soarmcube277_mask_task1 --rgb-key observation.images.left_front --output-dir outputs/train/mask_act_5_soarmcube277_task1 --batch-size 2 --steps 100000 --device cuda --rebuild-view

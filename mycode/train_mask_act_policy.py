@@ -7,8 +7,10 @@ Experiments:
   4A: Same as 1B, with sqrt(object area ratio) and object-region centroid distance as ACT env state.
   4B: Same as 1B, with two ACT encoder metric tokens supervised to predict the two mask metrics.
   4C: Same as 1B, with the two metrics predicted by the ACT decoder and fed back chunk-autoregressively.
+  All experiments use the same canonical five binary semantic masks in this order:
+      occluder, object, region, left_arm, right_arm.
   5:  RGB-only inference with latent semantic distillation. During training, ACT receives an RGB main latent
-      plus five mask-encoder semantic teacher latents; RGB semantic heads are aligned to those teacher latents.
+      plus those five mask-encoder semantic teacher latents; RGB semantic heads are aligned to the teachers.
   2A: ACT sees predicted masks plus a pooled RGB encoder latent. Seg loss trains U-Net; action loss
       trains ACT only.
   2B: ACT sees predicted masks plus a pooled RGB encoder latent. Action loss trains the latent encoder
@@ -55,13 +57,15 @@ DEFAULT_ROOT = Path("simdata/cube1")
 DEFAULT_REPO_ID = "cube1"
 DEFAULT_RGB_KEY = "observation.images.camera"
 DEFAULT_STATE_KEYS = ["observation.state"]
-DEFAULT_MASK_KEYS = [
+SOARM_RGB_KEY = "observation.images.left_front"
+CANONICAL_SEMANTIC_MASK_KEYS = [
     "observation.images.occluder",
     "observation.images.object",
     "observation.images.region",
     "observation.images.left_arm",
     "observation.images.right_arm",
 ]
+DEFAULT_MASK_KEYS = CANONICAL_SEMANTIC_MASK_KEYS
 
 
 warnings.filterwarnings(
@@ -94,6 +98,7 @@ class MaskActRunConfig:
     chunk_size: int
     n_action_steps: int
     pretrained_backbone_weights: str | None
+    canonical_mask_definition: list[str]
 
 
 class DoubleConv(nn.Module):
@@ -477,6 +482,47 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def load_dataset_features(root: Path) -> dict[str, Any]:
+    info_path = root / "meta" / "info.json"
+    with open(info_path) as f:
+        info = json.load(f)
+    return info.get("features", {})
+
+
+def normalize_dataset_keys(args: argparse.Namespace, source_root: Path) -> None:
+    features = load_dataset_features(source_root)
+    available_keys = set(features)
+
+    if args.rgb_key not in available_keys:
+        if args.rgb_key == DEFAULT_RGB_KEY and SOARM_RGB_KEY in available_keys:
+            print(f"RGB key '{DEFAULT_RGB_KEY}' not found; using '{SOARM_RGB_KEY}' from this dataset.")
+            args.rgb_key = SOARM_RGB_KEY
+        else:
+            image_keys = sorted(key for key in available_keys if key.startswith("observation.images."))
+            raise KeyError(
+                f"RGB key '{args.rgb_key}' is not in dataset features. "
+                f"Available image keys: {image_keys}"
+            )
+
+    missing_mask_keys = [key for key in args.mask_target_keys if key not in available_keys]
+    if missing_mask_keys:
+        image_keys = sorted(key for key in available_keys if key.startswith("observation.images."))
+        raise KeyError(
+            f"Missing mask target key(s): {missing_mask_keys}. "
+            f"Available image keys: {image_keys}"
+        )
+
+    if list(args.mask_target_keys) == CANONICAL_SEMANTIC_MASK_KEYS:
+        return
+
+    canonical_available = all(key in available_keys for key in CANONICAL_SEMANTIC_MASK_KEYS)
+    if canonical_available:
+        print(
+            "Using custom mask target keys. The canonical experiment-5-compatible definition is: "
+            f"{CANONICAL_SEMANTIC_MASK_KEYS}"
+        )
+
+
 def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     experiment = args.experiment.upper()
     if experiment in {"1A", "1B"}:
@@ -512,6 +558,15 @@ def act_metric_mode(experiment: str) -> str | None:
 
 
 def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: dict) -> MaskACTPolicy:
+    if args.experiment.upper() in {"4A", "4B", "4C"}:
+        metric_keys = {"observation.images.object", "observation.images.region"}
+        missing_metric_keys = sorted(metric_keys.difference(args.mask_target_keys))
+        if missing_metric_keys:
+            raise KeyError(
+                f"Experiment {args.experiment} requires mask target keys for metric computation: "
+                f"{missing_metric_keys}"
+            )
+
     features = dataset_to_policy_features(meta.features)
     act_image_keys = act_image_keys_for_experiment(args)
     input_keys = [*args.state_keys, *act_image_keys]
@@ -583,6 +638,7 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         chunk_size=args.chunk_size,
         n_action_steps=args.n_action_steps,
         pretrained_backbone_weights=args.pretrained_backbone_weights,
+        canonical_mask_definition=list(CANONICAL_SEMANTIC_MASK_KEYS),
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     with open(args.output_dir / "mask_act_run_config.json", "w") as f:
@@ -738,13 +794,14 @@ def main() -> None:
         args.pretrained_backbone_weights = None
     ensure_device_is_usable(args.device)
     device = torch.device(args.device)
+    source_root = args.root.resolve()
+    normalize_dataset_keys(args, source_root)
 
     if args.output_dir.exists() and args.overwrite_output:
         shutil.rmtree(args.output_dir)
 
     image_keys_in_view = sorted({args.rgb_key, *args.mask_target_keys})
     view_root = args.view_root or (args.output_dir.parent / "dataset_views" / args.output_dir.name)
-    source_root = args.root.resolve()
     filtered_root = make_filtered_dataset_view(
         source_root=source_root,
         view_root=view_root,
