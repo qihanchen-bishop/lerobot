@@ -65,3 +65,16 @@ conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.
 
 5: RGB-only inference，训练时用 canonical 五 mask 语义 latent teacher 蒸馏
 conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py --experiment 5 --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 --repo-id soarmcube277_mask_task1 --rgb-key observation.images.left_front --output-dir outputs/train/mask_act_5_soarmcube277_task1 --batch-size 2 --steps 100000 --device cuda --rebuild-view
+
+conda run --no-capture-output -n lerobot python -u mycode/train_lerobot_policy.py \
+  --policy-type act \
+  --root /home/romilab/Projects/IsaacLab/source/lerobot/data/soarmcube277_mask_task1 \
+  --repo-id soarmcube277_mask_task1 \
+  --image-keys observation.images.left_front \
+  --state-keys observation.state \
+  --output-dir outputs/train/act_soarmcube277_mask_task1_left_front \
+  --job-name act_soarmcube277_mask_task1_left_front \
+  --batch-size 8 \
+  --steps 100000 \
+  --device cuda \
+  --rebuild-view

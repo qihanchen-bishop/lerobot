@@ -21,6 +21,7 @@ Experiments:
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import os
 import shutil
@@ -523,6 +524,37 @@ def normalize_dataset_keys(args: argparse.Namespace, source_root: Path) -> None:
         )
 
 
+def reshape_visual_stats_for_channel_first(
+    stats: dict[str, dict[str, Any]],
+    features: dict[str, PolicyFeature],
+) -> dict[str, dict[str, Any]]:
+    """Make visual stats broadcast against LeRobot channel-first image tensors."""
+
+    reshaped_stats = deepcopy(stats)
+    for key, feature in features.items():
+        if feature.type != FeatureType.VISUAL or key not in reshaped_stats or len(feature.shape) != 3:
+            continue
+
+        channels = feature.shape[0]
+        for stat_name, value in list(reshaped_stats[key].items()):
+            shape = getattr(value, "shape", None)
+            if shape is not None:
+                if tuple(shape) != (channels,):
+                    continue
+                flat_values = value.tolist()
+            elif isinstance(value, list):
+                if len(value) != channels:
+                    continue
+                if value and isinstance(value[0], list):
+                    continue
+                flat_values = value
+            else:
+                continue
+            reshaped_stats[key][stat_name] = [[[channel_value]] for channel_value in flat_values]
+
+    return reshaped_stats
+
+
 def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     experiment = args.experiment.upper()
     if experiment in {"1A", "1B"}:
@@ -821,10 +853,15 @@ def main() -> None:
         video_backend=args.video_backend,
     )
 
-    model = make_policy(args, meta, stats=meta.stats).to(device)
+    act_features = dataset_to_policy_features(meta.features)
+    act_input_keys = [*args.state_keys, *act_image_keys_for_experiment(args)]
+    act_input_features = {key: act_features[key] for key in act_input_keys if key in act_features}
+    stats = reshape_visual_stats_for_channel_first(meta.stats, act_input_features)
+
+    model = make_policy(args, meta, stats=stats).to(device)
     preprocessor, _ = make_pre_post_processors(
         policy_cfg=model.config,
-        dataset_stats=meta.stats,
+        dataset_stats=stats,
     )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
