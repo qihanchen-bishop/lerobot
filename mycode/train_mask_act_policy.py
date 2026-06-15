@@ -84,6 +84,7 @@ class MaskActRunConfig:
     rgb_key: str
     state_keys: list[str]
     mask_target_keys: list[str]
+    image_size: list[int] | None
     output_dir: str
     steps: int
     batch_size: int
@@ -455,6 +456,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rgb-key", default=DEFAULT_RGB_KEY)
     parser.add_argument("--state-keys", nargs="*", default=DEFAULT_STATE_KEYS)
     parser.add_argument("--mask-target-keys", nargs="+", default=DEFAULT_MASK_KEYS)
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        nargs=2,
+        metavar=("HEIGHT", "WIDTH"),
+        default=None,
+        help="Resize RGB and all mask targets to this aligned training resolution.",
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/train/mask_act"))
     parser.add_argument("--view-root", type=Path, default=None)
     parser.add_argument("--rebuild-view", action="store_true")
@@ -481,6 +490,41 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-freq", type=int, default=100)
     parser.add_argument("--save-freq", type=int, default=10_000)
     return parser.parse_args()
+
+
+def validate_image_size(image_size: list[int] | tuple[int, int] | None) -> tuple[int, int] | None:
+    if image_size is None:
+        return None
+    height, width = image_size
+    if height <= 0 or width <= 0:
+        raise ValueError(f"--image-size values must be positive, got {height} {width}.")
+    return height, width
+
+
+def resize_training_visuals(
+    raw_batch: dict[str, Any],
+    rgb_key: str,
+    mask_keys: list[str],
+    image_size: tuple[int, int] | None,
+) -> dict[str, Any]:
+    """Resize aligned RGB/mask tensors while preserving binary mask boundaries."""
+
+    if image_size is None:
+        return raw_batch
+
+    resized_batch = dict(raw_batch)
+    visual_keys = [rgb_key, *mask_keys]
+    for key in visual_keys:
+        image = raw_batch[key]
+        if not isinstance(image, Tensor) or image.ndim != 4:
+            raise ValueError(f"Expected batched BCHW tensor for '{key}', got {type(image).__name__}.")
+        if tuple(image.shape[-2:]) == image_size:
+            continue
+        if key == rgb_key:
+            resized_batch[key] = F.interpolate(image, size=image_size, mode="bilinear", align_corners=False, antialias=True)
+        else:
+            resized_batch[key] = F.interpolate(image, size=image_size, mode="nearest")
+    return resized_batch
 
 
 def load_dataset_features(root: Path) -> dict[str, Any]:
@@ -607,6 +651,11 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         raise KeyError(f"Missing feature(s) for ACT policy: {missing}")
 
     input_features = {key: features[key] for key in input_keys}
+    if args.image_size is not None:
+        height, width = args.image_size
+        for key in act_image_keys:
+            feature = input_features[key]
+            input_features[key] = PolicyFeature(type=feature.type, shape=(feature.shape[0], height, width))
     if act_uses_latent(args.experiment):
         input_features[OBS_ENV_STATE] = PolicyFeature(type=FeatureType.ENV, shape=(args.latent_dim,))
     if act_uses_metric_env_state(args.experiment):
@@ -655,6 +704,7 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         rgb_key=args.rgb_key,
         state_keys=list(args.state_keys),
         mask_target_keys=list(args.mask_target_keys),
+        image_size=list(args.image_size) if args.image_size is not None else None,
         output_dir=str(args.output_dir),
         steps=args.steps,
         batch_size=args.batch_size,
@@ -818,6 +868,7 @@ class TrainingMetricsLogger:
 
 def main() -> None:
     args = parse_args()
+    args.image_size = validate_image_size(args.image_size)
     if isinstance(args.pretrained_backbone_weights, str) and args.pretrained_backbone_weights.lower() in {
         "none",
         "null",
@@ -881,6 +932,7 @@ def main() -> None:
     print(f"Dataset view: {filtered_root}")
     print(f"ACT image keys: {act_image_keys_for_experiment(args)}")
     print(f"Mask supervision keys: {args.mask_target_keys}")
+    print(f"Training image size: {args.image_size or 'dataset native resolution'}")
     print(f"Output dir: {args.output_dir}")
     run_config_path = args.output_dir / "mask_act_run_config.json"
     with open(run_config_path) as f:
@@ -895,6 +947,12 @@ def main() -> None:
     try:
         for step in range(1, args.steps + 1):
             raw_batch = next(dl_iter)
+            raw_batch = resize_training_visuals(
+                raw_batch,
+                rgb_key=args.rgb_key,
+                mask_keys=args.mask_target_keys,
+                image_size=args.image_size,
+            )
             batch = preprocessor(raw_batch)
 
             optimizer.zero_grad(set_to_none=True)
