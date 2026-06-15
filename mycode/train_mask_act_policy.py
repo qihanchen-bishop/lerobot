@@ -37,6 +37,7 @@ import torchvision
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 from PIL import Image, ImageDraw
+from tqdm.auto import tqdm
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -822,11 +823,27 @@ class TrainingMetricsLogger:
         }
         self._write_json()
 
-    def log(self, step: int, logs: dict[str, float], grad_norm: float, elapsed_s: float, lr: float) -> None:
+    def log(
+        self,
+        step: int,
+        total_steps: int,
+        logs: dict[str, float],
+        grad_norm: float,
+        interval_elapsed_s: float,
+        elapsed_total_s: float,
+        lr: float,
+    ) -> None:
+        steps_per_second = step / elapsed_total_s if elapsed_total_s > 0 else 0.0
+        eta_s = (total_steps - step) / steps_per_second if steps_per_second > 0 else None
         record = {
             "step": step,
+            "total_steps": total_steps,
             "wall_time_unix": time.time(),
-            "elapsed_s": elapsed_s,
+            "interval_elapsed_s": interval_elapsed_s,
+            "elapsed_total_s": elapsed_total_s,
+            "avg_step_time_s": elapsed_total_s / step,
+            "steps_per_second": steps_per_second,
+            "eta_s": eta_s,
             "lr": lr,
             "grad_norm": grad_norm,
             **{key: float(value) for key, value in logs.items() if isinstance(value, (int, float))},
@@ -861,8 +878,14 @@ class TrainingMetricsLogger:
             return f"train/{key}"
         if key in {"grad_norm", "lr"}:
             return f"optim/{key}"
-        if key == "elapsed_s":
-            return "time/elapsed_s_per_log_interval"
+        if key in {
+            "interval_elapsed_s",
+            "elapsed_total_s",
+            "avg_step_time_s",
+            "steps_per_second",
+            "eta_s",
+        }:
+            return f"time/{key}"
         return f"train/{key}"
 
 
@@ -943,9 +966,18 @@ def main() -> None:
     print(f"TensorBoard logdir: {metrics_logger.tensorboard_dir}")
 
     model.train()
-    start_time = time.perf_counter()
+    training_start_time = time.perf_counter()
+    interval_start_time = training_start_time
+    progress = tqdm(
+        range(1, args.steps + 1),
+        desc=f"train {args.experiment}",
+        unit="step",
+        dynamic_ncols=True,
+        mininterval=1.0,
+        smoothing=0.1,
+    )
     try:
-        for step in range(1, args.steps + 1):
+        for step in progress:
             raw_batch = next(dl_iter)
             raw_batch = resize_training_visuals(
                 raw_batch,
@@ -961,23 +993,35 @@ def main() -> None:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_norm)
             optimizer.step()
 
-            if args.log_freq > 0 and step % args.log_freq == 0:
-                elapsed = time.perf_counter() - start_time
+            if args.log_freq > 0 and (step % args.log_freq == 0 or step == args.steps):
+                now = time.perf_counter()
+                interval_elapsed = now - interval_start_time
+                elapsed_total = now - training_start_time
                 grad_norm_float = float(grad_norm.detach().cpu() if isinstance(grad_norm, Tensor) else grad_norm)
                 lr = float(optimizer.param_groups[0]["lr"])
-                metrics_logger.log(step=step, logs=logs, grad_norm=grad_norm_float, elapsed_s=elapsed, lr=lr)
+                metrics_logger.log(
+                    step=step,
+                    total_steps=args.steps,
+                    logs=logs,
+                    grad_norm=grad_norm_float,
+                    interval_elapsed_s=interval_elapsed,
+                    elapsed_total_s=elapsed_total,
+                    lr=lr,
+                )
                 extra_loss = logs.get("seg_loss", logs.get("semantic_loss", 0.0))
                 extra_name = "seg" if "seg_loss" in logs else "semantic"
-                print(
-                    f"step={step} loss={logs['loss']:.4f} action={logs['action_loss']:.4f} "
-                    f"{extra_name}={extra_loss:.4f} grad={grad_norm_float:.3f} elapsed_s={elapsed:.1f}"
+                progress.set_postfix(
+                    loss=f"{logs['loss']:.4f}",
+                    action=f"{logs['action_loss']:.4f}",
+                    **{extra_name: f"{extra_loss:.4f}"},
                 )
-                start_time = time.perf_counter()
+                interval_start_time = now
 
             if args.save_freq > 0 and (step % args.save_freq == 0 or step == args.steps):
                 checkpoint_dir = save_checkpoint(args.output_dir, step, model, optimizer)
                 save_mask_preview(checkpoint_dir, step, model, raw_batch)
     finally:
+        progress.close()
         metrics_logger.close()
 
 
