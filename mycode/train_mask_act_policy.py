@@ -280,6 +280,65 @@ class MaskACTPolicy(nn.Module):
     def config(self):
         return self.act_policy.config
 
+    def reset(self) -> None:
+        self.act_policy.reset()
+
+    def _resize_inference_rgb(self, rgb: Tensor) -> Tensor:
+        image_size = getattr(self, "inference_image_size", None)
+        if image_size is None or tuple(rgb.shape[-2:]) == tuple(image_size):
+            return rgb
+        return F.interpolate(rgb, size=tuple(image_size), mode="bilinear", align_corners=False, antialias=True)
+
+    @torch.no_grad()
+    def _prepare_inference_batch(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
+        self.eval()
+        if self.rgb_key not in batch:
+            raise KeyError(
+                f"Mask-ACT requires live RGB input '{self.rgb_key}', but received keys: {sorted(batch)}"
+            )
+
+        rgb = self._resize_inference_rgb(batch[self.rgb_key].to(dtype=torch.float32))
+        act_batch = dict(batch)
+
+        if self.uses_semantic_latents():
+            if self.semantic_net is None:
+                raise RuntimeError("Experiment 5 semantic network is missing.")
+            rgb_main_latent, rgb_semantic_latents, _ = self.semantic_net(rgb, masks=None)
+            act_batch[OBS_ENV_STATE] = torch.cat(
+                [rgb_main_latent, rgb_semantic_latents.reshape(rgb_semantic_latents.shape[0], -1)],
+                dim=-1,
+            )
+        else:
+            mask_logits, rgb_latent = self.seg_net(rgb)
+            mask_probs = torch.sigmoid(mask_logits)
+
+            if self.act_uses_latent():
+                act_batch[OBS_ENV_STATE] = rgb_latent
+
+            if self.act_uses_masks():
+                for idx, key in enumerate(self.mask_keys):
+                    mask_image = mask_probs[:, idx : idx + 1].repeat(1, 3, 1, 1)
+                    act_batch[key] = self.normalize_visual_like(mask_image, key)
+
+                if self.uses_mask_metrics():
+                    metric_inputs = self.compute_mask_metrics(mask_probs)
+                    if self.experiment == "4A":
+                        act_batch[OBS_ENV_STATE] = metric_inputs
+                    elif self.experiment == "4C":
+                        act_batch[METRIC_SEED] = metric_inputs
+
+        return act_batch
+
+    @torch.no_grad()
+    def select_action(self, batch: dict[str, Tensor]) -> Tensor:
+        """Run RGB-only Mask-ACT inference and return one action from the ACT action queue."""
+        return self.act_policy.select_action(self._prepare_inference_batch(batch))
+
+    @torch.no_grad()
+    def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
+        """Run RGB-only Mask-ACT inference and return the complete predicted action chunk."""
+        return self.act_policy.predict_action_chunk(self._prepare_inference_batch(batch))
+
     def mask_action_grad_enabled(self) -> bool:
         return self.experiment in {"1B", "4A", "4B", "4C"}
 
