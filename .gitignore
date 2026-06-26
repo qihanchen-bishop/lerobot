@@ -169,7 +169,8 @@ outputs/
 mydata/
 simdata/
 eval_runs/
-eval_new
+eval_new/
+sample/
 datanew/
 calibration/
 # Translations
