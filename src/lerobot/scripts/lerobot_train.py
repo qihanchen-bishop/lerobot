@@ -14,9 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import dataclasses
+import json
 import logging
 import time
 from contextlib import nullcontext
+from pathlib import Path
 from pprint import pformat
 from typing import Any
 
@@ -24,6 +26,7 @@ import torch
 from accelerate import Accelerator
 from termcolor import colored
 from torch.optim import Optimizer
+from tqdm.auto import tqdm
 
 from lerobot.configs import parser
 from lerobot.configs.train import TrainPipelineConfig
@@ -52,6 +55,190 @@ from lerobot.utils.utils import (
     has_method,
     init_logging,
 )
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 1:
+            return float(value.detach().cpu())
+        return value.detach().cpu().tolist()
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (int, float, str, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _append_train_metrics(output_dir: Path, record: dict[str, Any]) -> None:
+    metrics_dir = output_dir / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    jsonl_path = metrics_dir / "train_metrics.jsonl"
+    json_path = metrics_dir / "train_metrics.json"
+
+    with open(jsonl_path, "a") as f:
+        f.write(json.dumps(_json_safe(record), sort_keys=True) + "\n")
+
+    records = []
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    with open(json_path, "w") as f:
+        json.dump(
+            {
+                "metadata": {
+                    "jsonl_path": str(jsonl_path),
+                    "curve_path": str(metrics_dir / "train_loss_curve.png"),
+                },
+                "records": records,
+            },
+            f,
+            indent=4,
+        )
+        f.write("\n")
+
+
+def _plot_train_metrics(output_dir: Path, title: str) -> None:
+    metrics_dir = output_dir / "metrics"
+    jsonl_path = metrics_dir / "train_metrics.jsonl"
+    if not jsonl_path.exists():
+        return
+
+    records = []
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    if not records:
+        return
+
+    loss_keys = [
+        key
+        for key in ("loss", "action_loss")
+        if any(isinstance(record.get(key), (int, float)) for record in records)
+    ]
+    if not loss_keys:
+        return
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        _plot_train_metrics_with_pil(records, loss_keys, metrics_dir / "train_loss_curve.png", title)
+        return
+
+    plt.figure(figsize=(10, 6))
+    for key in loss_keys:
+        xs = []
+        ys = []
+        for record in records:
+            step = record.get("step", record.get("steps"))
+            value = record.get(key)
+            if isinstance(step, (int, float)) and isinstance(value, (int, float)):
+                xs.append(step)
+                ys.append(value)
+        if xs:
+            plt.plot(xs, ys, label=key)
+    plt.xlabel("step")
+    plt.ylabel("loss")
+    plt.title(title)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(metrics_dir / "train_loss_curve.png", dpi=160)
+    plt.close()
+
+
+def _plot_train_metrics_with_pil(
+    records: list[dict[str, Any]],
+    loss_keys: list[str],
+    output_png: Path,
+    title: str,
+) -> None:
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        logging.warning("matplotlib and pillow are not installed; skipping train loss curve generation.")
+        return
+
+    series = {}
+    for key in loss_keys:
+        points = []
+        for record in records:
+            step = record.get("step", record.get("steps"))
+            value = record.get(key)
+            if isinstance(step, (int, float)) and isinstance(value, (int, float)):
+                points.append((float(step), float(value)))
+        if points:
+            series[key] = points
+    if not series:
+        return
+
+    width, height = 1200, 720
+    left, right, top, bottom = 90, 40, 70, 90
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+    all_x = [x for points in series.values() for x, _ in points]
+    all_y = [y for points in series.values() for _, y in points]
+    x_min, x_max = min(all_x), max(all_x)
+    y_min, y_max = min(all_y), max(all_y)
+    if x_min == x_max:
+        x_max = x_min + 1
+    if y_min == y_max:
+        y_max = y_min + 1
+    y_pad = (y_max - y_min) * 0.05
+    y_min -= y_pad
+    y_max += y_pad
+
+    def xy(point: tuple[float, float]) -> tuple[int, int]:
+        x, y = point
+        px = left + int((x - x_min) / (x_max - x_min) * plot_w)
+        py = top + plot_h - int((y - y_min) / (y_max - y_min) * plot_h)
+        return px, py
+
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((left, 20), title, fill=(20, 20, 20))
+    draw.line((left, top, left, top + plot_h), fill=(40, 40, 40), width=2)
+    draw.line((left, top + plot_h, left + plot_w, top + plot_h), fill=(40, 40, 40), width=2)
+    for i in range(6):
+        y = top + int(i / 5 * plot_h)
+        value = y_max - i / 5 * (y_max - y_min)
+        draw.line((left, y, left + plot_w, y), fill=(225, 225, 225), width=1)
+        draw.text((10, y - 8), f"{value:.3g}", fill=(70, 70, 70))
+    draw.text((left + plot_w // 2 - 20, height - 35), "step", fill=(40, 40, 40))
+    draw.text((10, 45), "loss", fill=(40, 40, 40))
+    draw.text((left, top + plot_h + 12), f"{x_min:.0f}", fill=(70, 70, 70))
+    draw.text((left + plot_w - 50, top + plot_h + 12), f"{x_max:.0f}", fill=(70, 70, 70))
+
+    colors = [
+        (31, 119, 180),
+        (214, 39, 40),
+        (44, 160, 44),
+        (148, 103, 189),
+        (255, 127, 14),
+    ]
+    for idx, (key, points) in enumerate(series.items()):
+        color = colors[idx % len(colors)]
+        pixels = [xy(point) for point in points]
+        if len(pixels) == 1:
+            x, y = pixels[0]
+            draw.ellipse((x - 3, y - 3, x + 3, y + 3), fill=color)
+        else:
+            draw.line(pixels, fill=color, width=3)
+        legend_x = left + 20 + idx * 180
+        legend_y = height - 65
+        draw.line((legend_x, legend_y, legend_x + 30, legend_y), fill=color, width=4)
+        draw.text((legend_x + 38, legend_y - 8), key, fill=(30, 30, 30))
+
+    output_png.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output_png)
 
 
 def update_policy(
@@ -394,7 +581,24 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             f"Start offline training on a fixed dataset, with effective batch size: {effective_batch_size}"
         )
 
-    for _ in range(step, cfg.steps):
+    metrics_dir = cfg.output_dir / "metrics"
+    metrics_jsonl = metrics_dir / "train_metrics.jsonl"
+    if is_main_process and not cfg.resume and metrics_jsonl.exists():
+        metrics_jsonl.unlink()
+
+    progress = tqdm(
+        range(step, cfg.steps),
+        desc=f"train {cfg.policy.type}",
+        unit="step",
+        dynamic_ncols=True,
+        mininterval=1.0,
+        smoothing=0.1,
+        disable=not is_main_process,
+        initial=step,
+        total=cfg.steps,
+    )
+
+    for _ in progress:
         start_time = time.perf_counter()
         batch = next(dl_iter)
         batch = preprocessor(batch)
@@ -420,7 +624,26 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         is_eval_step = cfg.eval_freq > 0 and step % cfg.eval_freq == 0
 
         if is_log_step:
-            logging.info(train_tracker)
+            metrics_record = {
+                "step": step,
+                "total_steps": cfg.steps,
+                "wall_time_unix": time.time(),
+                **train_tracker.to_dict(),
+            }
+            if output_dict:
+                metrics_record.update(
+                    {
+                        key: value
+                        for key, value in output_dict.items()
+                        if isinstance(_json_safe(value), (int, float, str, bool, list, dict))
+                    }
+                )
+            _append_train_metrics(cfg.output_dir, metrics_record)
+            progress.set_postfix(
+                loss=f"{metrics_record.get('loss', 0.0):.4f}",
+                lr=f"{metrics_record.get('lr', 0.0):.1e}",
+                grdn=f"{metrics_record.get('grad_norm', 0.0):.3f}",
+            )
             if wandb_logger:
                 wandb_log_dict = train_tracker.to_dict()
                 if output_dict:
@@ -512,6 +735,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     if is_main_process:
         logging.info("End of training")
+        _plot_train_metrics(cfg.output_dir, f"{cfg.policy.type} training losses")
 
         if cfg.policy.push_to_hub:
             unwrapped_policy = accelerator.unwrap_model(policy)

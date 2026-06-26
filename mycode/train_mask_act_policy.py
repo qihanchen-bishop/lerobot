@@ -53,6 +53,7 @@ from lerobot.policies.factory import make_policy_config, make_pre_post_processor
 from lerobot.utils.constants import OBS_ENV_STATE
 
 from train_lerobot_policy import ensure_device_is_usable, make_filtered_dataset_view
+from training_artifacts import plot_training_curves, tee_output
 
 
 DEFAULT_ROOT = Path("simdata/cube1")
@@ -102,6 +103,7 @@ class MaskActRunConfig:
     n_action_steps: int
     pretrained_backbone_weights: str | None
     canonical_mask_definition: list[str]
+    no_gripper: bool
 
 
 class DoubleConv(nn.Module):
@@ -517,6 +519,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-keys", nargs="*", default=DEFAULT_STATE_KEYS)
     parser.add_argument("--mask-target-keys", nargs="+", default=DEFAULT_MASK_KEYS)
     parser.add_argument(
+        "--no-gripper",
+        action="store_true",
+        help="Drop gripper dimensions from action and selected state features before training.",
+    )
+    parser.add_argument(
         "--image-size",
         type=int,
         nargs=2,
@@ -781,6 +788,7 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         n_action_steps=args.n_action_steps,
         pretrained_backbone_weights=args.pretrained_backbone_weights,
         canonical_mask_definition=list(CANONICAL_SEMANTIC_MASK_KEYS),
+        no_gripper=args.no_gripper,
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     with open(args.output_dir / "mask_act_run_config.json", "w") as f:
@@ -925,6 +933,11 @@ class TrainingMetricsLogger:
         self._write_json()
         if self.writer is not None:
             self.writer.close()
+        plot_training_curves(
+            self.jsonl_path,
+            self.metrics_dir / "train_loss_curve.png",
+            "MaskACT training losses",
+        )
 
     def _write_json(self) -> None:
         with open(self.json_path, "w") as f:
@@ -950,6 +963,18 @@ class TrainingMetricsLogger:
 
 def main() -> None:
     args = parse_args()
+    final_log_path = args.output_dir / "logs" / "train.log"
+    temp_log_path = args.output_dir.parent / f".{args.output_dir.name}.train.log.tmp"
+    with tee_output(temp_log_path):
+        run_training(args, final_log_path)
+    if args.output_dir.exists():
+        final_log_path.parent.mkdir(parents=True, exist_ok=True)
+        if final_log_path.exists():
+            final_log_path.unlink()
+        shutil.move(str(temp_log_path), final_log_path)
+
+
+def run_training(args: argparse.Namespace, log_path: Path) -> None:
     args.image_size = validate_image_size(args.image_size)
     if isinstance(args.pretrained_backbone_weights, str) and args.pretrained_backbone_weights.lower() in {
         "none",
@@ -973,6 +998,7 @@ def main() -> None:
         image_keys=image_keys_in_view,
         state_keys=args.state_keys,
         rebuild=args.rebuild_view,
+        no_gripper=args.no_gripper,
     )
     save_run_config(args, image_keys_in_view)
 
@@ -1015,7 +1041,10 @@ def main() -> None:
     print(f"ACT image keys: {act_image_keys_for_experiment(args)}")
     print(f"Mask supervision keys: {args.mask_target_keys}")
     print(f"Training image size: {args.image_size or 'dataset native resolution'}")
+    if args.no_gripper:
+        print("No gripper: dropped gripper dimensions when present in action and selected state features.")
     print(f"Output dir: {args.output_dir}")
+    print(f"Train log: {log_path}")
     run_config_path = args.output_dir / "mask_act_run_config.json"
     with open(run_config_path) as f:
         metrics_run_config = json.load(f)

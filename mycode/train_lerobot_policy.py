@@ -18,6 +18,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.policies.factory import make_policy_config
 from lerobot.scripts.lerobot_train import train
+from training_artifacts import plot_training_curves, tee_output
 
 
 DEFAULT_ROOT = Path("/home/romilab/.cache/huggingface/lerobot/seeedstudio123/test_20260506_153720")
@@ -63,6 +64,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--policy-type", default="act", help="Policy type, e.g. act or diffusion.")
     parser.add_argument("--image-keys", nargs="*", default=DEFAULT_IMAGE_KEYS)
     parser.add_argument("--state-keys", nargs="*", default=DEFAULT_STATE_KEYS)
+    parser.add_argument(
+        "--no-gripper",
+        action="store_true",
+        help="Drop gripper dimensions from action and selected state features before training.",
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--job-name", default="act_bi_so_left_front")
     parser.add_argument("--steps", type=int, default=100_000)
@@ -107,16 +113,138 @@ def symlink_tree(src: Path, dst: Path) -> None:
             os.symlink(path, target)
 
 
-def write_filtered_json(src: Path, dst: Path, keep_keys: set[str]) -> None:
+def _drop_dim_value(value, drop_indices: list[int], expected_dim: int):
+    if not isinstance(value, list):
+        return value
+    if len(value) == expected_dim:
+        return [item for idx, item in enumerate(value) if idx not in drop_indices]
+    if value and all(isinstance(row, list) and len(row) == expected_dim for row in value):
+        return [[item for idx, item in enumerate(row) if idx not in drop_indices] for row in value]
+    return value
+
+
+def _gripper_drop_indices_from_features(features: dict, trim_keys: set[str]) -> dict[str, list[int]]:
+    drop_indices: dict[str, list[int]] = {}
+    for key in trim_keys:
+        feature = features.get(key)
+        if not isinstance(feature, dict):
+            continue
+        shape = feature.get("shape")
+        names = feature.get("names")
+        if not isinstance(shape, list) or len(shape) != 1 or shape[0] <= 1:
+            continue
+        if not isinstance(names, list) or len(names) != shape[0]:
+            continue
+        indices = [idx for idx, name in enumerate(names) if "gripper" in str(name).lower()]
+        if indices:
+            drop_indices[key] = indices
+    return drop_indices
+
+
+def _drop_dim_metadata(data: dict, drop_indices_by_key: dict[str, list[int]]) -> dict:
+    features = data.get("features")
+    if not isinstance(features, dict):
+        return data
+
+    original_dims_by_key: dict[str, int] = {}
+    for key, drop_indices in drop_indices_by_key.items():
+        feature = features.get(key)
+        if not isinstance(feature, dict):
+            continue
+        shape = feature.get("shape")
+        if not isinstance(shape, list) or len(shape) != 1 or shape[0] <= len(drop_indices):
+            continue
+        original_dims_by_key[key] = shape[0]
+        feature["shape"] = [shape[0] - len(drop_indices)]
+        names = feature.get("names")
+        if isinstance(names, list) and len(names) == shape[0]:
+            feature["names"] = [name for idx, name in enumerate(names) if idx not in drop_indices]
+
+    stats = data.get("stats")
+    if isinstance(stats, dict):
+        for key, original_dim in original_dims_by_key.items():
+            if not isinstance(stats.get(key), dict):
+                continue
+            for stat_name, stat_value in list(stats[key].items()):
+                stats[key][stat_name] = _drop_dim_value(stat_value, drop_indices_by_key[key], original_dim)
+
+    return data
+
+
+def _drop_dim_stats(data: dict, drop_indices_by_key: dict[str, list[int]], original_dims_by_key: dict[str, int]) -> dict:
+    for key, original_dim in original_dims_by_key.items():
+        if not isinstance(data.get(key), dict):
+            continue
+        for stat_name, stat_value in list(data[key].items()):
+            data[key][stat_name] = _drop_dim_value(stat_value, drop_indices_by_key[key], original_dim)
+    return data
+
+
+def write_filtered_json(
+    src: Path,
+    dst: Path,
+    keep_keys: set[str],
+    drop_indices_by_key: dict[str, list[int]] | None = None,
+    original_dims_by_key: dict[str, int] | None = None,
+) -> None:
     with open(src) as f:
         data = json.load(f)
     if "features" in data:
         data["features"] = {key: value for key, value in data["features"].items() if key in keep_keys}
+        if drop_indices_by_key:
+            data = _drop_dim_metadata(data, drop_indices_by_key)
     else:
+        original_dims_by_key = original_dims_by_key or {
+            key: len(value["mean"])
+            for key, value in data.items()
+            if drop_indices_by_key
+            and key in drop_indices_by_key
+            and isinstance(value, dict)
+            and isinstance(value.get("mean"), list)
+        }
         data = {key: value for key, value in data.items() if key in keep_keys}
+        if drop_indices_by_key:
+            data = _drop_dim_stats(data, drop_indices_by_key, original_dims_by_key)
     dst.parent.mkdir(parents=True, exist_ok=True)
     with open(dst, "w") as f:
         json.dump(data, f, indent=4)
+
+
+def _drop_dim_cell(value, drop_indices: list[int]):
+    if value is None:
+        return value
+    return [item for idx, item in enumerate(value) if idx not in drop_indices]
+
+
+def write_trimmed_data_tree(src_dir: Path, dst_dir: Path, drop_indices_by_key: dict[str, list[int]]) -> None:
+    if not drop_indices_by_key:
+        symlink_tree(src_dir, dst_dir)
+        return
+
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise ImportError(
+            "--no-gripper needs pandas/pyarrow to rewrite LeRobot parquet data files. "
+            "Install the dataset dependencies in this environment before using --no-gripper."
+        ) from exc
+
+    for path in src_dir.rglob("*"):
+        rel = path.relative_to(src_dir)
+        target = dst_dir / rel
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if path.suffix != ".parquet":
+            if not target.exists():
+                os.symlink(path, target)
+            continue
+        df = pd.read_parquet(path)
+        for key, drop_indices in drop_indices_by_key.items():
+            if key in df.columns:
+                df[key] = df[key].map(lambda value, indices=drop_indices: _drop_dim_cell(value, indices))
+        df.to_parquet(target, index=False)
 
 
 def make_filtered_dataset_view(
@@ -126,6 +254,7 @@ def make_filtered_dataset_view(
     state_keys: list[str],
     action_key: str = "action",
     rebuild: bool = False,
+    no_gripper: bool = False,
 ) -> Path:
     keep_keys = {
         action_key,
@@ -142,10 +271,53 @@ def make_filtered_dataset_view(
         shutil.rmtree(view_root)
 
     view_root.mkdir(parents=True, exist_ok=True)
-    write_filtered_json(source_root / "meta" / "info.json", view_root / "meta" / "info.json", keep_keys)
-    write_filtered_json(source_root / "meta" / "stats.json", view_root / "meta" / "stats.json", keep_keys)
+    data_root = view_root / "data"
+    no_gripper_marker = view_root / "meta" / ".no_gripper"
+    if no_gripper != no_gripper_marker.exists() and data_root.exists():
+        shutil.rmtree(data_root)
 
-    symlink_tree(source_root / "data", view_root / "data")
+    drop_indices_by_key: dict[str, list[int]] = {}
+    original_dims_by_key: dict[str, int] = {}
+    if no_gripper:
+        trim_keys = {action_key, *state_keys}
+        with open(source_root / "meta" / "info.json") as f:
+            source_info = json.load(f)
+        features = source_info.get("features", {})
+        if not isinstance(features, dict):
+            raise ValueError(f"Could not read feature metadata from {source_root / 'meta' / 'info.json'}")
+        drop_indices_by_key = _gripper_drop_indices_from_features(features, trim_keys)
+        original_dims_by_key = {
+            key: features[key]["shape"][0]
+            for key in drop_indices_by_key
+            if isinstance(features.get(key), dict)
+            and isinstance(features[key].get("shape"), list)
+            and len(features[key]["shape"]) == 1
+        }
+    write_filtered_json(
+        source_root / "meta" / "info.json",
+        view_root / "meta" / "info.json",
+        keep_keys,
+        drop_indices_by_key,
+        original_dims_by_key,
+    )
+    write_filtered_json(
+        source_root / "meta" / "stats.json",
+        view_root / "meta" / "stats.json",
+        keep_keys,
+        drop_indices_by_key,
+        original_dims_by_key,
+    )
+
+    if no_gripper:
+        if data_root.exists() and not rebuild:
+            shutil.rmtree(data_root)
+        write_trimmed_data_tree(source_root / "data", data_root, drop_indices_by_key)
+        no_gripper_marker.parent.mkdir(parents=True, exist_ok=True)
+        no_gripper_marker.write_text(json.dumps(drop_indices_by_key, indent=4) + "\n")
+    else:
+        if no_gripper_marker.exists():
+            no_gripper_marker.unlink()
+        symlink_tree(source_root / "data", view_root / "data")
     symlink_tree(source_root / "meta" / "episodes", view_root / "meta" / "episodes")
 
     tasks_src = source_root / "meta" / "tasks.parquet"
@@ -196,6 +368,18 @@ def build_policy_config(policy_type: str, meta: LeRobotDatasetMetadata, args: ar
 
 def main() -> None:
     args = parse_args()
+    final_log_path = args.output_dir / "logs" / "train.log"
+    temp_log_path = args.output_dir.parent / f".{args.output_dir.name}.train.log.tmp"
+    with tee_output(temp_log_path):
+        run_training(args, final_log_path)
+    if args.output_dir.exists():
+        final_log_path.parent.mkdir(parents=True, exist_ok=True)
+        if final_log_path.exists():
+            final_log_path.unlink()
+        shutil.move(str(temp_log_path), final_log_path)
+
+
+def run_training(args: argparse.Namespace, log_path: Path) -> None:
     ensure_device_is_usable(args.device)
     view_root = args.view_root or (args.output_dir.parent / "dataset_views" / args.output_dir.name)
 
@@ -208,6 +392,7 @@ def main() -> None:
         image_keys=args.image_keys,
         state_keys=args.state_keys,
         rebuild=args.rebuild_view,
+        no_gripper=args.no_gripper,
     )
 
     meta = LeRobotDatasetMetadata(args.repo_id, root=filtered_root)
@@ -230,7 +415,17 @@ def main() -> None:
     print(f"Training dataset view: {filtered_root}")
     print(f"Input features: {list(policy_cfg.input_features)}")
     print(f"Output features: {list(policy_cfg.output_features)}")
+    if args.no_gripper:
+        print("No gripper: dropped gripper dimensions when present in action and selected state features.")
+    print(f"Train log: {log_path}")
+    print(f"Metrics JSONL: {args.output_dir / 'metrics' / 'train_metrics.jsonl'}")
+    print(f"Loss curve: {args.output_dir / 'metrics' / 'train_loss_curve.png'}")
     train(cfg)
+    plot_training_curves(
+        args.output_dir / "metrics" / "train_metrics.jsonl",
+        args.output_dir / "metrics" / "train_loss_curve.png",
+        f"{args.policy_type} training losses",
+    )
 
 
 if __name__ == "__main__":
