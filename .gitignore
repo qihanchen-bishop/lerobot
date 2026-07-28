@@ -164,15 +164,15 @@ wandb/
 .dev/
 
 # Data folders
-data/
-outputs/
-mydata/
-simdata/
-eval_runs/
-eval_new/
-sample/
-datanew/
-calibration/
+/data/
+/outputs/
+/mydata/
+/simdata/
+/eval_runs/
+/eval_new/
+/sample/
+/datanew/
+/calibration/
 # Translations
 *.mo
 *.pot

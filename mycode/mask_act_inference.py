@@ -20,6 +20,7 @@ from train_mask_act_policy import (
     make_policy,
     reshape_visual_stats_for_channel_first,
 )
+from train_lerobot_policy import make_filtered_dataset_view
 
 
 def resolve_mask_act_checkpoint(path: str | Path) -> tuple[Path, Path]:
@@ -125,6 +126,21 @@ def load_mask_act_for_inference(
     args.pretrained_backbone_weights = None
 
     meta = LeRobotDatasetMetadata(args.repo_id, root=metadata_root)
+    if run_cfg.get("no_gripper"):
+        image_keys = run_cfg.get("dataset_view_image_keys") or [
+            run_cfg["rgb_key"],
+            *run_cfg["mask_target_keys"],
+        ]
+        metadata_root = make_filtered_dataset_view(
+            source_root=metadata_root,
+            view_root=run_dir / "inference_no_gripper_dataset_view",
+            image_keys=list(image_keys),
+            state_keys=list(run_cfg["state_keys"]),
+            rebuild=False,
+            no_gripper=True,
+        )
+        meta = LeRobotDatasetMetadata(args.repo_id, root=metadata_root)
+
     features = dataset_to_policy_features(meta.features)
     act_input_keys = [*args.state_keys, *act_image_keys_for_experiment(args)]
     act_input_features = {key: features[key] for key in act_input_keys if key in features}

@@ -2035,11 +2035,30 @@ class EvalPolicyApp:
         if not save_video:
             dataset_features = self._video_features_to_images(dataset_features)
         policy_inputs = sorted(policy_cfg.input_features)
+        policy_action_names = self._policy_feature_names(dataset_features, policy_cfg.output_features, ACTION)
+        policy_state_names = self._policy_feature_names(
+            dataset_features, policy_cfg.input_features, "observation.state"
+        )
+        if policy_action_names:
+            dataset_features = self._features_with_names(dataset_features, ACTION, policy_action_names)
+        if policy_state_names and "observation.state" in dataset_features:
+            dataset_features = self._features_with_names(
+                dataset_features,
+                "observation.state",
+                policy_state_names,
+            )
         obs_features = sorted(key for key in dataset_features if key.startswith("observation."))
         self.log_queue.put(f"Raw robot observation features: {sorted(robot.observation_features)}")
         self.log_queue.put(f"Dataset observation features: {obs_features}")
         self.log_queue.put(f"Policy input features: {policy_inputs}")
         self.log_queue.put(f"Policy output features: {sorted(policy_cfg.output_features)}")
+        raw_action_names = list(robot.action_features)
+        if len(policy_action_names) != len(raw_action_names):
+            self.log_queue.put(
+                f"[GRIPPER] Policy action vector uses {len(policy_action_names)} non-gripper dim(s): "
+                f"{policy_action_names}; raw robot action dim is {len(raw_action_names)}. "
+                "Gripper will keep its current/initial angle because no gripper command is sent."
+            )
 
         dataset = None
         replan_executor: ThreadPoolExecutor | None = None
@@ -2125,10 +2144,17 @@ class EvalPolicyApp:
             )
             if self.lock_grippers.get():
                 gripper_keys = self._gripper_keys(robot.action_features)
-                self.log_queue.put(
-                    f"[GRIPPER] Locked during policy and reset; commands disabled for {gripper_keys}. "
-                    "Policy gripper observations use the validated success baseline."
-                )
+                state_names = dataset.features.get("observation.state", {}).get("names", [])
+                if any(self._is_gripper_key(str(name)) for name in state_names):
+                    self.log_queue.put(
+                        f"[GRIPPER] Locked during policy and reset; commands disabled for {gripper_keys}. "
+                        "Policy gripper observations use the captured/validated baseline."
+                    )
+                else:
+                    self.log_queue.put(
+                        f"[GRIPPER] None-gripper policy mode; commands disabled for {gripper_keys}. "
+                        "The gripper keeps its current/initial angle."
+                    )
             self.log_queue.put(
                 "[RECORD] MP4 encoding enabled."
                 if save_video
@@ -2253,6 +2279,7 @@ class EvalPolicyApp:
                     policy_observation_frame = self._policy_observation_frame(
                         observation_frame,
                         dataset.features,
+                        policy_cfg.input_features,
                     )
                     observation_history.append(copy(policy_observation_frame))
                     observation_ready = time.perf_counter()
@@ -2303,7 +2330,11 @@ class EvalPolicyApp:
                                 "continuing the previous action chunk."
                             )
                         action_values = planner.pop_action()
-                    action_dict = make_robot_action(action_values, dataset.features)
+                    action_dict = make_robot_action(
+                        action_values,
+                        dataset.features,
+                    )
+                    self._fill_missing_action_values(action_dict, dataset.features, raw_obs)
                     robot_action_to_send = robot_action_processor((action_dict, raw_obs))
                     if self.lock_grippers.get():
                         robot_action_to_send = self._without_gripper_actions(robot_action_to_send)
@@ -2588,29 +2619,110 @@ class EvalPolicyApp:
         self,
         observation_frame: dict[str, Any],
         dataset_features: dict[str, dict[str, Any]],
+        policy_input_features: dict[str, Any],
     ) -> dict[str, Any]:
-        """Keep locked gripper inputs at the validated baseline without altering recorded sensor data."""
-        if not self.lock_grippers.get() or "observation.state" not in observation_frame:
+        """Prepare the observation vector expected by the policy without changing recorded sensor data."""
+        if "observation.state" not in observation_frame:
             return observation_frame
 
-        state_feature = dataset_features.get("observation.state", {})
-        names = state_feature.get("names")
-        if not isinstance(names, list):
+        state_names = self._policy_feature_names(dataset_features, policy_input_features, "observation.state")
+        dataset_state_feature = dataset_features.get("observation.state", {})
+        dataset_state_names = dataset_state_feature.get("names")
+        if not isinstance(dataset_state_names, list):
             return observation_frame
 
         policy_frame = dict(observation_frame)
         state = observation_frame["observation.state"]
         clone = getattr(state, "clone", None)
         policy_state = clone() if callable(clone) else state.copy()
-        replacements = 0
-        for index, name in enumerate(names):
-            baseline = DEFAULT_90_PERCENT_SUCCESS_POSE.get(str(name))
-            if baseline is not None and self._is_gripper_key(str(name)):
-                policy_state[index] = baseline
-                replacements += 1
-        if replacements:
-            policy_frame["observation.state"] = policy_state
+        if self.lock_grippers.get():
+            for index, name in enumerate(dataset_state_names):
+                baseline = DEFAULT_90_PERCENT_SUCCESS_POSE.get(str(name))
+                if baseline is not None and self._is_gripper_key(str(name)):
+                    policy_state[index] = baseline
+
+        if list(state_names) != list(dataset_state_names):
+            keep_indices = [dataset_state_names.index(name) for name in state_names]
+            policy_state = self._select_vector_indices(policy_state, keep_indices)
+
+        policy_frame["observation.state"] = policy_state
         return policy_frame
+
+    @classmethod
+    def _policy_feature_names(
+        cls,
+        dataset_features: dict[str, dict[str, Any]],
+        policy_features: dict[str, Any],
+        feature_key: str,
+    ) -> list[str]:
+        dataset_feature = dataset_features.get(feature_key)
+        if not isinstance(dataset_feature, dict):
+            return []
+        names = dataset_feature.get("names")
+        if not isinstance(names, list):
+            return []
+
+        policy_feature = policy_features.get(feature_key) if isinstance(policy_features, dict) else None
+        expected_dim = cls._feature_dim(policy_feature)
+        if expected_dim is None or expected_dim == len(names):
+            return list(names)
+
+        non_gripper_names = [str(name) for name in names if not cls._is_gripper_key(str(name))]
+        if expected_dim == len(non_gripper_names):
+            return non_gripper_names
+
+        raise ValueError(
+            f"Cannot map policy feature '{feature_key}' with dim {expected_dim} onto dataset names {names}. "
+            "Only full vectors and gripper-dropped vectors are currently supported."
+        )
+
+    @staticmethod
+    def _feature_dim(feature: Any) -> int | None:
+        shape = getattr(feature, "shape", None)
+        if shape is None and isinstance(feature, dict):
+            shape = feature.get("shape")
+        if shape is None:
+            return None
+        if len(shape) != 1:
+            return None
+        return int(shape[0])
+
+    @staticmethod
+    def _select_vector_indices(vector: Any, indices: list[int]) -> Any:
+        try:
+            return vector[indices]
+        except Exception:
+            return [vector[index] for index in indices]
+
+    @staticmethod
+    def _features_with_names(
+        dataset_features: dict[str, dict[str, Any]],
+        feature_key: str,
+        names: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        features = dict(dataset_features)
+        feature = dict(dataset_features[feature_key])
+        feature["names"] = list(names)
+        feature["shape"] = (len(names),)
+        features[feature_key] = feature
+        return features
+
+    @staticmethod
+    def _fill_missing_action_values(
+        action: dict[str, Any],
+        dataset_features: dict[str, dict[str, Any]],
+        raw_obs: dict[str, Any],
+    ) -> None:
+        action_feature = dataset_features.get("action", {})
+        names = action_feature.get("names")
+        if not isinstance(names, list):
+            return
+        for name in names:
+            key = str(name)
+            if key in action:
+                continue
+            if key in raw_obs:
+                action[key] = raw_obs[key]
 
     @staticmethod
     def _opencv_value(index_or_path: str) -> int | Path:

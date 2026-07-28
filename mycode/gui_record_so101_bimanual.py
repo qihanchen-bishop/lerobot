@@ -8,6 +8,8 @@ Run from the LeRobot conda environment:
 
 from __future__ import annotations
 
+import concurrent.futures
+import os
 import queue
 import json
 import shutil
@@ -34,10 +36,16 @@ if str(CURRENT_REPO_SRC) not in sys.path:
     sys.path.insert(0, str(CURRENT_REPO_SRC))
 
 try:
-    from mycode.gui_view_lerobot_dataset import read_nested_parquets, rewrite_dataset, video_keys_from_info
+    from mycode.gui_view_lerobot_dataset import (
+        read_nested_parquets,
+        rewrite_dataset,
+        stats_from_episode_row,
+        video_keys_from_info,
+    )
 except ModuleNotFoundError:
-    from gui_view_lerobot_dataset import read_nested_parquets, rewrite_dataset, video_keys_from_info
+    from gui_view_lerobot_dataset import read_nested_parquets, rewrite_dataset, stats_from_episode_row, video_keys_from_info
 
+from lerobot.datasets.compute_stats import aggregate_stats
 from lerobot.cameras.configs import ColorMode
 from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
@@ -45,7 +53,7 @@ from lerobot.cameras.realsense.camera_realsense import RealSenseCamera
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.pipeline_features import aggregate_pipeline_dataset_features, create_initial_features
-from lerobot.datasets.utils import build_dataset_frame, combine_feature_dicts
+from lerobot.datasets.utils import build_dataset_frame, combine_feature_dicts, write_stats
 from lerobot.datasets.video_utils import VideoEncodingManager, get_video_duration_in_s
 from lerobot.processor import make_default_processors
 from lerobot.robots.so_follower import SO101Follower, SOFollowerRobotConfig
@@ -57,10 +65,17 @@ from lerobot.utils.utils import init_logging
 FPS = 30
 CAMERA_WIDTH = 1280
 CAMERA_HEIGHT = 720
+LOW_CAMERA_WIDTH = 640
+LOW_CAMERA_HEIGHT = 360
 PREVIEW_SIZE = (1280, 720)
+SIDE_PREVIEW_SIZE = (640, 360)
 DEFAULT_CALIBRATION_PATH = Path(__file__).resolve().parents[1] / "calibration"
 DEFAULT_DATASET_ROOT = Path(__file__).resolve().parents[1] / "datanew"
-TASK_CHOICES = ("cube1", "cube2", "cube3")
+DEFAULT_LEFT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E122511-if00"
+DEFAULT_LEFT_LEADER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E118729-if00"
+DEFAULT_RIGHT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E119029-if00"
+DEFAULT_RIGHT_LEADER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E121504-if00"
+TASK_CHOICES = ("cube", "screw", "paperball", "cube_r", "screw_r", "paperball_r")
 EPISODE_FILE_SIZE_MB = 1e-6
 
 
@@ -80,7 +95,7 @@ def depth_to_rgb(depth: np.ndarray) -> np.ndarray:
 
 
 class RealSenseDepthView:
-    """A camera-like view that exposes colorized depth from an existing RealSense RGB camera."""
+    """Camera-like view that exposes colorized depth for preview/training video features."""
 
     def __init__(self, parent: RealSenseCamera | FlexibleRealSenseCamera) -> None:
         self.parent = parent
@@ -97,13 +112,13 @@ class RealSenseDepthView:
         pass
 
     def async_read(self, timeout_ms: int = 200) -> np.ndarray:
-        del timeout_ms
-        with self.parent.frame_lock:
-            depth = getattr(self.parent, "latest_depth_preview_frame", None)
+        if isinstance(self.parent, RealSenseCamera):
+            depth = self.parent.read_depth(timeout_ms=timeout_ms)
+        else:
+            with self.parent.frame_lock:
+                depth = self.parent.latest_depth_preview_frame
             if depth is None:
-                depth = self.parent.latest_depth_frame
-        if depth is None:
-            depth = self.parent.read_depth()
+                depth = self.parent.read_depth(timeout_ms=timeout_ms)
         return depth_to_rgb(depth)
 
 
@@ -135,8 +150,8 @@ class FlexibleRealSenseCamera:
         pipeline = rs.pipeline()
         config = rs.config()
         rs.config.enable_device(config, self.serial_number)
-        config.enable_stream(rs.stream.color)
-        config.enable_stream(rs.stream.depth)
+        config.enable_stream(rs.stream.color, self.width, self.height, rs.format.rgb8, FPS)
+        config.enable_stream(rs.stream.depth, self.width, self.height, rs.format.z16, FPS)
         self.rs_profile = pipeline.start(config)
         self.rs_pipeline = pipeline
 
@@ -199,6 +214,13 @@ class LocalBimanualSOFollower:
         self.left_arm = left_arm
         self.right_arm = right_arm
         self.cameras = {**left_arm.cameras, **right_arm.cameras}
+        self._io_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=8, thread_name_prefix="bimanual-follower-io"
+        )
+
+    @property
+    def global_camera_keys(self) -> set[str]:
+        return set(self.cameras)
 
     @property
     def robot_type(self) -> str:
@@ -207,7 +229,10 @@ class LocalBimanualSOFollower:
     @property
     def observation_features(self) -> dict[str, type | tuple[int, int, int]]:
         return {
-            **{f"left_{key}": value for key, value in self.left_arm.observation_features.items()},
+            **{
+                key if key in self.global_camera_keys else f"left_{key}": value
+                for key, value in self.left_arm.observation_features.items()
+            },
             **{f"right_{key}": value for key, value in self.right_arm.observation_features.items()},
         }
 
@@ -227,11 +252,36 @@ class LocalBimanualSOFollower:
         self.right_arm.connect()
 
     def get_observation(self) -> dict[str, Any]:
-        left_obs = self.left_arm.get_observation()
-        right_obs = self.right_arm.get_observation()
+        futures: dict[concurrent.futures.Future, tuple[str, str]] = {}
+        futures[self._io_executor.submit(self._read_arm_motors, self.left_arm)] = ("left_motors", "")
+        futures[self._io_executor.submit(self._read_arm_motors, self.right_arm)] = ("right_motors", "")
+
+        delayed_depth_views: dict[str, RealSenseDepthView] = {}
+        for cam_key, cam in self.cameras.items():
+            if isinstance(cam, RealSenseDepthView):
+                delayed_depth_views[cam_key] = cam
+            else:
+                futures[self._io_executor.submit(cam.async_read)] = ("camera", cam_key)
+
+        left_obs: dict[str, Any] = {}
+        right_obs: dict[str, Any] = {}
+        camera_obs: dict[str, Any] = {}
+        for future in concurrent.futures.as_completed(futures):
+            kind, key = futures[future]
+            if kind == "left_motors":
+                left_obs = future.result()
+            elif kind == "right_motors":
+                right_obs = future.result()
+            else:
+                camera_obs[key] = future.result()
+
+        for cam_key, cam in delayed_depth_views.items():
+            camera_obs[cam_key] = cam.async_read()
+
         return {
             **{f"left_{key}": value for key, value in left_obs.items()},
             **{f"right_{key}": value for key, value in right_obs.items()},
+            **camera_obs,
         }
 
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
@@ -239,16 +289,24 @@ class LocalBimanualSOFollower:
         right_action = {
             key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")
         }
-        sent_left = self.left_arm.send_action(left_action)
-        sent_right = self.right_arm.send_action(right_action)
+        left_future = self._io_executor.submit(self.left_arm.send_action, left_action)
+        right_future = self._io_executor.submit(self.right_arm.send_action, right_action)
+        sent_left = left_future.result()
+        sent_right = right_future.result()
         return {
             **{f"left_{key}": value for key, value in sent_left.items()},
             **{f"right_{key}": value for key, value in sent_right.items()},
         }
 
+    @staticmethod
+    def _read_arm_motors(arm: SO101Follower) -> dict[str, float]:
+        obs_dict = arm.bus.sync_read("Present_Position")
+        return {f"{motor}.pos": val for motor, val in obs_dict.items()}
+
     def disconnect(self) -> None:
         self._disconnect_arm_safely("left follower", self.left_arm)
         self._disconnect_arm_safely("right follower", self.right_arm)
+        self._io_executor.shutdown(wait=True, cancel_futures=True)
 
     @staticmethod
     def _disconnect_arm_safely(label: str, arm: SO101Follower) -> None:
@@ -258,10 +316,16 @@ class LocalBimanualSOFollower:
         except Exception as exc:
             print(f"[GUI recorder] Warning: normal disconnect failed for {label}: {exc}", flush=True)
 
+        LocalBimanualSOFollower._disable_torque_best_effort(label, arm)
+
         try:
             arm.bus.disconnect(disable_torque=False)
         except Exception as exc:
             print(f"[GUI recorder] Warning: force-closing bus failed for {label}: {exc}", flush=True)
+            try:
+                arm.bus.port_handler.closePort()
+            except Exception as close_exc:
+                print(f"[GUI recorder] Warning: closing bus port failed for {label}: {close_exc}", flush=True)
 
         for name, cam in getattr(arm, "cameras", {}).items():
             try:
@@ -270,6 +334,17 @@ class LocalBimanualSOFollower:
             except Exception as exc:
                 print(f"[GUI recorder] Warning: disconnecting camera {label}/{name} failed: {exc}", flush=True)
 
+    @staticmethod
+    def _disable_torque_best_effort(label: str, arm: SO101Follower) -> None:
+        bus = arm.bus
+        if not getattr(bus, "is_connected", False):
+            return
+        for motor in bus.motors:
+            try:
+                bus.disable_torque(motor, num_retry=2)
+            except Exception as exc:
+                print(f"[GUI recorder] Warning: disabling torque failed for {label}/{motor}: {exc}", flush=True)
+
 
 class LocalBimanualSOLeader:
     name = "bi_so_leader"
@@ -277,6 +352,9 @@ class LocalBimanualSOLeader:
     def __init__(self, left_arm: SO101Leader, right_arm: SO101Leader) -> None:
         self.left_arm = left_arm
         self.right_arm = right_arm
+        self._io_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="bimanual-leader-io"
+        )
 
     @property
     def is_connected(self) -> bool:
@@ -287,8 +365,10 @@ class LocalBimanualSOLeader:
         self.right_arm.connect()
 
     def get_action(self) -> dict[str, float]:
-        left_action = self.left_arm.get_action()
-        right_action = self.right_arm.get_action()
+        left_future = self._io_executor.submit(self.left_arm.get_action)
+        right_future = self._io_executor.submit(self.right_arm.get_action)
+        left_action = left_future.result()
+        right_action = right_future.result()
         return {
             **{f"left_{key}": value for key, value in left_action.items()},
             **{f"right_{key}": value for key, value in right_action.items()},
@@ -297,6 +377,7 @@ class LocalBimanualSOLeader:
     def disconnect(self) -> None:
         self._disconnect_arm_safely("left leader", self.left_arm)
         self._disconnect_arm_safely("right leader", self.right_arm)
+        self._io_executor.shutdown(wait=True, cancel_futures=True)
 
     @staticmethod
     def _disconnect_arm_safely(label: str, arm: SO101Leader) -> None:
@@ -304,6 +385,22 @@ class LocalBimanualSOLeader:
             arm.disconnect()
         except Exception as exc:
             print(f"[GUI recorder] Warning: disconnect failed for {label}: {exc}", flush=True)
+            LocalBimanualSOLeader._disable_torque_best_effort(label, arm)
+            try:
+                arm.bus.port_handler.closePort()
+            except Exception as close_exc:
+                print(f"[GUI recorder] Warning: closing bus port failed for {label}: {close_exc}", flush=True)
+
+    @staticmethod
+    def _disable_torque_best_effort(label: str, arm: SO101Leader) -> None:
+        bus = arm.bus
+        if not getattr(bus, "is_connected", False):
+            return
+        for motor in bus.motors:
+            try:
+                bus.disable_torque(motor, num_retry=2)
+            except Exception as exc:
+                print(f"[GUI recorder] Warning: disabling torque failed for {label}/{motor}: {exc}", flush=True)
 
 
 @dataclass(frozen=True)
@@ -320,12 +417,15 @@ class RecorderSettings:
     opencv_side: str
     record_opencv_front: bool
     record_opencv_side: bool
-    record_realsense: bool
     enable_realsense: bool
+    capture_depth_sidecar: bool
+    low_resolution: bool
+    disable_gripper: bool
     realsense_serial: str
     repo_id: str
     dataset_root: str
     calibration_dir: str
+    calibration_match: str
     task: str
     resume: bool
     push_to_hub: bool
@@ -345,6 +445,322 @@ class DatasetHealth:
 class EpisodeBrowserRef:
     episode_index: int
     row: Any
+
+
+@dataclass(frozen=True)
+class DatasetRewriteOutcome:
+    backup_root: Path
+    mode: str
+
+
+def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp_{os.getpid()}_{time.monotonic_ns()}")
+    try:
+        df.to_parquet(tmp_path, index=False)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+def _atomic_write_json(data: dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp_{os.getpid()}_{time.monotonic_ns()}")
+    try:
+        tmp_path.write_text(json.dumps(data, indent=4) + "\n")
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+def _hardlink_backup_tree(root: Path) -> Path:
+    backup_root = root.parent / f"{root.name}.backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    if backup_root.exists():
+        raise FileExistsError(f"Backup already exists: {backup_root}")
+    try:
+        shutil.copytree(root, backup_root, copy_function=os.link)
+    except Exception:
+        if backup_root.exists():
+            shutil.rmtree(backup_root)
+        shutil.copytree(root, backup_root)
+    return backup_root
+
+
+def _episode_data_path(root: Path, info: dict[str, Any], row: Any) -> Path:
+    return root / info["data_path"].format(
+        chunk_index=int(row["data/chunk_index"]),
+        file_index=int(row["data/file_index"]),
+    )
+
+
+def _episode_meta_path(root: Path, row: Any) -> Path:
+    return root / f"meta/episodes/chunk-{int(row['meta/episodes/chunk_index']):03d}/file-{int(row['meta/episodes/file_index']):03d}.parquet"
+
+
+def _episode_video_path(root: Path, info: dict[str, Any], row: Any, video_key: str) -> Path:
+    return root / info["video_path"].format(
+        video_key=video_key,
+        chunk_index=int(row[f"videos/{video_key}/chunk_index"]),
+        file_index=int(row[f"videos/{video_key}/file_index"]),
+    )
+
+
+def _expected_data_path(root: Path, info: dict[str, Any], episode_index: int, chunks_size: int) -> Path:
+    return root / info["data_path"].format(
+        chunk_index=episode_index // chunks_size,
+        file_index=episode_index % chunks_size,
+    )
+
+
+def _expected_meta_path(root: Path, episode_index: int, chunks_size: int) -> Path:
+    return root / f"meta/episodes/chunk-{episode_index // chunks_size:03d}/file-{episode_index % chunks_size:03d}.parquet"
+
+
+def _expected_video_path(
+    root: Path, info: dict[str, Any], video_key: str, episode_index: int, chunks_size: int
+) -> Path:
+    return root / info["video_path"].format(
+        video_key=video_key,
+        chunk_index=episode_index // chunks_size,
+        file_index=episode_index % chunks_size,
+    )
+
+
+def _sidecar_episode_paths(root: Path, episode_index: int) -> list[Path]:
+    sidecar_root = root / "sidecar_depth"
+    if not sidecar_root.exists():
+        return []
+    return sorted(sidecar_root.glob(f"**/episode_{episode_index:06d}.*"))
+
+
+def _can_fast_reindex(
+    root: Path,
+    info: dict[str, Any],
+    episodes_df: pd.DataFrame,
+    keep_episode_indices: list[int],
+    video_keys: list[str],
+) -> tuple[bool, str]:
+    chunks_size = int(info.get("chunks_size", 1000))
+    all_indices = [int(ep) for ep in episodes_df["episode_index"].tolist()]
+    if all_indices != list(range(len(all_indices))):
+        return False, "episode indices are not contiguous 0..N-1"
+    keep_set = set(keep_episode_indices)
+    if keep_episode_indices != sorted(keep_set):
+        return False, "keep episode list is not sorted and unique"
+    if not keep_set or not keep_set.issubset(set(all_indices)):
+        return False, "keep episode list is empty or contains missing episodes"
+    if keep_episode_indices == all_indices:
+        return False, "no episode deletion was requested"
+    if info.get("data_path") != "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet":
+        return False, "data path format is not the expected episode-per-file layout"
+    if info.get("video_path") != "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4":
+        return False, "video path format is not the expected episode-per-file layout"
+
+    seen_data_paths: set[Path] = set()
+    seen_meta_paths: set[Path] = set()
+    seen_video_paths: set[Path] = set()
+    fps = int(info["fps"])
+    for _, row in episodes_df.iterrows():
+        ep_idx = int(row["episode_index"])
+        expected_chunk = ep_idx // chunks_size
+        expected_file = ep_idx % chunks_size
+        if int(row["data/chunk_index"]) != expected_chunk or int(row["data/file_index"]) != expected_file:
+            return False, f"episode {ep_idx} data file does not match episode-per-file index"
+        if (
+            int(row["meta/episodes/chunk_index"]) != expected_chunk
+            or int(row["meta/episodes/file_index"]) != expected_file
+        ):
+            return False, f"episode {ep_idx} metadata file does not match episode-per-file index"
+
+        data_path = _episode_data_path(root, info, row)
+        meta_path = _episode_meta_path(root, row)
+        if data_path in seen_data_paths or meta_path in seen_meta_paths:
+            return False, f"episode {ep_idx} shares data or metadata file with another episode"
+        seen_data_paths.add(data_path)
+        seen_meta_paths.add(meta_path)
+        if not data_path.exists() or not meta_path.exists():
+            return False, f"episode {ep_idx} data or metadata file is missing"
+
+        try:
+            data_df = pd.read_parquet(data_path)
+            meta_df = pd.read_parquet(meta_path)
+        except Exception as exc:
+            return False, f"episode {ep_idx} parquet is unreadable: {exc}"
+        if set(data_df["episode_index"].astype(int).unique()) != {ep_idx}:
+            return False, f"episode {ep_idx} data file contains another episode"
+        if len(data_df) != int(row["length"]):
+            return False, f"episode {ep_idx} data length does not match metadata"
+        if set(meta_df["episode_index"].astype(int).unique()) != {ep_idx} or len(meta_df) != 1:
+            return False, f"episode {ep_idx} metadata file is not one row for this episode"
+
+        for video_key in video_keys:
+            video_path = _episode_video_path(root, info, row, video_key)
+            expected_video_path = _expected_video_path(root, info, video_key, ep_idx, chunks_size)
+            if video_path != expected_video_path:
+                return False, f"episode {ep_idx} video file does not match episode-per-file index"
+            if video_path in seen_video_paths:
+                return False, f"episode {ep_idx} shares video file with another episode"
+            seen_video_paths.add(video_path)
+            if not video_path.exists():
+                return False, f"episode {ep_idx} video is missing: {video_path}"
+            if abs(float(row[f"videos/{video_key}/from_timestamp"])) > 1e-6:
+                return False, f"episode {ep_idx} video {video_key} does not start at timestamp 0"
+            expected_end = int(row["length"]) / fps
+            actual_end = float(row[f"videos/{video_key}/to_timestamp"])
+            if abs(actual_end - expected_end) > max(0.05, 2.0 / fps):
+                return False, f"episode {ep_idx} video {video_key} duration metadata is not episode-local"
+    return True, "episode-per-file layout confirmed"
+
+
+def _move_sidecar_episode_files(root: Path, old_ep: int, new_ep: int) -> None:
+    for old_path in _sidecar_episode_paths(root, old_ep):
+        new_path = old_path.with_name(f"episode_{new_ep:06d}{old_path.suffix}")
+        if old_path == new_path:
+            continue
+        if new_path.exists():
+            new_path.unlink()
+        old_path.rename(new_path)
+
+
+def _delete_episode_files(root: Path, info: dict[str, Any], row: Any, video_keys: list[str]) -> None:
+    for path in [_episode_data_path(root, info, row), _episode_meta_path(root, row)]:
+        if path.exists():
+            path.unlink()
+    for video_key in video_keys:
+        path = _episode_video_path(root, info, row, video_key)
+        if path.exists():
+            path.unlink()
+    for path in _sidecar_episode_paths(root, int(row["episode_index"])):
+        path.unlink()
+
+
+def _validate_fast_reindexed_dataset(root: Path, info: dict[str, Any]) -> None:
+    health = BimanualRecorder._inspect_dataset_health(root)
+    if health.needs_rewrite:
+        raise RuntimeError(f"fast reindex validation failed: {health.reason}")
+    episodes_df = read_nested_parquets(root / "meta" / "episodes").sort_values("episode_index")
+    if int(info.get("total_episodes", -1)) != len(episodes_df):
+        raise RuntimeError("fast reindex validation failed: info.json episode count mismatch")
+
+
+def fast_delete_or_rewrite_dataset(
+    root: Path, keep_episode_indices: list[int], progress: queue.Queue[str]
+) -> DatasetRewriteOutcome:
+    root = root.resolve()
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    episodes_df = read_nested_parquets(root / "meta" / "episodes").sort_values("episode_index").reset_index(drop=True)
+    video_keys = video_keys_from_info(info)
+    can_fast, reason = _can_fast_reindex(root, info, episodes_df, keep_episode_indices, video_keys)
+    if not can_fast:
+        progress.put(f"Fast delete skipped: {reason}. Falling back to full rewrite.")
+        backup = rewrite_dataset(root, keep_episode_indices, progress)
+        return DatasetRewriteOutcome(backup, "full rewrite")
+
+    chunks_size = int(info.get("chunks_size", 1000))
+    fps = int(info["fps"])
+    keep_set = set(keep_episode_indices)
+    rows_by_old = {int(row["episode_index"]): row for _, row in episodes_df.iterrows()}
+    deleted_indices = [ep for ep in rows_by_old if ep not in keep_set]
+    old_to_new = {old_ep: new_ep for new_ep, old_ep in enumerate(keep_episode_indices)}
+    min_changed = min(deleted_indices)
+    affected = [old_ep for old_ep in keep_episode_indices if old_to_new[old_ep] != old_ep]
+    total_steps = len(deleted_indices) + len(affected) * 3 + 4
+    step = 0
+
+    progress.put(f"PROGRESS|{step}|{total_steps}|Fast delete verified: {reason}")
+    backup_root = _hardlink_backup_tree(root)
+    step += 1
+    progress.put(f"PROGRESS|{step}|{total_steps}|Fast backup created: {backup_root.name}")
+
+    for old_ep in deleted_indices:
+        _delete_episode_files(root, info, rows_by_old[old_ep], video_keys)
+        step += 1
+        progress.put(f"PROGRESS|{step}|{total_steps}|Deleted episode {old_ep} files.")
+
+    new_episode_rows: list[pd.Series] = []
+    all_stats: list[dict[str, dict[str, np.ndarray]]] = []
+    global_index = 0
+    for old_ep in keep_episode_indices:
+        old_row = rows_by_old[old_ep]
+        new_ep = old_to_new[old_ep]
+        ep_len = int(old_row["length"])
+        new_row = old_row.copy()
+        new_row["episode_index"] = new_ep
+        new_row["length"] = ep_len
+        new_row["data/chunk_index"] = new_ep // chunks_size
+        new_row["data/file_index"] = new_ep % chunks_size
+        new_row["dataset_from_index"] = global_index
+        new_row["dataset_to_index"] = global_index + ep_len
+        new_row["meta/episodes/chunk_index"] = new_ep // chunks_size
+        new_row["meta/episodes/file_index"] = new_ep % chunks_size
+        for video_key in video_keys:
+            new_row[f"videos/{video_key}/chunk_index"] = new_ep // chunks_size
+            new_row[f"videos/{video_key}/file_index"] = new_ep % chunks_size
+            new_row[f"videos/{video_key}/from_timestamp"] = 0.0
+            new_row[f"videos/{video_key}/to_timestamp"] = ep_len / fps
+
+        if old_ep < min_changed:
+            new_episode_rows.append(new_row)
+            all_stats.append(stats_from_episode_row(new_row, info["features"]))
+            global_index += ep_len
+            continue
+
+        old_data_path = _episode_data_path(root, info, old_row)
+        new_data_path = _expected_data_path(root, info, new_ep, chunks_size)
+        data_df = pd.read_parquet(old_data_path).copy().reset_index(drop=True)
+        data_df["episode_index"] = new_ep
+        data_df["frame_index"] = np.arange(ep_len, dtype=np.int64)
+        data_df["index"] = np.arange(global_index, global_index + ep_len, dtype=np.int64)
+        if "timestamp" in data_df:
+            data_df["timestamp"] = data_df["frame_index"].astype(np.float32) / fps
+        _atomic_write_parquet(data_df, new_data_path)
+        if old_data_path != new_data_path and old_data_path.exists():
+            old_data_path.unlink()
+        step += 1
+        progress.put(f"PROGRESS|{step}|{total_steps}|Episode {old_ep} -> {new_ep}: data updated.")
+
+        for video_key in video_keys:
+            old_video_path = _episode_video_path(root, info, old_row, video_key)
+            new_video_path = _expected_video_path(root, info, video_key, new_ep, chunks_size)
+            if old_video_path != new_video_path:
+                new_video_path.parent.mkdir(parents=True, exist_ok=True)
+                if new_video_path.exists():
+                    raise RuntimeError(f"fast reindex target video already exists: {new_video_path}")
+                old_video_path.rename(new_video_path)
+        _move_sidecar_episode_files(root, old_ep, new_ep)
+        step += 1
+        progress.put(f"PROGRESS|{step}|{total_steps}|Episode {old_ep} -> {new_ep}: media moved.")
+
+        old_meta_path = _episode_meta_path(root, old_row)
+        new_meta_path = _expected_meta_path(root, new_ep, chunks_size)
+        _atomic_write_parquet(pd.DataFrame([new_row]), new_meta_path)
+        if old_meta_path != new_meta_path and old_meta_path.exists():
+            old_meta_path.unlink()
+        step += 1
+        progress.put(f"PROGRESS|{step}|{total_steps}|Episode {old_ep} -> {new_ep}: metadata updated.")
+
+        new_episode_rows.append(new_row)
+        all_stats.append(stats_from_episode_row(new_row, info["features"]))
+        global_index += ep_len
+
+    info["total_episodes"] = len(new_episode_rows)
+    info["total_frames"] = int(global_index)
+    info["splits"] = {"train": f"0:{len(new_episode_rows)}"}
+    _atomic_write_json(info, info_path)
+    step += 1
+    progress.put(f"PROGRESS|{step}|{total_steps}|Updated info.json.")
+
+    if all_stats:
+        write_stats(aggregate_stats(all_stats), root)
+    step += 1
+    progress.put(f"PROGRESS|{step}|{total_steps}|Updated stats.json.")
+
+    _validate_fast_reindexed_dataset(root, info)
+    progress.put(f"PROGRESS|{total_steps}|{total_steps}|Fast delete + reindex complete.")
+    return DatasetRewriteOutcome(backup_root, "fast suffix reindex")
 
 
 class BimanualRecorder:
@@ -372,6 +788,7 @@ class BimanualRecorder:
         self.dataset: LeRobotDataset | None = None
         self.raw_depth_frames: list[np.ndarray] = []
         self.raw_depth_metadata: dict[str, np.ndarray] = {}
+        self.sidecar_depth_camera: FlexibleRealSenseCamera | None = None
 
     def start(self) -> None:
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -466,16 +883,16 @@ class BimanualRecorder:
 
                 obs = robot.get_observation()
                 obs_processed = robot_observation_processor(obs)
-                action = teleop_action_processor((teleop.get_action(), obs))
-                action_to_send = robot_action_processor((action, obs))
-                _ = robot.send_action(action_to_send)
+                leader_action = teleop_action_processor((teleop.get_action(), obs))
+                action_to_send = robot_action_processor((leader_action, obs))
+                sent_action = robot.send_action(action_to_send)
 
                 self._publish_preview(obs_processed)
-                self._publish_state(obs_processed, action)
+                self._publish_state(obs_processed, sent_action)
 
                 if self.recording:
                     observation_frame = build_dataset_frame(self.dataset.features, obs_processed, prefix=OBS_STR)
-                    action_frame = build_dataset_frame(self.dataset.features, action, prefix=ACTION)
+                    action_frame = build_dataset_frame(self.dataset.features, sent_action, prefix=ACTION)
                     frame = {**observation_frame, **action_frame, "task": self.current_episode_task}
                     self.dataset.add_frame(frame)
                     self._store_raw_depth_frame(robot)
@@ -504,6 +921,7 @@ class BimanualRecorder:
                     robot.disconnect()
                 if teleop is not None:
                     teleop.disconnect()
+                self._disconnect_sidecar_depth_camera()
                 self._put_status("Recorder stopped.")
 
     def _open_or_create_dataset(
@@ -561,9 +979,9 @@ class BimanualRecorder:
                 target_root.rmdir()
                 self._put_status(f"Using empty dataset folder: {target_root}")
             else:
-                root, repo_id, target_root = self._make_new_dataset_location(root, repo_id, target_root)
-                self._put_status(
-                    f"Selected folder is not an empty LeRobot dataset, so a new local dataset will be created at: {target_root}"
+                raise RuntimeError(
+                    f"Selected folder is not empty and is not a LeRobot dataset: {target_root}. "
+                    "Choose an empty folder, click New with a new name, or choose an existing LeRobot dataset."
                 )
 
         try:
@@ -579,25 +997,10 @@ class BimanualRecorder:
                 vcodec="h264",
             )
         except FileExistsError:
-            self._put_status("Dataset folder already exists. Loading it in resume mode.")
-            try:
-                return self._load_existing_dataset(repo_id, root, image_writer_threads)
-            except Exception as exc:
-                root, repo_id, target_root = self._make_new_dataset_location(root, repo_id, target_root)
-                self._put_status(
-                    f"Could not load existing dataset locally ({exc}). Creating a new local dataset at: {target_root}"
-                )
-                return LeRobotDataset.create(
-                    repo_id,
-                    FPS,
-                    root=root,
-                    robot_type=robot.name,
-                    features=dataset_features,
-                    use_videos=True,
-                    image_writer_processes=0,
-                    image_writer_threads=image_writer_threads,
-                    vcodec="h264",
-                )
+            raise RuntimeError(
+                f"Dataset folder already exists and cannot be created as new: {target_root}. "
+                "Choose an empty folder, click New with a new name, or enable Resume for an existing dataset."
+            )
 
     def _configure_episode_file_storage(self, dataset: LeRobotDataset) -> None:
         dataset.meta.update_chunk_settings(
@@ -772,22 +1175,6 @@ class BimanualRecorder:
     def _is_plain_empty_dir(path: Path) -> bool:
         return path.is_dir() and not any(path.iterdir())
 
-    @staticmethod
-    def _make_new_repo_id(repo_id: str) -> str:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"{repo_id}_{timestamp}"
-
-    @staticmethod
-    def _make_new_dataset_location(
-        root: Path | None, repo_id: str, target_root: Path
-    ) -> tuple[Path | None, str, Path]:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        if root is None:
-            repo_id = f"{repo_id}_{timestamp}"
-            return None, repo_id, HF_LEROBOT_HOME / repo_id
-        new_root = target_root.parent / f"{target_root.name}_{timestamp}"
-        return new_root, f"{repo_id}_{timestamp}", new_root
-
     def _calibration_dirs(self) -> tuple[Path | None, Path | None]:
         raw_path = self.settings.calibration_dir.strip()
         if not raw_path:
@@ -817,37 +1204,123 @@ class BimanualRecorder:
             return path, existing_or_default(calibration_root / "teleoperators", ("so_leader", "so101_leader"))
         return path, path
 
+    @staticmethod
+    def _serial_from_by_id_name(name: str) -> str:
+        marker = "USB_Single_Serial_"
+        if marker in name:
+            return name.split(marker, 1)[1].split("-if", 1)[0]
+        if "_Serial_" in name:
+            return name.rsplit("_Serial_", 1)[1].split("-if", 1)[0]
+        if "-if" in name and "_" in name:
+            return name.rsplit("_", 1)[1].split("-if", 1)[0]
+        return ""
+
+    @staticmethod
+    def _board_serial_from_port(port: str) -> str:
+        port = port.strip()
+        if not port:
+            return ""
+
+        serial = BimanualRecorder._serial_from_by_id_name(Path(port).name)
+        if serial:
+            return serial
+
+        try:
+            target = Path(port).resolve()
+        except OSError:
+            return ""
+
+        by_id_root = Path("/dev/serial/by-id")
+        if not by_id_root.exists():
+            return ""
+
+        for link in sorted(by_id_root.iterdir()):
+            try:
+                if link.resolve() == target:
+                    return BimanualRecorder._serial_from_by_id_name(link.name)
+            except OSError:
+                continue
+        return ""
+
+    def _calibration_id_for_port(
+        self, label: str, port: str, legacy_id: str, calibration_dir: Path | None
+    ) -> str:
+        if self.settings.calibration_match == "Arm id":
+            self._put_status(f"{label} calibration id: arm id {legacy_id}")
+            return legacy_id
+
+        serial = self._board_serial_from_port(port)
+        if not serial:
+            self._put_status(f"{label} uses legacy calibration id '{legacy_id}' because no board serial was found.")
+            return legacy_id
+
+        if calibration_dir is not None:
+            serial_path = calibration_dir / f"{serial}.json"
+            legacy_path = calibration_dir / f"{legacy_id}.json"
+            if not serial_path.exists() and legacy_path.exists():
+                shutil.copy2(legacy_path, serial_path)
+                self._put_status(f"{label} calibration migrated: {legacy_path.name} -> {serial_path.name}")
+        self._put_status(f"{label} calibration id: board serial {serial}")
+        return serial
+
+    def _disable_gripper_motor(self, label: str, arm: SO101Follower | SO101Leader) -> None:
+        bus = arm.bus
+        if "gripper" not in bus.motors:
+            return
+
+        bus.motors.pop("gripper", None)
+        bus.calibration.pop("gripper", None)
+        bus._id_to_model_dict = {m.id: m.model for m in bus.motors.values()}
+        bus._id_to_name_dict = {m.id: motor for motor, m in bus.motors.items()}
+        for attr in ("ids", "models", "_has_different_ctrl_tables"):
+            bus.__dict__.pop(attr, None)
+        for attr in ("action_features", "observation_features"):
+            arm.__dict__.pop(attr, None)
+        self._put_status(f"{label}: gripper motor disabled for this session.")
+
     def _make_robot(self) -> LocalBimanualSOFollower:
         cameras = {}
-        serial = self._resolve_realsense_serial() if self.settings.record_realsense else ""
-        if self.settings.enable_realsense and not self.settings.record_realsense:
-            self._put_status("RealSense enabled but not selected for recording; skipping RealSense.")
-        if serial:
+        camera_width, camera_height = self._camera_size()
+        serial = self._resolve_realsense_serial() if self.settings.capture_depth_sidecar else ""
+        if self.settings.enable_realsense and not self.settings.capture_depth_sidecar:
+            self._put_status("RealSense enabled but no depth option is selected; skipping RealSense.")
+        if serial and not self.settings.record_opencv_front:
             cameras["front"] = RealSenseCameraConfig(
                 serial_number_or_name=serial,
-                width=CAMERA_WIDTH,
-                height=CAMERA_HEIGHT,
+                width=camera_width,
+                height=camera_height,
                 fps=FPS,
                 color_mode=ColorMode.RGB,
                 use_depth=True,
             )
-            self._put_status("RealSense will be connected before OpenCV cameras.")
+            self._put_status("Using RealSense RGB/depth as front because OpenCV front recording is disabled.")
 
         front_path = self.settings.opencv_front.strip() if self.settings.record_opencv_front else ""
         if self.settings.opencv_front.strip() and not self.settings.record_opencv_front:
             self._put_status("OpenCV front path is set but not selected for recording; skipping front RGB.")
-        if front_path and not serial:
+        front_is_realsense_video = bool(front_path and serial and self._is_realsense_video_path(front_path))
+        if front_is_realsense_video:
+            cameras["front"] = RealSenseCameraConfig(
+                serial_number_or_name=serial,
+                width=camera_width,
+                height=camera_height,
+                fps=FPS,
+                color_mode=ColorMode.RGB,
+                use_depth=True,
+            )
+            self._put_status(
+                f"OpenCV front {front_path} is a RealSense RGB node; using the RealSense SDK for synchronized RGB/depth."
+            )
+        elif front_path:
             cameras["front"] = OpenCVCameraConfig(
                 index_or_path=front_path,
-                width=CAMERA_WIDTH,
-                height=CAMERA_HEIGHT,
+                width=camera_width,
+                height=camera_height,
                 fps=FPS,
                 fourcc="MJPG",
             )
-        elif front_path and serial:
-            self._put_status(
-                f"RealSense is enabled as front; ignoring OpenCV front path {front_path}."
-            )
+            if serial:
+                self._put_status(f"Using OpenCV front RGB {front_path}; RealSense is reserved for depth.")
 
         side_path = (
             self._resolve_opencv_side_path(self.settings.opencv_side.strip())
@@ -862,8 +1335,8 @@ class BimanualRecorder:
                 self._put_status(f"OpenCV side RGB {side_path} is {side_description}.")
             cameras["side"] = OpenCVCameraConfig(
                 index_or_path=side_path,
-                width=CAMERA_WIDTH,
-                height=CAMERA_HEIGHT,
+                width=camera_width,
+                height=camera_height,
                 fps=FPS,
                 fourcc="MJPG",
             )
@@ -874,53 +1347,78 @@ class BimanualRecorder:
         robot_calibration_dir, _ = self._calibration_dirs()
         if robot_calibration_dir is not None:
             self._put_status(f"Robot calibration dir: {robot_calibration_dir}")
+        left_follower_id = self._calibration_id_for_port(
+            "Left follower", self.settings.left_follower_port, self.settings.left_follower_id, robot_calibration_dir
+        )
+        right_follower_id = self._calibration_id_for_port(
+            "Right follower",
+            self.settings.right_follower_port,
+            self.settings.right_follower_id,
+            robot_calibration_dir,
+        )
         left_arm = SO101Follower(
             SOFollowerRobotConfig(
-                id=self.settings.left_follower_id,
+                id=left_follower_id,
                 calibration_dir=robot_calibration_dir,
                 port=self.settings.left_follower_port,
-                disable_torque_on_disconnect=False,
+                disable_torque_on_disconnect=True,
                 cameras=cameras,
             )
         )
         right_arm = SO101Follower(
             SOFollowerRobotConfig(
-                id=self.settings.right_follower_id,
+                id=right_follower_id,
                 calibration_dir=robot_calibration_dir,
                 port=self.settings.right_follower_port,
-                disable_torque_on_disconnect=False,
+                disable_torque_on_disconnect=True,
             )
         )
+        if self.settings.disable_gripper:
+            self._disable_gripper_motor("Left follower", left_arm)
+            self._disable_gripper_motor("Right follower", right_arm)
         robot = LocalBimanualSOFollower(left_arm, right_arm)
 
-        if serial and "front" in robot.left_arm.cameras:
-            robot.left_arm.cameras["front"] = FlexibleRealSenseCamera(serial, CAMERA_WIDTH, CAMERA_HEIGHT)
-            robot.cameras["front"] = robot.left_arm.cameras["front"]
-            self._put_status("Using flexible RealSense default-profile wrapper for front.")
-
-        if "front" in robot.left_arm.cameras and isinstance(
-            robot.left_arm.cameras["front"], (RealSenseCamera, FlexibleRealSenseCamera)
-        ):
-            rs_camera = robot.left_arm.cameras["front"]
+        if serial and self.settings.capture_depth_sidecar:
+            front_camera = robot.left_arm.cameras.get("front")
+            if isinstance(front_camera, RealSenseCamera):
+                front_camera = FlexibleRealSenseCamera(serial, camera_width, camera_height)
+                robot.left_arm.cameras["front"] = front_camera
+                robot.cameras["front"] = front_camera
+                self._put_status("Using flexible RealSense wrapper for synchronized front RGB/depth.")
+            if isinstance(front_camera, (RealSenseCamera, FlexibleRealSenseCamera)):
+                rs_camera = front_camera
+                self._put_status("RealSense raw depth will be saved from the front RealSense camera.")
+            else:
+                rs_camera = FlexibleRealSenseCamera(serial, camera_width, camera_height)
+                self.sidecar_depth_camera = rs_camera
+                self._put_status("RealSense raw depth sidecar camera prepared.")
             robot.left_arm.cameras["front_depth"] = RealSenseDepthView(rs_camera)
             robot.left_arm.config.cameras["front_depth"] = RealSenseCameraConfig(
                 serial_number_or_name=serial,
-                width=CAMERA_WIDTH,
-                height=CAMERA_HEIGHT,
+                width=camera_width,
+                height=camera_height,
                 fps=FPS,
                 color_mode=ColorMode.RGB,
                 use_depth=True,
             )
             robot.cameras["front_depth"] = robot.left_arm.cameras["front_depth"]
+            self._put_status("RealSense depth will be saved as dataset input 'front_depth' and raw sidecar depth_mm.")
 
         return robot
+
+    def _camera_size(self) -> tuple[int, int]:
+        if self.settings.low_resolution:
+            self._put_status(f"Low resolution enabled: cameras will record {LOW_CAMERA_WIDTH}x{LOW_CAMERA_HEIGHT}.")
+            return LOW_CAMERA_WIDTH, LOW_CAMERA_HEIGHT
+        return CAMERA_WIDTH, CAMERA_HEIGHT
 
     def _resolve_opencv_side_path(self, requested_path: str) -> str:
         if not requested_path:
             self._put_status("OpenCV side RGB is blank; recording without side RGB.")
             return ""
 
-        if self.settings.enable_realsense and self._is_realsense_video_path(requested_path):
+        realsense_active = self.settings.enable_realsense or self.settings.capture_depth_sidecar
+        if realsense_active and self._is_realsense_video_path(requested_path):
             self._put_status(
                 f"OpenCV side RGB {requested_path} points to a RealSense video node; ignoring it because RealSense front/depth is enabled."
             )
@@ -950,12 +1448,12 @@ class BimanualRecorder:
                 self._put_status(f"OpenCV side RGB {requested_path} does not exist.")
 
         for candidate in available_paths:
-            if self.settings.enable_realsense and self._is_realsense_video_path(candidate):
+            if realsense_active and self._is_realsense_video_path(candidate):
                 continue
             self._put_status(f"Using detected OpenCV side RGB {candidate}.")
             return candidate
 
-        if available_paths and self.settings.enable_realsense:
+        if available_paths and realsense_active:
             self._put_status(
                 "Only RealSense OpenCV video nodes were detected; recording without side RGB to avoid opening the active RealSense twice."
             )
@@ -1002,26 +1500,34 @@ class BimanualRecorder:
         _, teleop_calibration_dir = self._calibration_dirs()
         if teleop_calibration_dir is not None:
             self._put_status(f"Teleop calibration dir: {teleop_calibration_dir}")
+        left_leader_id = self._calibration_id_for_port(
+            "Left leader", self.settings.left_leader_port, self.settings.left_leader_id, teleop_calibration_dir
+        )
+        right_leader_id = self._calibration_id_for_port(
+            "Right leader", self.settings.right_leader_port, self.settings.right_leader_id, teleop_calibration_dir
+        )
         left_arm = SO101Leader(
             SOLeaderTeleopConfig(
-                id=self.settings.left_leader_id,
+                id=left_leader_id,
                 calibration_dir=teleop_calibration_dir,
                 port=self.settings.left_leader_port,
             )
         )
         right_arm = SO101Leader(
             SOLeaderTeleopConfig(
-                id=self.settings.right_leader_id,
+                id=right_leader_id,
                 calibration_dir=teleop_calibration_dir,
                 port=self.settings.right_leader_port,
             )
         )
+        if self.settings.disable_gripper:
+            self._disable_gripper_motor("Left leader", left_arm)
+            self._disable_gripper_motor("Right leader", right_arm)
         return LocalBimanualSOLeader(left_arm, right_arm)
 
     def _resolve_realsense_serial(self) -> str:
         if not self.settings.enable_realsense:
-            self._put_status("RealSense disabled. Using OpenCV cameras only.")
-            return ""
+            self._put_status("RealSense depth requested; enabling RealSense for depth capture.")
         requested_serial = self.settings.realsense_serial.strip()
         try:
             cameras = RealSenseCamera.find_cameras()
@@ -1112,10 +1618,13 @@ class BimanualRecorder:
         raw_depth_frames: list[np.ndarray],
         raw_depth_metadata: dict[str, np.ndarray],
     ) -> None:
-        del frame_count
         try:
             if self.dataset is None:
                 raise RuntimeError("dataset is not available while saving episode")
+            if self.settings.capture_depth_sidecar and len(raw_depth_frames) != frame_count:
+                raise RuntimeError(
+                    f"raw depth frame count mismatch: depth={len(raw_depth_frames)}, dataset={frame_count}"
+                )
             self._put_progress(20, 100, "Writing parquet data and encoding videos...")
             self.dataset.save_episode()
             self._put_progress(85, 100, "Saving raw depth sidecar...")
@@ -1160,15 +1669,40 @@ class BimanualRecorder:
         )
 
     def _store_raw_depth_frame(self, robot: LocalBimanualSOFollower) -> None:
-        rs_camera = robot.left_arm.cameras.get("front")
-        if not isinstance(rs_camera, (RealSenseCamera, FlexibleRealSenseCamera)):
+        if not self.settings.capture_depth_sidecar:
             return
-        with rs_camera.frame_lock:
-            depth = rs_camera.latest_depth_frame
-        if depth is not None:
-            self.raw_depth_frames.append(np.asarray(depth, dtype=np.uint16).copy())
-            if not self.raw_depth_metadata:
-                self.raw_depth_metadata = self._get_realsense_depth_metadata(rs_camera)
+        rs_camera = self.sidecar_depth_camera
+        if rs_camera is None:
+            front_camera = robot.left_arm.cameras.get("front")
+            if isinstance(front_camera, (RealSenseCamera, FlexibleRealSenseCamera)):
+                rs_camera = front_camera
+        if not isinstance(rs_camera, (RealSenseCamera, FlexibleRealSenseCamera)):
+            raise RuntimeError("RealSense depth sidecar camera is not available.")
+        try:
+            if not rs_camera.is_connected:
+                rs_camera.connect()
+            depth = None
+            if isinstance(rs_camera, FlexibleRealSenseCamera):
+                with rs_camera.frame_lock:
+                    depth = rs_camera.latest_depth_frame
+            if depth is None:
+                depth = rs_camera.read_depth()
+        except Exception as exc:
+            raise RuntimeError(f"RealSense depth sidecar read failed: {exc}") from exc
+        self.raw_depth_frames.append(np.asarray(depth, dtype=np.uint16).copy())
+        if not self.raw_depth_metadata:
+            self.raw_depth_metadata = self._get_realsense_depth_metadata(rs_camera)
+
+    def _disconnect_sidecar_depth_camera(self) -> None:
+        if self.sidecar_depth_camera is None:
+            return
+        try:
+            if self.sidecar_depth_camera.is_connected:
+                self.sidecar_depth_camera.disconnect()
+        except Exception as exc:
+            self._put_status(f"WARNING: RealSense depth sidecar disconnect failed: {exc}")
+        finally:
+            self.sidecar_depth_camera = None
 
     def _save_raw_depth_sidecar(
         self,
@@ -1178,7 +1712,7 @@ class BimanualRecorder:
     ) -> None:
         if self.dataset is None or not raw_depth_frames:
             return
-        depth_dir = self.dataset.root / "sidecar_depth" / "left_front_depth_mm"
+        depth_dir = self.dataset.root / "sidecar_depth" / "front_depth_mm"
         depth_dir.mkdir(parents=True, exist_ok=True)
         depth_path = depth_dir / f"episode_{episode_index:06d}.npz"
         depth_stack = np.stack(raw_depth_frames, axis=0)
@@ -1187,6 +1721,7 @@ class BimanualRecorder:
             depth_mm=depth_stack,
             fps=np.array(FPS, dtype=np.int32),
             episode_index=np.array(episode_index, dtype=np.int64),
+            frame_index=np.arange(depth_stack.shape[0], dtype=np.int64),
             **raw_depth_metadata,
         )
         self._put_status(f"Saved raw depth sidecar: {depth_path}")
@@ -1221,7 +1756,11 @@ class BimanualRecorder:
         return metadata
 
     def _publish_preview(self, obs: dict[str, Any]) -> None:
-        frames = {key: value for key, value in obs.items() if isinstance(value, np.ndarray) and value.ndim == 3}
+        frames = {
+            key: value
+            for key, value in obs.items()
+            if key != "realsense_depth_source" and isinstance(value, np.ndarray) and value.ndim == 3
+        }
         if not frames:
             return
         self._put_latest(self.preview_queue, frames)
@@ -1264,11 +1803,13 @@ class RecorderApp:
         self.pending_cleanup_root: Path | None = None
         self.pending_cleanup_episodes: list[int] = []
         self.current_image: ImageTk.PhotoImage | None = None
+        self.side_preview_image: ImageTk.PhotoImage | None = None
         self.dataset_image: ImageTk.PhotoImage | None = None
         self.latest_frames: dict[str, np.ndarray] = {}
         self.video_mode = "dataset"
         self.dataset_info: dict[str, Any] = {}
         self.dataset_episodes: dict[int, EpisodeBrowserRef] = {}
+        self.deleted_episode_indices: set[int] = set()
         self.dataset_video_keys: list[str] = []
         self.current_dataset_episode: EpisodeBrowserRef | None = None
         self.dataset_captures: dict[str, cv2.VideoCapture] = {}
@@ -1282,22 +1823,22 @@ class RecorderApp:
         self.last_warned_ineffective_path = ""
         self.dataset_root_warning_after: str | None = None
         self.episode_save_active = False
-
         self.vars = {
-            "left_follower_port": tk.StringVar(value="/dev/ttyACM0"),
-            "right_follower_port": tk.StringVar(value="/dev/ttyACM1"),
-            "left_leader_port": tk.StringVar(value="/dev/ttyACM2"),
-            "right_leader_port": tk.StringVar(value="/dev/ttyACM3"),
+            "left_follower_port": tk.StringVar(value=DEFAULT_LEFT_FOLLOWER_PORT),
+            "right_follower_port": tk.StringVar(value=DEFAULT_RIGHT_FOLLOWER_PORT),
+            "left_leader_port": tk.StringVar(value=DEFAULT_LEFT_LEADER_PORT),
+            "right_leader_port": tk.StringVar(value=DEFAULT_RIGHT_LEADER_PORT),
             "left_follower_id": tk.StringVar(value="my_awesome_follower_arm"),
             "right_follower_id": tk.StringVar(value="my_awesome_follower_arm_r"),
             "left_leader_id": tk.StringVar(value="my_awesome_leader_arm"),
             "right_leader_id": tk.StringVar(value="my_awesome_leader_arm_r"),
-            "opencv_front": tk.StringVar(value="/dev/video4"),
-            "opencv_side": tk.StringVar(value=""),
+            "opencv_front": tk.StringVar(value="/dev/video8"),
+            "opencv_side": tk.StringVar(value="/dev/video10"),
             "realsense_serial": tk.StringVar(value=""),
-            "repo_id": tk.StringVar(value=self._infer_repo_id(DEFAULT_DATASET_ROOT)),
-            "dataset_root": tk.StringVar(value=str(DEFAULT_DATASET_ROOT)),
-            "calibration_dir": tk.StringVar(value=str(DEFAULT_CALIBRATION_PATH / "robots")),
+            "repo_id": tk.StringVar(value=""),
+            "dataset_root": tk.StringVar(value=""),
+            "calibration_dir": tk.StringVar(value=str(DEFAULT_CALIBRATION_PATH)),
+            "calibration_match": tk.StringVar(value="Board serial"),
             "task": tk.StringVar(value=TASK_CHOICES[0]),
             "edit_task": tk.StringVar(value=TASK_CHOICES[0]),
             "preview_key": tk.StringVar(value=""),
@@ -1306,8 +1847,10 @@ class RecorderApp:
         self.push_to_hub = tk.BooleanVar(value=False)
         self.enable_realsense = tk.BooleanVar(value=False)
         self.record_opencv_front = tk.BooleanVar(value=True)
-        self.record_opencv_side = tk.BooleanVar(value=False)
-        self.record_realsense = tk.BooleanVar(value=False)
+        self.record_opencv_side = tk.BooleanVar(value=True)
+        self.capture_depth_sidecar = tk.BooleanVar(value=False)
+        self.low_resolution = tk.BooleanVar(value=True)
+        self.disable_gripper = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value="Configure ports, then click Connect.")
         self.state_text = tk.StringVar(value="")
         self.episode_text = tk.StringVar(value="Episode: not connected")
@@ -1354,6 +1897,7 @@ class RecorderApp:
             ("Dataset name/id", "repo_id"),
             ("Dataset folder", "dataset_root"),
             ("Calibration path", "calibration_dir"),
+            ("Calibration match", "calibration_match"),
             ("Task", "task"),
         ]
         for i, (label, key) in enumerate(fields):
@@ -1382,6 +1926,14 @@ class RecorderApp:
                     state="readonly",
                     width=46,
                 ).grid(row=i // 2, column=(i % 2) * 2 + 1, sticky=tk.EW, padx=(0, 16), pady=5)
+            elif key == "calibration_match":
+                ttk.Combobox(
+                    grid,
+                    textvariable=self.vars[key],
+                    values=("Board serial", "Arm id"),
+                    state="readonly",
+                    width=46,
+                ).grid(row=i // 2, column=(i % 2) * 2 + 1, sticky=tk.EW, padx=(0, 16), pady=5)
             else:
                 ttk.Entry(grid, textvariable=self.vars[key], width=48).grid(
                     row=i // 2, column=(i % 2) * 2 + 1, sticky=tk.EW, padx=(0, 16), pady=5
@@ -1396,13 +1948,19 @@ class RecorderApp:
         ttk.Checkbutton(options, text="Enable RealSense", variable=self.enable_realsense).pack(
             side=tk.LEFT, padx=(12, 0)
         )
-        ttk.Checkbutton(options, text="Record RealSense", variable=self.record_realsense).pack(
+        ttk.Checkbutton(options, text="Save RealSense depth", variable=self.capture_depth_sidecar).pack(
             side=tk.LEFT, padx=(12, 0)
         )
         ttk.Checkbutton(options, text="Record frontview", variable=self.record_opencv_front).pack(
             side=tk.LEFT, padx=(12, 0)
         )
         ttk.Checkbutton(options, text="Record side RGB", variable=self.record_opencv_side).pack(
+            side=tk.LEFT, padx=(12, 0)
+        )
+        ttk.Checkbutton(options, text="Low res cameras", variable=self.low_resolution).pack(
+            side=tk.LEFT, padx=(12, 0)
+        )
+        ttk.Checkbutton(options, text="Disable gripper", variable=self.disable_gripper).pack(
             side=tk.LEFT, padx=(12, 0)
         )
         ttk.Label(options, text="Preview").pack(side=tk.LEFT, padx=(24, 6))
@@ -1413,6 +1971,7 @@ class RecorderApp:
             width=34,
         )
         self.preview_combo.pack(side=tk.LEFT)
+        self.preview_combo.bind("<<ComboboxSelected>>", self.on_preview_key_selected)
 
         buttons = ttk.Frame(controls)
         buttons.pack(fill=tk.X, pady=(12, 0))
@@ -1429,6 +1988,14 @@ class RecorderApp:
             side=tk.LEFT, padx=(10, 0), ipady=4
         )
         ttk.Button(buttons, text="Stop", command=self.stop_recorder).pack(side=tk.LEFT, padx=(10, 0), ipady=4)
+        ttk.Button(buttons, text="Disconnect", command=self.disconnect_recorder).pack(
+            side=tk.LEFT, padx=(10, 0), ipady=4
+        )
+        ttk.Label(buttons, textvariable=self.episode_text, width=18, anchor=tk.W).pack(side=tk.LEFT, padx=(18, 0))
+        ttk.Progressbar(buttons, variable=self.progress_value, maximum=100, length=180).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Label(buttons, textvariable=self.progress_text, width=30, anchor=tk.W).pack(side=tk.LEFT, padx=(8, 0))
 
         content = ttk.Frame(self.root, padding=(10, 0, 10, 8))
         content.pack(fill=tk.BOTH, expand=True)
@@ -1453,7 +2020,13 @@ class RecorderApp:
         ttk.Button(edit_row, text="Set Task", command=self.set_selected_episode_task).pack(
             side=tk.LEFT, padx=(8, 0)
         )
-        columns = ("id", "length", "task")
+        delete_row = ttk.Frame(left_panel)
+        delete_row.pack(fill=tk.X, pady=(6, 0))
+        ttk.Button(delete_row, text="Mark Delete", command=self.toggle_delete_selected_episode).pack(side=tk.LEFT)
+        ttk.Button(delete_row, text="Apply Delete + Reindex", command=self.apply_episode_deletions).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        columns = ("id", "status", "length", "task")
         tree_frame = ttk.Frame(left_panel)
         tree_frame.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         tree_frame.rowconfigure(0, weight=1)
@@ -1466,7 +2039,7 @@ class RecorderApp:
             height=18,
             style="Episode.Treeview",
         )
-        for col, width in (("id", 56), ("length", 76), ("task", 220)):
+        for col, width in (("id", 48), ("status", 70), ("length", 70), ("task", 180)):
             self.episode_tree.heading(col, text=col)
             self.episode_tree.column(col, width=width, minwidth=48, anchor=tk.W, stretch=col == "task")
         episode_y_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.episode_tree.yview)
@@ -1480,14 +2053,22 @@ class RecorderApp:
         right_panel = ttk.Frame(content)
         right_panel.grid(row=0, column=1, sticky=tk.NSEW)
         right_panel.columnconfigure(0, weight=1)
-        right_panel.rowconfigure(1, weight=1)
+        right_panel.rowconfigure(1, weight=3)
+        right_panel.rowconfigure(3, weight=1)
         self.video_title = tk.StringVar(value="Select a dataset folder or click Connect for live preview.")
         title_label = ttk.Label(right_panel, textvariable=self.video_title, anchor=tk.W, font=("TkDefaultFont", 10))
         title_label.grid(row=0, column=0, sticky=tk.EW)
         self.preview_label = ttk.Label(right_panel, anchor=tk.CENTER)
         self.preview_label.grid(row=1, column=0, sticky=tk.NSEW, pady=(6, 0))
+        self.side_video_title = tk.StringVar(value="Aux preview: not connected")
+        side_title_label = ttk.Label(
+            right_panel, textvariable=self.side_video_title, anchor=tk.W, font=("TkDefaultFont", 10)
+        )
+        side_title_label.grid(row=2, column=0, sticky=tk.EW, pady=(8, 0))
+        self.side_preview_label = ttk.Label(right_panel, anchor=tk.CENTER)
+        self.side_preview_label.grid(row=3, column=0, sticky=tk.NSEW, pady=(4, 0))
         playback_row = ttk.Frame(right_panel)
-        playback_row.grid(row=2, column=0, sticky=tk.EW, pady=(8, 0))
+        playback_row.grid(row=4, column=0, sticky=tk.EW, pady=(8, 0))
         self.play_button_text = tk.StringVar(value="Play")
         ttk.Button(playback_row, textvariable=self.play_button_text, command=self.toggle_dataset_playback).pack(
             side=tk.LEFT
@@ -1505,13 +2086,6 @@ class RecorderApp:
 
         bottom = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         bottom.pack(fill=tk.X)
-        progress_row = ttk.Frame(bottom)
-        progress_row.pack(fill=tk.X, pady=(0, 6))
-        ttk.Label(progress_row, textvariable=self.episode_text, width=26, anchor=tk.W).pack(side=tk.LEFT)
-        ttk.Progressbar(progress_row, variable=self.progress_value, maximum=100).pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8)
-        )
-        ttk.Label(progress_row, textvariable=self.progress_text, width=48, anchor=tk.W).pack(side=tk.LEFT)
         ttk.Label(bottom, textvariable=self.selected_save_text, anchor=tk.W).pack(fill=tk.X)
         ttk.Label(bottom, textvariable=self.active_save_text, anchor=tk.W).pack(fill=tk.X)
         ttk.Label(bottom, textvariable=self.status, anchor=tk.W).pack(fill=tk.X)
@@ -1648,8 +2222,9 @@ class RecorderApp:
                 status_var.set(f"Failed to open {path}.")
                 cap.release()
                 return
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+            camera_width, camera_height = self._selected_camera_size()
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
             cap.set(cv2.CAP_PROP_FPS, FPS)
             state["capture"] = cap
             state["last_frame_t"] = 0.0
@@ -1664,9 +2239,7 @@ class RecorderApp:
                 return
             self.vars["opencv_front"].set(path)
             self.record_opencv_front.set(True)
-            self.enable_realsense.set(False)
-            self.record_realsense.set(False)
-            status_var.set(f"Assigned {path} to OpenCV frontview and enabled only front RGB recording.")
+            status_var.set(f"Assigned {path} to OpenCV frontview.")
 
         def assign_side() -> None:
             path = camera_var.get().strip()
@@ -1781,6 +2354,9 @@ class RecorderApp:
 
         robot_calibration_dir, teleop_calibration_dir = self._calibration_dirs_for_gui()
         calibration_dir = robot_calibration_dir if kind == "robot" else teleop_calibration_dir
+        device_id = self._calibration_id_for_gui_port(
+            label, port, device_id, calibration_dir, self.vars["calibration_match"].get()
+        )
         prefix = "--robot" if kind == "robot" else "--teleop"
         device_type = "so101_follower" if kind == "robot" else "so101_leader"
         cmd = [
@@ -1846,6 +2422,26 @@ class RecorderApp:
             return path, existing_or_default(calibration_root / "teleoperators", ("so_leader", "so101_leader"))
         return path, path
 
+    def _calibration_id_for_gui_port(
+        self, label: str, port: str, legacy_id: str, calibration_dir: Path | None, calibration_match: str
+    ) -> str:
+        if calibration_match == "Arm id":
+            self.status.set(f"{label}: using arm id calibration {legacy_id}.")
+            return legacy_id
+
+        serial = BimanualRecorder._board_serial_from_port(port)
+        if not serial:
+            self.status.set(f"{label}: no board serial found; using calibration id {legacy_id}.")
+            return legacy_id
+
+        if calibration_dir is not None:
+            serial_path = calibration_dir / f"{serial}.json"
+            legacy_path = calibration_dir / f"{legacy_id}.json"
+            if not serial_path.exists() and legacy_path.exists():
+                shutil.copy2(legacy_path, serial_path)
+                self.status.set(f"{label}: copied calibration {legacy_path.name} -> {serial_path.name}.")
+        return serial
+
     def ask_yes_no_english(self, title: str, message: str) -> bool:
         dialog = tk.Toplevel(self.root)
         dialog.title(title)
@@ -1887,6 +2483,14 @@ class RecorderApp:
         if not name:
             return
         folder = Path(parent).expanduser() / name
+        if folder.exists() and any(folder.iterdir()):
+            self.status.set(f"Folder already exists and is not empty: {folder}. Choose a new name.")
+            messagebox.showwarning(
+                "Folder exists",
+                f"This folder already exists and is not empty:\n{folder}\n\nChoose a new dataset name.",
+                parent=self.root,
+            )
+            return
         try:
             folder.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -1993,6 +2597,7 @@ class RecorderApp:
         dataset_root = self._find_dataset_root(selected) if normalize_existing else selected
         if dataset_root != selected:
             self.status.set(f"Selected a subfolder; using dataset root: {dataset_root}")
+        self.deleted_episode_indices.clear()
         self.vars["dataset_root"].set(str(dataset_root))
         self.vars["repo_id"].set(self._infer_repo_id(dataset_root))
         health = self._show_dataset_folder_summary(dataset_root)
@@ -2002,6 +2607,9 @@ class RecorderApp:
     def _load_episode_browser(self, dataset_root: Path) -> None:
         self.stop_dataset_playback()
         self.close_dataset_captures()
+        self.latest_frames = {}
+        self.live_frame_stats = {}
+        self.live_frame_times = {}
         self.dataset_episodes.clear()
         self.dataset_info = {}
         self.dataset_video_keys = []
@@ -2028,22 +2636,33 @@ class RecorderApp:
         if self.dataset_video_keys and not (self.recorder is not None and self.recorder.is_alive()):
             self.preview_combo["values"] = self.dataset_video_keys
             self.vars["preview_key"].set(self.dataset_video_keys[0])
+        loaded_indices: set[int] = set()
         for _, row in episodes_df.iterrows():
             ep_idx = int(row["episode_index"])
+            loaded_indices.add(ep_idx)
             ep = EpisodeBrowserRef(ep_idx, row)
             self.dataset_episodes[ep_idx] = ep
-            self.episode_tree.insert(
-                "",
-                tk.END,
-                iid=str(ep_idx),
-                values=(ep_idx, int(row.get("length", 0)), self._task_text(row)),
-            )
+        self.deleted_episode_indices.intersection_update(loaded_indices)
+        self._rebuild_episode_browser_list()
         if self.dataset_episodes:
             self.video_title.set(
                 f"Loaded {len(self.dataset_episodes)} episode(s). Select one on the left to play."
             )
         else:
             self.video_title.set("Dataset has no episode metadata yet.")
+
+    def _rebuild_episode_browser_list(self) -> None:
+        self.episode_tree.delete(*self.episode_tree.get_children())
+        for ep_idx in sorted(self.dataset_episodes):
+            ep = self.dataset_episodes[ep_idx]
+            row = ep.row
+            status = "delete" if ep_idx in self.deleted_episode_indices else "keep"
+            self.episode_tree.insert(
+                "",
+                tk.END,
+                iid=str(ep_idx),
+                values=(ep_idx, status, int(row.get("length", 0)), self._task_text(row)),
+            )
 
     @staticmethod
     def _task_text(row: Any) -> str:
@@ -2068,6 +2687,74 @@ class RecorderApp:
         if task_text in TASK_CHOICES:
             self.vars["edit_task"].set(task_text)
         self.select_dataset_episode(episode, autoplay=True)
+
+    def toggle_delete_selected_episode(self) -> None:
+        selection = self.episode_tree.selection()
+        if not selection:
+            self.status.set("Select an episode before marking it for deletion.")
+            return
+        if self.recorder is not None and self.recorder.is_alive():
+            self.status.set("Stop recorder before marking saved episodes for deletion.")
+            return
+        if self.cleanup_running:
+            self.status.set("Dataset rewrite is already running. Wait for it to finish.")
+            return
+        ep_idx = int(selection[0])
+        if ep_idx in self.deleted_episode_indices:
+            self.deleted_episode_indices.remove(ep_idx)
+        else:
+            self.deleted_episode_indices.add(ep_idx)
+        self._rebuild_episode_browser_list()
+        if str(ep_idx) in self.episode_tree.get_children():
+            self.episode_tree.selection_set(str(ep_idx))
+        self.status.set(f"Marked {len(self.deleted_episode_indices)} episode(s) for deletion.")
+
+    def apply_episode_deletions(self) -> None:
+        if self.recorder is not None and self.recorder.is_alive():
+            self.status.set("Stop recorder before deleting saved episodes.")
+            return
+        if self.cleanup_running:
+            self.status.set("Dataset rewrite is already running. Wait for it to finish.")
+            return
+        dataset_root_text = self.vars["dataset_root"].get().strip()
+        if not dataset_root_text:
+            self.status.set("Choose a dataset folder before deleting episodes.")
+            return
+        dataset_root = self._find_dataset_root(Path(dataset_root_text).expanduser())
+        if not (dataset_root / "meta" / "info.json").exists():
+            self.status.set("No existing LeRobot dataset metadata found here.")
+            return
+        if not self.dataset_episodes:
+            self._load_episode_browser(dataset_root)
+        if not self.deleted_episode_indices:
+            self.status.set("No episode is marked for deletion.")
+            return
+        keep_episode_indices = [
+            ep_idx for ep_idx in sorted(self.dataset_episodes) if ep_idx not in self.deleted_episode_indices
+        ]
+        if not keep_episode_indices:
+            messagebox.showerror("Refused", "At least one episode must be kept.", parent=self.root)
+            return
+        deleted_text = ", ".join(str(ep_idx) for ep_idx in sorted(self.deleted_episode_indices))
+        if not messagebox.askyesno(
+            "Delete selected episodes?",
+            (
+                f"Delete {len(self.deleted_episode_indices)} episode(s): {deleted_text}\n\n"
+                f"The dataset will be rewritten with {len(keep_episode_indices)} kept episode(s), "
+                "then reindexed to 0..N-1.\n\n"
+                "A timestamped backup folder will be created next to the dataset before replacement."
+            ),
+            parent=self.root,
+        ):
+            self.status.set("Episode deletion cancelled.")
+            return
+        self.stop_dataset_playback()
+        self.close_dataset_captures()
+        self._start_dataset_cleanup(
+            dataset_root,
+            keep_episode_indices,
+            start_message=f"Deleting {len(self.deleted_episode_indices)} episode(s) and reindexing dataset...",
+        )
 
     def set_selected_episode_task(self) -> None:
         selection = self.episode_tree.selection()
@@ -2180,7 +2867,17 @@ class RecorderApp:
         selected = self.vars["preview_key"].get()
         if selected in self.dataset_video_keys:
             return selected
+        prefixed = f"observation.images.{selected}"
+        if prefixed in self.dataset_video_keys:
+            return prefixed
+        for key in self.dataset_video_keys:
+            if key.rsplit(".", 1)[-1] == selected:
+                return key
         return self.dataset_video_keys[0] if self.dataset_video_keys else ""
+
+    def on_preview_key_selected(self, _event: tk.Event | None = None) -> None:
+        if self.video_mode == "dataset" and self.current_dataset_episode is not None:
+            self.seek_dataset_episode(self.play_offset_s)
 
     def seek_dataset_episode(self, rel_s: float) -> None:
         if self.current_dataset_episode is None or not self.dataset_video_keys:
@@ -2201,6 +2898,7 @@ class RecorderApp:
         ok, frame = cap.read()
         if ok:
             self._show_bgr_frame(frame)
+        self._show_dataset_side_frame(target_s)
 
     def start_dataset_playback(self) -> None:
         if self.current_dataset_episode is None:
@@ -2228,6 +2926,28 @@ class RecorderApp:
         for cap in self.dataset_captures.values():
             cap.release()
         self.dataset_captures.clear()
+
+    def _show_dataset_side_frame(self, target_s: float) -> None:
+        side_key = self._side_preview_key()
+        if not side_key or side_key not in self.dataset_video_keys:
+            self.side_video_title.set("Aux preview: no depth/side video")
+            self.side_preview_label.configure(image="")
+            self.side_preview_image = None
+            return
+        cap = self.open_dataset_capture(side_key)
+        if cap is None:
+            return
+        cap.set(cv2.CAP_PROP_POS_MSEC, target_s * 1000.0)
+        ok, frame_bgr = cap.read()
+        if not ok:
+            self.side_video_title.set(f"Aux preview: no frame from {side_key}")
+            return
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        image = Image.fromarray(np.ascontiguousarray(frame_rgb))
+        image.thumbnail(self._side_preview_size(self.preview_zoom.get()), Image.Resampling.LANCZOS)
+        self.side_preview_image = ImageTk.PhotoImage(image=image)
+        self.side_preview_label.configure(image=self.side_preview_image)
+        self.side_video_title.set(f"Aux preview: {side_key} | zoom {self.preview_zoom.get():.2f}x")
 
     @staticmethod
     def _find_dataset_root(path: Path) -> Path:
@@ -2315,18 +3035,25 @@ class RecorderApp:
             return
         self._start_dataset_cleanup(dataset_root, health.valid_episode_indices)
 
-    def _start_dataset_cleanup(self, dataset_root: Path, keep_episode_indices: list[int]) -> None:
+    def _start_dataset_cleanup(
+        self,
+        dataset_root: Path,
+        keep_episode_indices: list[int],
+        start_message: str | None = None,
+    ) -> None:
         if self.cleanup_running:
             self.status.set("Dataset cleanup is already running. Wait for it to finish before selecting another folder.")
             return
         self.cleanup_running = True
         self.status_queue.put(f"PROGRESS|0|100|Cleaning dataset...")
-        self.status_queue.put(f"Cleaning selected dataset and keeping {len(keep_episode_indices)} valid episode(s)...")
+        self.status_queue.put(
+            start_message or f"Cleaning selected dataset and keeping {len(keep_episode_indices)} valid episode(s)..."
+        )
 
         def worker() -> None:
             try:
-                backup = rewrite_dataset(dataset_root, keep_episode_indices, self.status_queue)
-                self.status_queue.put(f"CLEAN_DONE|{dataset_root}|{backup}")
+                outcome = fast_delete_or_rewrite_dataset(dataset_root, keep_episode_indices, self.status_queue)
+                self.status_queue.put(f"CLEAN_DONE|{dataset_root}|{outcome.backup_root}|{outcome.mode}")
             except Exception as exc:
                 self.status_queue.put(f"CLEAN_ERROR|{dataset_root}|{exc}")
 
@@ -2378,12 +3105,15 @@ class RecorderApp:
             opencv_side=self.vars["opencv_side"].get(),
             record_opencv_front=self.record_opencv_front.get(),
             record_opencv_side=self.record_opencv_side.get(),
-            record_realsense=self.record_realsense.get(),
             enable_realsense=self.enable_realsense.get(),
+            capture_depth_sidecar=self.capture_depth_sidecar.get(),
+            low_resolution=self.low_resolution.get(),
+            disable_gripper=self.disable_gripper.get(),
             realsense_serial=self.vars["realsense_serial"].get(),
             repo_id=self.vars["repo_id"].get(),
             dataset_root=self.vars["dataset_root"].get().strip(),
             calibration_dir=self.vars["calibration_dir"].get(),
+            calibration_match=self.vars["calibration_match"].get(),
             task=self.vars["task"].get(),
             resume=self.resume.get(),
             push_to_hub=self.push_to_hub.get(),
@@ -2415,6 +3145,10 @@ class RecorderApp:
         if task not in TASK_CHOICES:
             self.status.set(f"Choose a valid task before recording: {', '.join(TASK_CHOICES)}")
             return
+        episode = self.episode_text.get().split(":", 1)[-1].strip()
+        if episode.isdigit():
+            self.episode_text.set(f"Recording: {episode}")
+        self.progress_text.set("Record requested...")
         self.recorder.request_record(task)
 
     def end_episode(self) -> None:
@@ -2437,6 +3171,15 @@ class RecorderApp:
             self.video_mode = "dataset"
             self._load_episode_browser(Path(self.vars["dataset_root"].get()).expanduser())
 
+    def disconnect_recorder(self) -> None:
+        if self.recorder is None:
+            self.status.set("Recorder is not connected.")
+            return
+        self.status.set("Disconnecting robot, teleoperator, and cameras...")
+        self.root.update_idletasks()
+        self.stop_recorder()
+        self.status.set("Disconnected. Follower arm torque has been released.")
+
     def toggle_fullscreen(self) -> None:
         self.set_fullscreen(not bool(self.root.attributes("-fullscreen")))
 
@@ -2458,22 +3201,29 @@ class RecorderApp:
             self._refresh_record_button_state()
             self._set_active_dataset_root(None)
 
-        try:
-            self.latest_frames = self.preview_queue.get_nowait()
-            now = time.monotonic()
-            keys = sorted(self.latest_frames)
-            for frame_key, frame in self.latest_frames.items():
-                if isinstance(frame, np.ndarray) and frame.ndim >= 2:
-                    previous_t = self.live_frame_times.get(frame_key)
-                    fps = 0.0 if previous_t is None or now <= previous_t else 1.0 / (now - previous_t)
-                    self.live_frame_times[frame_key] = now
-                    self.live_frame_stats[frame_key] = (int(frame.shape[1]), int(frame.shape[0]), fps)
-            self.preview_combo["values"] = keys
-            if (not self.vars["preview_key"].get() or self.vars["preview_key"].get() not in keys) and keys:
-                self.vars["preview_key"].set(keys[0])
-            self.video_mode = "live"
-        except queue.Empty:
-            pass
+        if self.recorder is not None and self.recorder.is_alive():
+            try:
+                self.latest_frames = self.preview_queue.get_nowait()
+                now = time.monotonic()
+                keys = sorted(self.latest_frames)
+                for frame_key, frame in self.latest_frames.items():
+                    if isinstance(frame, np.ndarray) and frame.ndim >= 2:
+                        previous_t = self.live_frame_times.get(frame_key)
+                        fps = 0.0 if previous_t is None or now <= previous_t else 1.0 / (now - previous_t)
+                        self.live_frame_times[frame_key] = now
+                        self.live_frame_stats[frame_key] = (int(frame.shape[1]), int(frame.shape[0]), fps)
+                self.preview_combo["values"] = keys
+                if (not self.vars["preview_key"].get() or self.vars["preview_key"].get() not in keys) and keys:
+                    self.vars["preview_key"].set(keys[0])
+                self.video_mode = "live"
+            except queue.Empty:
+                pass
+        else:
+            try:
+                while True:
+                    self.preview_queue.get_nowait()
+            except queue.Empty:
+                pass
 
         key = self.vars["preview_key"].get()
         if self.video_mode == "live" and key in self.latest_frames:
@@ -2482,6 +3232,7 @@ class RecorderApp:
                 f"Live preview: {key} | {width}x{height} | {fps:.1f} fps | zoom {self.preview_zoom.get():.2f}x"
             )
             self._show_frame(self.latest_frames[key])
+            self._show_side_live_preview()
 
         if self.playing_dataset and self.current_dataset_episode is not None:
             length_s = float(self.current_dataset_episode.row.get("length", 0)) / int(
@@ -2530,16 +3281,22 @@ class RecorderApp:
             return
         if message.startswith("CLEAN_DONE|"):
             try:
-                _kind, dataset_root, backup = message.split("|", 2)
+                parts = message.split("|", 3)
+                if len(parts) == 4:
+                    _kind, dataset_root, backup, mode = parts
+                else:
+                    _kind, dataset_root, backup = message.split("|", 2)
+                    mode = "full rewrite"
                 self.cleanup_running = False
                 self.pending_cleanup_root = None
                 self.pending_cleanup_episodes = []
+                self.deleted_episode_indices.clear()
                 self.progress_value.set(100.0)
                 self.progress_text.set("Cleanup complete")
                 health = self._show_dataset_folder_summary(Path(dataset_root))
                 self._remember_cleanup_choice(Path(dataset_root), health)
                 self._load_episode_browser(Path(dataset_root))
-                self.status.set(f"Dataset cleaned successfully. Backup: {backup}")
+                self.status.set(f"Dataset cleaned successfully by {mode}. Backup: {backup}")
             except ValueError:
                 self.status.set(message)
             return
@@ -2574,11 +3331,64 @@ class RecorderApp:
         zoom = min(4.0, max(0.25, zoom))
         return (max(1, int(PREVIEW_SIZE[0] * zoom)), max(1, int(PREVIEW_SIZE[1] * zoom)))
 
+    @staticmethod
+    def _side_preview_size(zoom: float) -> tuple[int, int]:
+        zoom = min(4.0, max(0.25, zoom))
+        return (max(1, int(SIDE_PREVIEW_SIZE[0] * zoom)), max(1, int(SIDE_PREVIEW_SIZE[1] * zoom)))
+
+    def _selected_camera_size(self) -> tuple[int, int]:
+        if self.low_resolution.get():
+            return LOW_CAMERA_WIDTH, LOW_CAMERA_HEIGHT
+        return CAMERA_WIDTH, CAMERA_HEIGHT
+
     def _show_frame(self, frame: np.ndarray) -> None:
         image = Image.fromarray(np.ascontiguousarray(frame))
         image.thumbnail(self._zoomed_preview_size(self.preview_zoom.get()), Image.Resampling.LANCZOS)
         self.current_image = ImageTk.PhotoImage(image=image)
         self.preview_label.configure(image=self.current_image)
+
+    def _show_side_frame(self, frame: np.ndarray) -> None:
+        image = Image.fromarray(np.ascontiguousarray(frame))
+        image.thumbnail(self._side_preview_size(self.preview_zoom.get()), Image.Resampling.LANCZOS)
+        self.side_preview_image = ImageTk.PhotoImage(image=image)
+        self.side_preview_label.configure(image=self.side_preview_image)
+
+    def _show_side_live_preview(self) -> None:
+        side_key = self._side_preview_key()
+        if side_key == "" or side_key not in self.latest_frames:
+            self.side_video_title.set("Aux preview: no depth/side frame")
+            self.side_preview_label.configure(image="")
+            self.side_preview_image = None
+            return
+
+        width, height, fps = self.live_frame_stats.get(side_key, (0, 0, 0.0))
+        self.side_video_title.set(
+            f"Aux preview: {side_key} | {width}x{height} | {fps:.1f} fps | zoom {self.preview_zoom.get():.2f}x"
+        )
+        self._show_side_frame(self.latest_frames[side_key])
+
+    def _side_preview_key(self) -> str:
+        available_keys = set(self.latest_frames) if self.video_mode == "live" else set(self.dataset_video_keys)
+        active_key = self.vars["preview_key"].get()
+        if self.video_mode == "dataset":
+            active_key = self.active_dataset_video_key()
+        preferred_keys = (
+            "front_depth",
+            "observation.images.front_depth",
+            "left_front_depth",
+            "observation.images.left_front_depth",
+            "left_side",
+            "side",
+            "observation.images.left_side",
+            "observation.images.side",
+        )
+        for key in preferred_keys:
+            if key in available_keys and key != active_key:
+                return key
+        for key in sorted(available_keys):
+            if "side" in key and key != active_key:
+                return key
+        return ""
 
     def _show_bgr_frame(self, frame_bgr: np.ndarray) -> None:
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
