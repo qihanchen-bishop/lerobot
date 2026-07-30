@@ -84,6 +84,7 @@ class MaskActRunConfig:
     repo_id: str
     root: str
     rgb_key: str
+    rgb_keys: list[str]
     state_keys: list[str]
     mask_target_keys: list[str]
     image_size: list[int] | None
@@ -229,12 +230,72 @@ class SemanticLatentNet(nn.Module):
         return rgb_main_latent, rgb_semantic_latents, mask_semantic_latents
 
 
+def _mask_suffix_for_rgb(mask_key: str, rgb_key: str) -> str | None:
+    prefix = f"{rgb_key}_"
+    if mask_key.startswith(prefix):
+        return mask_key[len(prefix) :]
+    return None
+
+
+def build_mask_layout(rgb_keys: list[str], mask_keys: list[str]) -> tuple[list[str], dict[str, tuple[int, int]]]:
+    """Map each target mask key to (rgb view index, shared semantic output index)."""
+
+    if len(rgb_keys) == 1:
+        matched = [(_mask_suffix_for_rgb(key, rgb_keys[0]), key) for key in mask_keys]
+        if not any(suffix is not None for suffix, _ in matched):
+            return list(mask_keys), {key: (0, idx) for idx, key in enumerate(mask_keys)}
+
+    suffixes: list[str] = []
+    key_to_view_suffix: dict[str, tuple[int, str]] = {}
+    for key in mask_keys:
+        matches = [
+            (view_idx, suffix)
+            for view_idx, rgb_key in enumerate(rgb_keys)
+            if (suffix := _mask_suffix_for_rgb(key, rgb_key)) is not None
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"Could not assign mask key '{key}' to exactly one RGB key from {rgb_keys}. "
+                "For multi-view training, mask keys should be named like '<rgb-key>_<semantic>', "
+                "for example 'observation.images.front_object'."
+            )
+        view_idx, suffix = matches[0]
+        key_to_view_suffix[key] = (view_idx, suffix)
+        if suffix not in suffixes:
+            suffixes.append(suffix)
+
+    missing_pairs = []
+    for rgb_key in rgb_keys:
+        for suffix in suffixes:
+            expected = f"{rgb_key}_{suffix}"
+            if expected not in mask_keys:
+                missing_pairs.append(expected)
+    if missing_pairs:
+        raise ValueError(
+            "Multi-view MaskACT expects the same semantic mask suffixes for every RGB view. "
+            f"Missing: {missing_pairs}"
+        )
+
+    suffix_to_idx = {suffix: idx for idx, suffix in enumerate(suffixes)}
+    return suffixes, {
+        key: (view_idx, suffix_to_idx[suffix]) for key, (view_idx, suffix) in key_to_view_suffix.items()
+    }
+
+
+def find_semantic_mask_index(mask_keys: list[str], semantic_name: str) -> int:
+    suffix = f"_{semantic_name}"
+    for idx, key in enumerate(mask_keys):
+        if key.endswith(suffix) or key.rsplit(".", 1)[-1] == semantic_name:
+            return idx
+    raise ValueError(f"Could not find semantic mask '{semantic_name}' in mask keys: {mask_keys}")
+
+
 class MaskACTPolicy(nn.Module):
     def __init__(
         self,
         act_policy: ACTPolicy,
         experiment: str,
-        rgb_key: str,
+        rgb_keys: list[str],
         mask_keys: list[str],
         stats: dict,
         latent_dim: int,
@@ -249,8 +310,10 @@ class MaskACTPolicy(nn.Module):
         super().__init__()
         self.act_policy = act_policy
         self.experiment = experiment.upper()
-        self.rgb_key = rgb_key
+        self.rgb_keys = rgb_keys
+        self.rgb_key = rgb_keys[0]
         self.mask_keys = mask_keys
+        self.mask_suffixes, self.mask_key_map = build_mask_layout(rgb_keys, mask_keys)
         self.stats = stats
         self.latent_dim = latent_dim
         self.seg_loss_weight = seg_loss_weight
@@ -263,13 +326,13 @@ class MaskACTPolicy(nn.Module):
         if self.experiment not in {"1A", "1B", "2A", "2B", "3", "4A", "4B", "4C", "5"}:
             raise ValueError(f"Unknown experiment '{experiment}'. Choose 1A, 1B, 2A, 2B, 3, 4A, 4B, 4C, or 5.")
         self.seg_net = UNetSegNet(
-            out_masks=len(mask_keys),
+            out_masks=len(self.mask_suffixes),
             latent_dim=latent_dim,
             base_channels=unet_base_channels,
         )
         self.semantic_net = (
             SemanticLatentNet(
-                num_masks=len(mask_keys),
+                num_masks=len(self.mask_suffixes),
                 latent_dim=latent_dim,
                 mask_base_channels=unet_base_channels,
                 pretrained_backbone_weights=pretrained_backbone_weights,
@@ -291,27 +354,46 @@ class MaskACTPolicy(nn.Module):
             return rgb
         return F.interpolate(rgb, size=tuple(image_size), mode="bilinear", align_corners=False, antialias=True)
 
+    def _get_rgb_inputs(self, batch: dict[str, Tensor], *, device: torch.device | None = None) -> list[Tensor]:
+        rgbs = []
+        missing = [key for key in self.rgb_keys if key not in batch]
+        if missing:
+            raise KeyError(
+                f"Mask-ACT requires live RGB input(s) {self.rgb_keys}, but missing {missing}. "
+                f"Received keys: {sorted(batch)}"
+            )
+        for key in self.rgb_keys:
+            rgb = batch[key]
+            if device is not None:
+                rgb = rgb.to(device=device)
+            rgbs.append(self._resize_inference_rgb(rgb.to(dtype=torch.float32)))
+        return rgbs
+
+    def _stack_logits_for_mask_keys(self, logits_by_view: list[Tensor]) -> Tensor:
+        return torch.cat(
+            [
+                logits_by_view[view_idx][:, suffix_idx : suffix_idx + 1]
+                for view_idx, suffix_idx in (self.mask_key_map[key] for key in self.mask_keys)
+            ],
+            dim=1,
+        )
+
     @torch.no_grad()
     def _prepare_inference_batch(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         self.eval()
-        if self.rgb_key not in batch:
-            raise KeyError(
-                f"Mask-ACT requires live RGB input '{self.rgb_key}', but received keys: {sorted(batch)}"
-            )
-
-        rgb = self._resize_inference_rgb(batch[self.rgb_key].to(dtype=torch.float32))
+        rgbs = self._get_rgb_inputs(batch)
         act_batch = dict(batch)
 
         if self.uses_semantic_latents():
             if self.semantic_net is None:
                 raise RuntimeError("Experiment 5 semantic network is missing.")
-            rgb_main_latent, rgb_semantic_latents, _ = self.semantic_net(rgb, masks=None)
+            rgb_main_latent, rgb_semantic_latents = self.predict_inference_semantic_latents(rgbs)
             act_batch[OBS_ENV_STATE] = torch.cat(
                 [rgb_main_latent, rgb_semantic_latents.reshape(rgb_semantic_latents.shape[0], -1)],
                 dim=-1,
             )
         else:
-            mask_logits, rgb_latent = self.seg_net(rgb)
+            mask_logits, rgb_latent = self.predict_masks_and_latent_from_rgbs(rgbs)
             mask_probs = torch.sigmoid(mask_logits)
 
             if self.act_uses_latent():
@@ -377,8 +459,16 @@ class MaskACTPolicy(nn.Module):
         return torch.cat(masks, dim=1)
 
     def predict_masks_and_latent(self, raw_batch: dict[str, Tensor], device: torch.device) -> tuple[Tensor, Tensor]:
-        rgb = raw_batch[self.rgb_key].to(device=device, dtype=torch.float32)
-        return self.seg_net(rgb)
+        return self.predict_masks_and_latent_from_rgbs(self._get_rgb_inputs(raw_batch, device=device))
+
+    def predict_masks_and_latent_from_rgbs(self, rgbs: list[Tensor]) -> tuple[Tensor, Tensor]:
+        logits_by_view = []
+        latents = []
+        for rgb in rgbs:
+            logits, latent = self.seg_net(rgb)
+            logits_by_view.append(logits)
+            latents.append(latent)
+        return self._stack_logits_for_mask_keys(logits_by_view), torch.cat(latents, dim=-1)
 
     def predict_semantic_latents(
         self,
@@ -386,14 +476,84 @@ class MaskACTPolicy(nn.Module):
         device: torch.device,
         masks: Tensor | None = None,
     ) -> tuple[Tensor, Tensor, Tensor | None]:
-        rgb = raw_batch[self.rgb_key].to(device=device, dtype=torch.float32)
         if self.semantic_net is None:
             raise RuntimeError("Semantic latent prediction is only available for experiment 5.")
-        return self.semantic_net(rgb, masks)
+        return self.predict_semantic_latents_from_rgbs_masks(
+            self._get_rgb_inputs(raw_batch, device=device), masks
+        )
+
+    def predict_inference_semantic_latents(self, rgbs: list[Tensor]) -> tuple[Tensor, Tensor]:
+        if self.semantic_net is None:
+            raise RuntimeError("Semantic latent prediction is only available for experiment 5.")
+        main_latents = []
+        semantic_by_view = []
+        for rgb in rgbs:
+            rgb_main_latent, rgb_semantic_latents, _ = self.semantic_net(rgb, masks=None)
+            main_latents.append(rgb_main_latent)
+            semantic_by_view.append(rgb_semantic_latents)
+        semantic_latents = torch.stack(
+            [
+                semantic_by_view[view_idx][:, suffix_idx]
+                for view_idx, suffix_idx in (self.mask_key_map[key] for key in self.mask_keys)
+            ],
+            dim=1,
+        )
+        return torch.cat(main_latents, dim=-1), semantic_latents
+
+    def predict_semantic_latents_from_rgbs_masks(
+        self,
+        rgbs: list[Tensor],
+        masks: Tensor | None,
+    ) -> tuple[Tensor, Tensor, Tensor | None]:
+        if self.semantic_net is None:
+            raise RuntimeError("Semantic latent prediction is only available for experiment 5.")
+        main_latents = []
+        rgb_semantic_by_view = []
+        mask_semantic_by_view = []
+        for view_idx, rgb in enumerate(rgbs):
+            masks_for_view = None
+            if masks is not None:
+                view_masks = []
+                for suffix_idx in range(len(self.mask_suffixes)):
+                    matching = [
+                        key_idx
+                        for key_idx, key in enumerate(self.mask_keys)
+                        if self.mask_key_map[key] == (view_idx, suffix_idx)
+                    ]
+                    if not matching:
+                        raise KeyError(
+                            f"No mask target found for RGB key '{self.rgb_keys[view_idx]}' "
+                            f"and semantic suffix '{self.mask_suffixes[suffix_idx]}'."
+                        )
+                    view_masks.append(masks[:, matching[0] : matching[0] + 1])
+                masks_for_view = torch.cat(view_masks, dim=1)
+            rgb_main_latent, rgb_semantic_latents, mask_semantic_latents = self.semantic_net(rgb, masks_for_view)
+            main_latents.append(rgb_main_latent)
+            rgb_semantic_by_view.append(rgb_semantic_latents)
+            if mask_semantic_latents is not None:
+                mask_semantic_by_view.append(mask_semantic_latents)
+
+        rgb_semantic_latents = torch.stack(
+            [
+                rgb_semantic_by_view[view_idx][:, suffix_idx]
+                for view_idx, suffix_idx in (self.mask_key_map[key] for key in self.mask_keys)
+            ],
+            dim=1,
+        )
+        mask_semantic_latents = None
+        if mask_semantic_by_view:
+            mask_semantic_latents = torch.stack(
+                [
+                    mask_semantic_by_view[view_idx][:, suffix_idx]
+                    for view_idx, suffix_idx in (self.mask_key_map[key] for key in self.mask_keys)
+                ],
+                dim=1,
+            )
+        return torch.cat(main_latents, dim=-1), rgb_semantic_latents, mask_semantic_latents
 
     def compute_mask_metrics(self, masks: Tensor) -> Tensor:
-        object_idx = self.mask_keys.index("observation.images.object")
-        region_idx = self.mask_keys.index("observation.images.region")
+        object_idx = find_semantic_mask_index(self.mask_keys, "object")
+        region_idx = find_semantic_mask_index(self.mask_keys, "region")
         object_mask = masks[:, object_idx]
         region_mask = masks[:, region_idx]
 
@@ -516,6 +676,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--rgb-key", default=DEFAULT_RGB_KEY)
+    parser.add_argument(
+        "--rgb-keys",
+        nargs="+",
+        default=None,
+        help="One or more RGB image keys. Overrides --rgb-key when provided.",
+    )
     parser.add_argument("--state-keys", nargs="*", default=DEFAULT_STATE_KEYS)
     parser.add_argument("--mask-target-keys", nargs="+", default=DEFAULT_MASK_KEYS)
     parser.add_argument(
@@ -535,6 +701,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--view-root", type=Path, default=None)
     parser.add_argument("--rebuild-view", action="store_true")
     parser.add_argument("--overwrite-output", action="store_true")
+    parser.add_argument(
+        "--resume-checkpoint",
+        type=Path,
+        default=None,
+        help="Resume MaskACT training from a checkpoint training_state.pt file or checkpoint_step_* directory.",
+    )
     parser.add_argument("--steps", type=int, default=100_000)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -570,7 +742,7 @@ def validate_image_size(image_size: list[int] | tuple[int, int] | None) -> tuple
 
 def resize_training_visuals(
     raw_batch: dict[str, Any],
-    rgb_key: str,
+    rgb_keys: list[str],
     mask_keys: list[str],
     image_size: tuple[int, int] | None,
 ) -> dict[str, Any]:
@@ -580,14 +752,14 @@ def resize_training_visuals(
         return raw_batch
 
     resized_batch = dict(raw_batch)
-    visual_keys = [rgb_key, *mask_keys]
+    visual_keys = [*rgb_keys, *mask_keys]
     for key in visual_keys:
         image = raw_batch[key]
         if not isinstance(image, Tensor) or image.ndim != 4:
             raise ValueError(f"Expected batched BCHW tensor for '{key}', got {type(image).__name__}.")
         if tuple(image.shape[-2:]) == image_size:
             continue
-        if key == rgb_key:
+        if key in rgb_keys:
             resized_batch[key] = F.interpolate(image, size=image_size, mode="bilinear", align_corners=False, antialias=True)
         else:
             resized_batch[key] = F.interpolate(image, size=image_size, mode="nearest")
@@ -605,16 +777,24 @@ def normalize_dataset_keys(args: argparse.Namespace, source_root: Path) -> None:
     features = load_dataset_features(source_root)
     available_keys = set(features)
 
-    if args.rgb_key not in available_keys:
-        if args.rgb_key == DEFAULT_RGB_KEY and SOARM_RGB_KEY in available_keys:
-            print(f"RGB key '{DEFAULT_RGB_KEY}' not found; using '{SOARM_RGB_KEY}' from this dataset.")
-            args.rgb_key = SOARM_RGB_KEY
-        else:
-            image_keys = sorted(key for key in available_keys if key.startswith("observation.images."))
-            raise KeyError(
-                f"RGB key '{args.rgb_key}' is not in dataset features. "
-                f"Available image keys: {image_keys}"
-            )
+    if args.rgb_keys is None:
+        args.rgb_keys = [args.rgb_key]
+
+    normalized_rgb_keys = []
+    for rgb_key in args.rgb_keys:
+        if rgb_key not in available_keys:
+            if rgb_key == DEFAULT_RGB_KEY and SOARM_RGB_KEY in available_keys:
+                print(f"RGB key '{DEFAULT_RGB_KEY}' not found; using '{SOARM_RGB_KEY}' from this dataset.")
+                rgb_key = SOARM_RGB_KEY
+            else:
+                image_keys = sorted(key for key in available_keys if key.startswith("observation.images."))
+                raise KeyError(
+                    f"RGB key '{rgb_key}' is not in dataset features. "
+                    f"Available image keys: {image_keys}"
+                )
+        normalized_rgb_keys.append(rgb_key)
+    args.rgb_keys = normalized_rgb_keys
+    args.rgb_key = args.rgb_keys[0]
 
     missing_mask_keys = [key for key in args.mask_target_keys if key not in available_keys]
     if missing_mask_keys:
@@ -623,6 +803,8 @@ def normalize_dataset_keys(args: argparse.Namespace, source_root: Path) -> None:
             f"Missing mask target key(s): {missing_mask_keys}. "
             f"Available image keys: {image_keys}"
         )
+
+    build_mask_layout(args.rgb_keys, list(args.mask_target_keys))
 
     if list(args.mask_target_keys) == CANONICAL_SEMANTIC_MASK_KEYS:
         return
@@ -702,13 +884,13 @@ def act_metric_mode(experiment: str) -> str | None:
 
 def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: dict) -> MaskACTPolicy:
     if args.experiment.upper() in {"4A", "4B", "4C"}:
-        metric_keys = {"observation.images.object", "observation.images.region"}
-        missing_metric_keys = sorted(metric_keys.difference(args.mask_target_keys))
-        if missing_metric_keys:
+        try:
+            find_semantic_mask_index(args.mask_target_keys, "object")
+            find_semantic_mask_index(args.mask_target_keys, "region")
+        except ValueError as exc:
             raise KeyError(
-                f"Experiment {args.experiment} requires mask target keys for metric computation: "
-                f"{missing_metric_keys}"
-            )
+                f"Experiment {args.experiment} requires object and region mask target keys for metric computation."
+            ) from exc
 
     features = dataset_to_policy_features(meta.features)
     act_image_keys = act_image_keys_for_experiment(args)
@@ -724,13 +906,15 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
             feature = input_features[key]
             input_features[key] = PolicyFeature(type=feature.type, shape=(feature.shape[0], height, width))
     if act_uses_latent(args.experiment):
-        input_features[OBS_ENV_STATE] = PolicyFeature(type=FeatureType.ENV, shape=(args.latent_dim,))
+        input_features[OBS_ENV_STATE] = PolicyFeature(
+            type=FeatureType.ENV, shape=(args.latent_dim * len(args.rgb_keys),)
+        )
     if act_uses_metric_env_state(args.experiment):
         input_features[OBS_ENV_STATE] = PolicyFeature(type=FeatureType.ENV, shape=(2,))
     if act_uses_semantic_env_state(args.experiment):
         input_features[OBS_ENV_STATE] = PolicyFeature(
             type=FeatureType.ENV,
-            shape=(args.latent_dim * (1 + len(args.mask_target_keys)),),
+            shape=(args.latent_dim * (len(args.rgb_keys) + len(args.mask_target_keys)),),
         )
 
     policy_cfg = make_policy_config(
@@ -749,7 +933,7 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
     return MaskACTPolicy(
         act_policy=act_policy,
         experiment=args.experiment,
-        rgb_key=args.rgb_key,
+        rgb_keys=list(args.rgb_keys),
         mask_keys=list(args.mask_target_keys),
         stats=stats,
         latent_dim=args.latent_dim,
@@ -769,6 +953,7 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         repo_id=args.repo_id,
         root=str(args.root),
         rgb_key=args.rgb_key,
+        rgb_keys=list(args.rgb_keys),
         state_keys=list(args.state_keys),
         mask_target_keys=list(args.mask_target_keys),
         image_size=list(args.image_size) if args.image_size is not None else None,
@@ -813,6 +998,36 @@ def save_checkpoint(output_dir: Path, step: int, model: MaskACTPolicy, optimizer
     return checkpoint_dir
 
 
+def resolve_checkpoint_path(path: Path) -> Path:
+    if path.is_dir():
+        path = path / "training_state.pt"
+    if not path.is_file():
+        raise FileNotFoundError(f"Checkpoint file not found: {path}")
+    return path
+
+
+def load_checkpoint(
+    checkpoint_path: Path,
+    model: MaskACTPolicy,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+) -> int:
+    checkpoint_path = resolve_checkpoint_path(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    missing, unexpected = model.load_state_dict(checkpoint["model"], strict=False)
+    if missing or unexpected:
+        raise RuntimeError(
+            f"Checkpoint model keys do not match current configuration. "
+            f"Missing keys: {missing}; unexpected keys: {unexpected}"
+        )
+    optimizer.load_state_dict(checkpoint["optimizer"])
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if isinstance(value, Tensor):
+                state[key] = value.to(device)
+    return int(checkpoint["step"])
+
+
 def tensor_image_to_uint8(image: Tensor) -> Tensor:
     image = image.detach().cpu().float()
     if image.ndim == 3 and image.shape[0] in {1, 3}:
@@ -846,8 +1061,10 @@ def save_mask_preview(checkpoint_dir: Path, step: int, model: MaskACTPolicy, raw
     mask_logits, _ = model.predict_masks_and_latent(raw_batch, device=device)
     mask_probs = torch.sigmoid(mask_logits)
 
-    rgb = raw_batch[model.rgb_key][0]
-    tiles = [make_labeled_tile(rgb, "rgb")]
+    tiles = [
+        make_labeled_tile(raw_batch[rgb_key][0], f"rgb {rgb_key.rsplit('.', 1)[-1]}")
+        for rgb_key in model.rgb_keys
+    ]
     for idx, key in enumerate(model.mask_keys):
         name = key.rsplit(".", 1)[-1]
         gt = mask_targets[0, idx : idx + 1].repeat(3, 1, 1)
@@ -872,8 +1089,9 @@ def save_mask_preview(checkpoint_dir: Path, step: int, model: MaskACTPolicy, raw
 class TrainingMetricsLogger:
     """Persist scalar training metrics as JSON and TensorBoard event files."""
 
-    def __init__(self, output_dir: Path, run_config: dict[str, Any]):
+    def __init__(self, output_dir: Path, run_config: dict[str, Any], initial_step: int = 0):
         self.output_dir = output_dir
+        self.initial_step = initial_step
         self.metrics_dir = output_dir / "metrics"
         self.tensorboard_dir = output_dir / "tensorboard"
         self.metrics_dir.mkdir(parents=True, exist_ok=True)
@@ -887,6 +1105,7 @@ class TrainingMetricsLogger:
             "jsonl_path": str(self.jsonl_path),
             "tensorboard_logdir": str(self.tensorboard_dir),
             "created_at_unix": time.time(),
+            "initial_step": initial_step,
         }
         self._write_json()
 
@@ -900,7 +1119,8 @@ class TrainingMetricsLogger:
         elapsed_total_s: float,
         lr: float,
     ) -> None:
-        steps_per_second = step / elapsed_total_s if elapsed_total_s > 0 else 0.0
+        completed_this_run = max(step - self.initial_step, 0)
+        steps_per_second = completed_this_run / elapsed_total_s if elapsed_total_s > 0 else 0.0
         eta_s = (total_steps - step) / steps_per_second if steps_per_second > 0 else None
         record = {
             "step": step,
@@ -908,7 +1128,7 @@ class TrainingMetricsLogger:
             "wall_time_unix": time.time(),
             "interval_elapsed_s": interval_elapsed_s,
             "elapsed_total_s": elapsed_total_s,
-            "avg_step_time_s": elapsed_total_s / step,
+            "avg_step_time_s": elapsed_total_s / completed_this_run if completed_this_run > 0 else None,
             "steps_per_second": steps_per_second,
             "eta_s": eta_s,
             "lr": lr,
@@ -987,10 +1207,13 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     source_root = args.root.resolve()
     normalize_dataset_keys(args, source_root)
 
+    if args.overwrite_output and args.resume_checkpoint is not None:
+        raise ValueError("--overwrite-output cannot be used together with --resume-checkpoint.")
+
     if args.output_dir.exists() and args.overwrite_output:
         shutil.rmtree(args.output_dir)
 
-    image_keys_in_view = sorted({args.rgb_key, *args.mask_target_keys})
+    image_keys_in_view = sorted({*args.rgb_keys, *args.mask_target_keys})
     view_root = args.view_root or (args.output_dir.parent / "dataset_views" / args.output_dir.name)
     filtered_root = make_filtered_dataset_view(
         source_root=source_root,
@@ -1024,6 +1247,16 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    start_step = 0
+    if args.resume_checkpoint is not None:
+        start_step = load_checkpoint(args.resume_checkpoint, model, optimizer, device)
+        if start_step >= args.steps:
+            raise ValueError(
+                f"Checkpoint step ({start_step}) is already >= requested total steps ({args.steps})."
+            )
+        print(f"Resumed checkpoint: {resolve_checkpoint_path(args.resume_checkpoint)}")
+        print(f"Resuming from step {start_step}; target total steps {args.steps}.")
+
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -1032,12 +1265,14 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         pin_memory=device.type == "cuda",
         drop_last=False,
         prefetch_factor=2 if args.num_workers > 0 else None,
+        persistent_workers=args.num_workers > 0,
     )
     dl_iter = cycle(dataloader)
 
     os.makedirs(args.output_dir, exist_ok=True)
     print(f"Experiment: {args.experiment}")
     print(f"Dataset view: {filtered_root}")
+    print(f"RGB keys: {args.rgb_keys}")
     print(f"ACT image keys: {act_image_keys_for_experiment(args)}")
     print(f"Mask supervision keys: {args.mask_target_keys}")
     print(f"Training image size: {args.image_size or 'dataset native resolution'}")
@@ -1048,7 +1283,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     run_config_path = args.output_dir / "mask_act_run_config.json"
     with open(run_config_path) as f:
         metrics_run_config = json.load(f)
-    metrics_logger = TrainingMetricsLogger(args.output_dir, metrics_run_config)
+    metrics_logger = TrainingMetricsLogger(args.output_dir, metrics_run_config, initial_step=start_step)
     print(f"Metrics JSON: {metrics_logger.json_path}")
     print(f"Metrics JSONL: {metrics_logger.jsonl_path}")
     print(f"TensorBoard logdir: {metrics_logger.tensorboard_dir}")
@@ -1057,19 +1292,21 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     training_start_time = time.perf_counter()
     interval_start_time = training_start_time
     progress = tqdm(
-        range(1, args.steps + 1),
+        range(start_step + 1, args.steps + 1),
         desc=f"train {args.experiment}",
         unit="step",
         dynamic_ncols=True,
         mininterval=1.0,
         smoothing=0.1,
+        initial=start_step,
+        total=args.steps,
     )
     try:
         for step in progress:
             raw_batch = next(dl_iter)
             raw_batch = resize_training_visuals(
                 raw_batch,
-                rgb_key=args.rgb_key,
+                rgb_keys=args.rgb_keys,
                 mask_keys=args.mask_target_keys,
                 image_size=args.image_size,
             )

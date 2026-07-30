@@ -78,3 +78,47 @@ conda run --no-capture-output -n lerobot python -u mycode/train_lerobot_policy.p
   --steps 100000 \
   --device cuda \
   --rebuild-view
+
+  python mycode/train_lerobot_policy.py \
+    --policy-type act \
+    --root /home/qihan/data/lerobot/data/newdata_3object \
+    --repo-id newdata_3object \
+    --image-keys observation.images.front observation.images.side \
+    --state-keys observation.state \
+    --chunk-size 60 \
+    --n-action-steps 60 \
+    --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 \
+    --batch-size 8 \
+    --steps 100000 \
+    --device cuda \
+    --video-backend pyav \
+    --rebuild-view
+ python mycode/train_lerobot_policy.py --policy-type act --root /home/qihan/data/lerobot/data/newdata_3object --repo-id newdata_3object --image-keys observation.images.front observation.images.side --state-keys observation.state --output-dir outputs/train/act_newdata_3object_front_side --job-name act_newdata_3object_front_side  --chunk-size 60 --n-action-steps 60 --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 --batch-size 8 --steps 100000 --device cuda --video-backend pyav --rebuild-view
+
+python mycode/train_lerobot_policy.py --policy-type diffusion --root /data/qihan/lerobot/data/newdata_3object --repo-id newdata_3object --image-keys observation.images.front observation.images.side --state-keys observation.state --output-dir outputs/train/diffusion_newdata_3object_front_side_obs4_h40_a16 --job-name diffusion_newdata_3object_front_side_obs4_h40_a16 --diffusion-n-obs-steps 4 --diffusion-horizon 40 --diffusion-n-action-steps 16 --batch-size 8 --steps 100000 --device cuda --video-backend pyav --rebuild-view
+
+python mycode/train_mask_act_policy.py \
+    --experiment 2B \
+    --root /data/qihan/lerobot/data/newdata_3object \
+    --repo-id newdata_3object \
+    --rgb-keys observation.images.front observation.images.side \
+    --state-keys observation.state \
+    --mask-target-keys \
+      observation.images.front_occluder \
+      observation.images.front_object \
+      observation.images.front_region \
+      observation.images.front_tool \
+      observation.images.side_occluder \
+      observation.images.side_object \
+      observation.images.side_region \
+      observation.images.side_tool \
+    --output-dir outputs/train/mask_act_2B_newdata_3object_front_side_act_aligned \
+    --steps 100000 \
+    --batch-size 8 \
+    --chunk-size 60 \
+    --n-action-steps 60 \
+    --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 \
+    --device cuda \
+    --num-workers 8 \
+    --video-backend pyav \
+    --rebuild-view
