@@ -122,3 +122,14 @@ python mycode/train_mask_act_policy.py \
     --num-workers 8 \
     --video-backend pyav \
     --rebuild-view
+
+conda run --no-capture-output -n lerobot python -u mycode/train_mask_act_policy.py \
+  --experiment 1B \
+  --root /home/qihan/lerobot/data/soarmcube277_mask_task1 \
+  --repo-id soarmcube277_mask_task1 \
+  --rgb-key observation.images.left_front \
+  --output-dir outputs/train/mask_act_5_soarmcube277_task1 \
+  --batch-size 8 \
+  --steps 100000 \
+  --device cuda \
+  --rebuild-view
