@@ -15,6 +15,7 @@ import time
 import traceback
 import tkinter as tk
 import tkinter.font as tkfont
+import concurrent.futures
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
@@ -27,11 +28,24 @@ from tkinter import filedialog, ttk
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "train"
-DEFAULT_EVAL_ROOT = PROJECT_ROOT / "eval_new"
+DEFAULT_EVAL_ROOT = PROJECT_ROOT / "eval" / "object3color2"
 DEFAULT_CALIBRATION_DIR = Path(__file__).resolve().parents[1] / "calibration" / "robots" / "so_follower"
-DEFAULT_TELEOP_CALIBRATION_DIR = Path(__file__).resolve().parents[1] / "calibration" / "teleoperators" / "so_leader"
+DEFAULT_POLICY_PATH = DEFAULT_OUTPUT_ROOT / "1A_3object" / "checkpoint_step_100000"
+DEFAULT_POLICY_TYPE = "mask_act"
+DEFAULT_DIFFUSION_INFERENCE_STEPS = 8
+DEFAULT_DIFFUSION_REPLAN_STEPS = 8
+DEFAULT_DIFFUSION_EXECUTION_MODE = "asynchronous"
+DEFAULT_CAMERA_READ_MODE = "wait_new_frame"
+DEFAULT_SEGMENTATION_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "best.pt"
+SEGMENTATION_OBJECT_PRESENT_MIN_RATIO = 0.001
+SEGMENTATION_SCREW_OBJECT_PRESENT_MIN_RATIO = 0.0008
+SEGMENTATION_OCCLUDER_COMPLETE_RATIO = 0.50
+SEGMENTATION_VOTE_WINDOW = 7
+SEGMENTATION_VOTE_REQUIRED = 4
 RESULTS_FILENAME = "eval_results.jsonl"
 DEFAULT_TRIALS_PER_GRID = 10
+DEFAULT_LEFT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E122511-if00"
+DEFAULT_RIGHT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E119029-if00"
 
 POLICY_TYPES = (
     "mask_act",
@@ -46,11 +60,27 @@ POLICY_TYPES = (
     "sarm",
 )
 RESULT_CHOICES = ("success", "failure")
-TASK_CHOICES = ("cube1", "cube2", "cube3")
+TASK_CHOICES = ("cube", "paperball", "screw", "cube_r", "paperball_r", "screw_r")
 
-DEFAULT_CAMERA_WIDTH = 640
-DEFAULT_CAMERA_HEIGHT = 480
+CAMERA_WIDTH = 1280
+CAMERA_HEIGHT = 720
+LOW_CAMERA_WIDTH = 640
+LOW_CAMERA_HEIGHT = 360
+FALLBACK_CAMERA_WIDTH = 640
+FALLBACK_CAMERA_HEIGHT = 480
 DEFAULT_CAMERA_FPS = 30
+
+SEGMENTATION_PALETTE = (
+    (0, 0, 0),
+    (50, 160, 255),
+    (255, 80, 80),
+    (60, 220, 120),
+    (210, 210, 80),
+)
+SEGMENTATION_MEAN = (0.485, 0.456, 0.406)
+SEGMENTATION_STD = (0.229, 0.224, 0.225)
+PREVIEW_MIN_WIDTH = 220
+PREVIEW_MAX_WIDTH = 420
 
 # Median initial joint pose from the nine successful center-cell 4B evaluations
 # recorded on 2026-06-22. Medians reduce the influence of individual reset drift.
@@ -77,29 +107,116 @@ class CheckpointOption:
     policy_type: str
 
 
-class LocalBimanualSOLeader:
+class LocalBimanualSOFollower:
+    name = "bi_so_follower"
+
     def __init__(self, left_arm: Any, right_arm: Any) -> None:
         self.left_arm = left_arm
         self.right_arm = right_arm
+        self.cameras = {**left_arm.cameras, **right_arm.cameras}
+        self._io_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=8, thread_name_prefix="eval-bimanual-follower-io"
+        )
+
+    @property
+    def global_camera_keys(self) -> set[str]:
+        return set(self.cameras)
+
+    @property
+    def robot_type(self) -> str:
+        return self.name
+
+    @property
+    def observation_features(self) -> dict[str, type | tuple[int, int, int]]:
+        return {
+            **{
+                key if key in self.global_camera_keys else f"left_{key}": value
+                for key, value in self.left_arm.observation_features.items()
+            },
+            **{f"right_{key}": value for key, value in self.right_arm.observation_features.items()},
+        }
+
+    @property
+    def action_features(self) -> dict[str, type]:
+        return {
+            **{f"left_{key}": value for key, value in self.left_arm.action_features.items()},
+            **{f"right_{key}": value for key, value in self.right_arm.action_features.items()},
+        }
+
+    @property
+    def is_connected(self) -> bool:
+        return self.left_arm.is_connected and self.right_arm.is_connected
 
     def connect(self) -> None:
         self.left_arm.connect()
         self.right_arm.connect()
 
-    def get_action(self) -> dict[str, float]:
-        left_action = self.left_arm.get_action()
-        right_action = self.right_arm.get_action()
+    def get_observation(self) -> dict[str, Any]:
+        futures: dict[concurrent.futures.Future, tuple[str, str]] = {}
+        futures[self._io_executor.submit(self._read_arm_motors, self.left_arm)] = ("left_motors", "")
+        futures[self._io_executor.submit(self._read_arm_motors, self.right_arm)] = ("right_motors", "")
+        for camera_key, camera in self.cameras.items():
+            futures[self._io_executor.submit(camera.async_read)] = ("camera", camera_key)
+
+        left_obs: dict[str, Any] = {}
+        right_obs: dict[str, Any] = {}
+        camera_obs: dict[str, Any] = {}
+        for future in concurrent.futures.as_completed(futures):
+            kind, key = futures[future]
+            if kind == "left_motors":
+                left_obs = future.result()
+            elif kind == "right_motors":
+                right_obs = future.result()
+            else:
+                camera_obs[key] = future.result()
+
         return {
-            **{f"left_{key}": value for key, value in left_action.items()},
-            **{f"right_{key}": value for key, value in right_action.items()},
+            **{f"left_{key}": value for key, value in left_obs.items()},
+            **{f"right_{key}": value for key, value in right_obs.items()},
+            **camera_obs,
         }
 
+    def send_action(self, action: dict[str, float]) -> dict[str, float]:
+        left_action = {key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")}
+        right_action = {
+            key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")
+        }
+        left_future = self._io_executor.submit(self.left_arm.send_action, left_action)
+        right_future = self._io_executor.submit(self.right_arm.send_action, right_action)
+        sent_left = left_future.result()
+        sent_right = right_future.result()
+        return {
+            **{f"left_{key}": value for key, value in sent_left.items()},
+            **{f"right_{key}": value for key, value in sent_right.items()},
+        }
+
+    @staticmethod
+    def _read_arm_motors(arm: Any) -> dict[str, float]:
+        obs_dict = arm.bus.sync_read("Present_Position")
+        return {f"{motor}.pos": val for motor, val in obs_dict.items()}
+
     def disconnect(self) -> None:
-        for label, arm in (("left leader", self.left_arm), ("right leader", self.right_arm)):
-            try:
-                arm.disconnect()
-            except Exception as exc:
-                print(f"[GUI eval] Warning: disconnect failed for {label}: {exc}", flush=True)
+        self._disconnect_arm_safely("left follower", self.left_arm)
+        self._disconnect_arm_safely("right follower", self.right_arm)
+        self._io_executor.shutdown(wait=True, cancel_futures=True)
+
+    @staticmethod
+    def _disconnect_arm_safely(label: str, arm: Any) -> None:
+        try:
+            arm.disconnect()
+            return
+        except Exception as exc:
+            print(f"[GUI eval] Warning: normal disconnect failed for {label}: {exc}", flush=True)
+
+        try:
+            for motor in getattr(arm.bus, "motors", {}):
+                try:
+                    arm.bus.disable_torque(motor, num_retry=2)
+                except Exception:
+                    pass
+            arm.bus.disconnect(disable_torque=False)
+        except Exception as exc:
+            print(f"[GUI eval] Warning: force-closing bus failed for {label}: {exc}", flush=True)
 
 
 class PersistentFlexibleRealSenseCamera:
@@ -200,6 +317,322 @@ class PersistentFlexibleRealSenseCamera:
         return color, depth
 
 
+class EvalFlexibleOpenCVCamera:
+    """OpenCV camera that returns frames resized to the configured dataset resolution."""
+
+    def __init__(self, config: Any, fallback_width: int = FALLBACK_CAMERA_WIDTH, fallback_height: int = FALLBACK_CAMERA_HEIGHT) -> None:
+        self.config = config
+        self.index_or_path = config.index_or_path
+        self.width = int(config.width)
+        self.height = int(config.height)
+        self.fps = int(config.fps or DEFAULT_CAMERA_FPS)
+        self.fallback_width = fallback_width
+        self.fallback_height = fallback_height
+        self.capture = None
+        self.frame_lock = threading.Lock()
+        self.latest_frame = None
+        self.latest_timestamp: float | None = None
+
+    @property
+    def is_connected(self) -> bool:
+        return self.capture is not None and self.capture.isOpened()
+
+    def connect(self) -> None:
+        if self.is_connected:
+            return
+        import cv2
+
+        target = self.index_or_path
+        if isinstance(target, Path):
+            target = str(target)
+        self.capture = cv2.VideoCapture(target)
+        if not self.capture.isOpened():
+            self.capture.release()
+            self.capture = None
+            raise RuntimeError(f"Could not open OpenCV camera {self.index_or_path}")
+        self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        self.capture.set(cv2.CAP_PROP_FPS, self.fps)
+
+        ok, frame = self.capture.read()
+        if not ok:
+            self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.fallback_width)
+            self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.fallback_height)
+            ok, frame = self.capture.read()
+        if not ok:
+            raise RuntimeError(f"Failed to read OpenCV camera {self.index_or_path}")
+        self._store_frame(frame)
+
+    def disconnect(self) -> None:
+        if self.capture is not None:
+            self.capture.release()
+        self.capture = None
+
+    def async_read(self, timeout_ms: int = 200):
+        del timeout_ms
+        import cv2
+
+        if self.capture is None:
+            raise RuntimeError("OpenCV camera is not connected.")
+        ok, frame = self.capture.read()
+        if not ok:
+            raise RuntimeError(f"Failed to read OpenCV camera {self.index_or_path}")
+        return self._store_frame(frame)
+
+    def read_latest(self, max_age_ms: int = 1000):
+        del max_age_ms
+        return self.async_read()
+
+    def _store_frame(self, frame: Any):
+        import cv2
+        import numpy as np
+
+        if frame.ndim == 2:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+        else:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if frame.shape[1] != self.width or frame.shape[0] != self.height:
+            frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
+        frame = np.ascontiguousarray(frame)
+        with self.frame_lock:
+            self.latest_frame = frame
+            self.latest_timestamp = time.perf_counter()
+        return frame
+
+
+class SegmentationPreviewModel:
+    def __init__(self, checkpoint_path: str | Path, device_name: str = "auto") -> None:
+        self.checkpoint_path = Path(checkpoint_path).expanduser()
+        self.device_name = device_name
+        self.model = None
+        self.labels: list[str] = []
+        self.image_size: tuple[int, int] = (320, 180)
+        self.device = None
+
+    def _load(self) -> None:
+        if self.model is not None:
+            return
+        import torch
+        import torch.nn as nn
+        import torch.nn.functional as F
+
+        class SeparableConv(nn.Module):
+            def __init__(self, in_ch: int, out_ch: int, stride: int = 1) -> None:
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Conv2d(in_ch, in_ch, 3, stride=stride, padding=1, groups=in_ch, bias=False),
+                    nn.BatchNorm2d(in_ch),
+                    nn.ReLU(inplace=True),
+                    nn.Conv2d(in_ch, out_ch, 1, bias=False),
+                    nn.BatchNorm2d(out_ch),
+                    nn.ReLU(inplace=True),
+                )
+
+            def forward(self, x: Any) -> Any:
+                return self.net(x)
+
+        class TinyUNet(nn.Module):
+            def __init__(self, num_classes: int, width: int = 32) -> None:
+                super().__init__()
+                c1, c2, c3, c4 = width, width * 2, width * 4, width * 6
+                self.stem = nn.Sequential(
+                    nn.Conv2d(3, c1, 3, padding=1, bias=False),
+                    nn.BatchNorm2d(c1),
+                    nn.ReLU(inplace=True),
+                    SeparableConv(c1, c1),
+                )
+                self.down1 = SeparableConv(c1, c2, stride=2)
+                self.down2 = SeparableConv(c2, c3, stride=2)
+                self.down3 = SeparableConv(c3, c4, stride=2)
+                self.fuse2 = SeparableConv(c4 + c3, c3)
+                self.fuse1 = SeparableConv(c3 + c2, c2)
+                self.fuse0 = SeparableConv(c2 + c1, c1)
+                self.head = nn.Conv2d(c1, num_classes, 1)
+
+            def forward(self, x: Any) -> Any:
+                s0 = self.stem(x)
+                s1 = self.down1(s0)
+                s2 = self.down2(s1)
+                x = self.down3(s2)
+                x = F.interpolate(x, size=s2.shape[-2:], mode="bilinear", align_corners=False)
+                x = self.fuse2(torch.cat([x, s2], dim=1))
+                x = F.interpolate(x, size=s1.shape[-2:], mode="bilinear", align_corners=False)
+                x = self.fuse1(torch.cat([x, s1], dim=1))
+                x = F.interpolate(x, size=s0.shape[-2:], mode="bilinear", align_corners=False)
+                x = self.fuse0(torch.cat([x, s0], dim=1))
+                return self.head(x)
+
+        if not self.checkpoint_path.exists():
+            raise FileNotFoundError(f"Segmentation checkpoint does not exist: {self.checkpoint_path}")
+        checkpoint = torch.load(self.checkpoint_path, map_location="cpu", weights_only=False)
+        self.labels = list(checkpoint.get("labels", ["background", "occluder", "object", "region", "tool"]))
+        self.image_size = tuple(checkpoint.get("image_size", (320, 180)))
+        width = int(checkpoint.get("args", {}).get("width", 32))
+        requested = self.device_name.strip().lower()
+        if requested == "auto":
+            requested = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device(requested)
+        model = TinyUNet(num_classes=len(self.labels), width=width)
+        model.load_state_dict(checkpoint["model"])
+        model.to(self.device).eval()
+        self.model = model
+
+    @property
+    def loaded_device(self) -> str:
+        return str(self.device) if self.device is not None else "not-loaded"
+
+    def predict(self, images: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str], dict[str, Any]]:
+        self._load()
+        import cv2
+        import numpy as np
+        import torch
+
+        assert self.model is not None
+        assert self.device is not None
+        keys: list[str] = []
+        tensors = []
+        originals: dict[str, Any] = {}
+        mean = np.asarray(SEGMENTATION_MEAN, dtype=np.float32)
+        std = np.asarray(SEGMENTATION_STD, dtype=np.float32)
+        for key in ("front", "side"):
+            image = images.get(key)
+            if image is None or not hasattr(image, "ndim") or image.ndim != 3:
+                continue
+            rgb = np.asarray(image)
+            if rgb.dtype != np.uint8:
+                rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+            resized = cv2.resize(rgb, self.image_size, interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+            resized = (resized - mean) / std
+            tensors.append(torch.from_numpy(resized.transpose(2, 0, 1)))
+            originals[key] = rgb
+            keys.append(key)
+        if not tensors:
+            return {}, {}, {}
+
+        batch = torch.stack(tensors).float().to(self.device)
+        with torch.inference_mode():
+            logits = self.model(batch)
+            preds = logits.argmax(dim=1).cpu().numpy().astype(np.uint8)
+
+        palette = np.asarray(SEGMENTATION_PALETTE, dtype=np.uint8)
+        overlays: dict[str, Any] = {}
+        summaries: dict[str, str] = {}
+        measurements: dict[str, Any] = {}
+        for key, pred_small in zip(keys, preds):
+            image = originals[key]
+            pred = cv2.resize(pred_small, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+            color = palette[np.clip(pred, 0, len(palette) - 1)]
+            parts = []
+            total = max(pred.size, 1)
+            class_ratios: dict[str, float] = {}
+            for class_id, label in enumerate(self.labels[1:], start=1):
+                ratio = float((pred == class_id).sum()) / total
+                class_ratios[label] = ratio
+                parts.append(f"{label} {100.0 * ratio:.1f}%")
+            summaries[key] = ", ".join(parts)
+            class_bboxes = {
+                "object": self._class_bbox(pred, "object", largest_component=True),
+                "occluder": self._class_bbox(pred, "occluder"),
+                "region": self._class_bbox(pred, "region", largest_component=True),
+            }
+            overlay = np.ascontiguousarray(color)
+            for label, box_color in (
+                ("object", (255, 40, 40)),
+                ("occluder", (50, 160, 255)),
+                ("region", (60, 220, 120)),
+            ):
+                bbox = class_bboxes.get(label)
+                if bbox is None:
+                    continue
+                x0, y0, x1, y1 = bbox
+                cv2.rectangle(overlay, (x0, y0), (x1, y1), box_color, 2)
+                cv2.putText(
+                    overlay,
+                    label,
+                    (x0, max(y0 - 5, 14)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.48,
+                    box_color,
+                    1,
+                    cv2.LINE_AA,
+                )
+            overlays[key] = overlay
+            measurements[key] = {
+                "class_ratios": class_ratios,
+                "class_bboxes": class_bboxes,
+                "object_in_region": self._object_bbox_inside_region(pred),
+                "object_occluder_separated": self._object_bbox_separated_from_occluder(pred),
+            }
+        return overlays, summaries, measurements
+
+    def _class_bbox(self, pred: Any, label: str, largest_component: bool = False) -> list[int] | None:
+        import numpy as np
+
+        label_to_id = {label_name: idx for idx, label_name in enumerate(self.labels)}
+        class_id = label_to_id.get(label)
+        if class_id is None:
+            return None
+        mask = (pred == class_id).astype(np.uint8)
+        if largest_component:
+            mask = self._largest_connected_component(mask)
+        yx = np.argwhere(mask)
+        if yx.size == 0:
+            return None
+        y0, x0 = yx.min(axis=0)
+        y1, x1 = yx.max(axis=0)
+        return [int(x0), int(y0), int(x1), int(y1)]
+
+    @staticmethod
+    def _largest_connected_component(mask: Any) -> Any:
+        import cv2
+        import numpy as np
+
+        mask = np.asarray(mask, dtype=np.uint8)
+        if mask.sum() == 0:
+            return mask
+        num_labels, labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        if num_labels <= 1:
+            return mask
+        largest_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        return (labels == largest_label).astype(np.uint8)
+
+    def _object_bbox_inside_region(self, pred: Any, margin_px: int = 2) -> bool:
+        object_bbox = self._class_bbox(pred, "object", largest_component=True)
+        region_bbox = self._class_bbox(pred, "region", largest_component=True)
+        if object_bbox is None or region_bbox is None:
+            return False
+        obj_x0, obj_y0, obj_x1, obj_y1 = object_bbox
+        reg_x0, reg_y0, reg_x1, reg_y1 = region_bbox
+        return (
+            obj_x0 >= reg_x0 - margin_px
+            and obj_y0 >= reg_y0 - margin_px
+            and obj_x1 <= reg_x1 + margin_px
+            and obj_y1 <= reg_y1 + margin_px
+        )
+
+    def _object_bbox_separated_from_occluder(self, pred: Any, margin_px: int = 2) -> bool:
+        import cv2
+        import numpy as np
+
+        label_to_id = {label_name: idx for idx, label_name in enumerate(self.labels)}
+        object_id = label_to_id.get("object")
+        occluder_id = label_to_id.get("occluder")
+        if object_id is None or occluder_id is None:
+            return False
+        object_mask = (pred == object_id).astype(np.uint8)
+        occluder_mask = (pred == occluder_id).astype(np.uint8)
+        if object_mask.sum() == 0 or occluder_mask.sum() == 0:
+            return False
+        if margin_px > 0:
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (2 * margin_px + 1, 2 * margin_px + 1),
+            )
+            object_mask = cv2.dilate(object_mask, kernel)
+        return not bool((object_mask.astype(bool) & occluder_mask.astype(bool)).any())
+
+
 class EvalPolicyApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -219,10 +652,13 @@ class EvalPolicyApp:
         self.last_command: list[str] = []
         self.last_run: dict[str, str | float | int | bool | None] = {}
         self.result_saved = True
+        self.saving_result = False
         self.active_eval_metadata: dict[str, Any] = {}
         self.active_dataset_root: Path | None = None
         self.log_queue: queue.Queue[str] = queue.Queue()
-        self.preview_queue: queue.Queue[tuple[str, Any, dict[str, Any], float, str]] = queue.Queue(maxsize=1)
+        self.preview_queue: queue.Queue[
+            tuple[dict[str, Any], dict[str, Any], float, str, dict[str, Any]]
+        ] = queue.Queue(maxsize=1)
         self.checkpoint_options: list[CheckpointOption] = []
         self.robot: Any | None = None
         self.robot_lock = threading.RLock()
@@ -234,52 +670,67 @@ class EvalPolicyApp:
         self.stop_teleop_requested = False
         self.reset_running = False
         self.initial_joint_action: dict[str, float] | None = None
-        self.current_image = None
+        self.current_images: dict[str, Any] = {}
+        self.current_segmentation_images: dict[str, Any] = {}
+        self.current_model_mask_images: dict[str, Any] = {}
+        self.preview_labels: dict[str, ttk.Label] = {}
+        self.segmentation_preview_labels: dict[str, ttk.Label] = {}
+        self.segmentation_summary_labels: dict[str, ttk.Label] = {}
+        self.model_mask_preview_labels: dict[str, ttk.Label] = {}
+        self.model_mask_summary_labels: dict[str, ttk.Label] = {}
+        self.segmentation_model: SegmentationPreviewModel | None = None
+        self.segmentation_loaded_logged = False
+        self.segmentation_error_logged = False
+        self.segmentation_eval_metrics = self._new_segmentation_eval_metrics()
+        self.connected_preview_stop: threading.Event | None = None
+        self.connected_preview_thread: threading.Thread | None = None
         self.camera_preview_dialog: tk.Toplevel | None = None
+        self.result_dialog: tk.Toplevel | None = None
         self.camera_preview_stop: threading.Event | None = None
+        self.config_preset_paths: dict[str, Path] = {}
 
         self.vars = {
-            "policy_type": tk.StringVar(value="act"),
+            "config_preset": tk.StringVar(value=""),
+            "policy_type": tk.StringVar(value=DEFAULT_POLICY_TYPE),
             "checkpoint": tk.StringVar(value=""),
-            "checkpoint_path": tk.StringVar(value=""),
+            "checkpoint_path": tk.StringVar(value=str(DEFAULT_POLICY_PATH)),
             "conda_env": tk.StringVar(value="lerobot"),
             "robot_mode": tk.StringVar(value="bimanual"),
             "robot_type": tk.StringVar(value="bi_so_follower"),
-            "robot_port": tk.StringVar(value="/dev/ttyACM0"),
+            "robot_port": tk.StringVar(value=DEFAULT_LEFT_FOLLOWER_PORT),
             "robot_id": tk.StringVar(value="eval_bimanual_follower"),
-            "left_follower_port": tk.StringVar(value="/dev/ttyACM0"),
-            "right_follower_port": tk.StringVar(value="/dev/ttyACM1"),
+            "left_follower_port": tk.StringVar(value=DEFAULT_LEFT_FOLLOWER_PORT),
+            "right_follower_port": tk.StringVar(value=DEFAULT_RIGHT_FOLLOWER_PORT),
             "left_follower_id": tk.StringVar(value="my_awesome_follower_arm"),
             "right_follower_id": tk.StringVar(value="my_awesome_follower_arm_r"),
             "calibration_dir": tk.StringVar(value=str(DEFAULT_CALIBRATION_DIR)),
-            "left_leader_port": tk.StringVar(value="/dev/ttyACM2"),
-            "right_leader_port": tk.StringVar(value="/dev/ttyACM3"),
-            "left_leader_id": tk.StringVar(value="my_awesome_leader_arm"),
-            "right_leader_id": tk.StringVar(value="my_awesome_leader_arm_r"),
-            "teleop_calibration_dir": tk.StringVar(value=str(DEFAULT_TELEOP_CALIBRATION_DIR)),
+            "calibration_match": tk.StringVar(value="Board serial"),
             "realsense_serial": tk.StringVar(value=""),
             "front_camera_type": tk.StringVar(value="opencv"),
             "front_camera_choice": tk.StringVar(value=""),
-            "opencv_front": tk.StringVar(value="/dev/video4"),
-            "opencv_side": tk.StringVar(value=""),
+            "opencv_front": tk.StringVar(value="/dev/video10"),
+            "opencv_side": tk.StringVar(value="/dev/video4"),
             "camera_config": tk.StringVar(value=""),
             "dataset_repo_id": tk.StringVar(value="seeed/eval_test"),
             "dataset_root": tk.StringVar(value=str(DEFAULT_EVAL_ROOT)),
             "task": tk.StringVar(value=TASK_CHOICES[0]),
-            "episode_time_s": tk.StringVar(value="30"),
+            "episode_time_s": tk.StringVar(value="25"),
             "fps": tk.StringVar(value="30"),
             "model_chunk_size": tk.StringVar(value="N/A"),
             "prediction_steps": tk.StringVar(value=""),
-            "n_action_steps": tk.StringVar(value=""),
-            "num_inference_steps": tk.StringVar(value=""),
-            "noise_scheduler_type": tk.StringVar(value="checkpoint"),
-            "execution_mode": tk.StringVar(value="synchronous"),
-            "camera_read_mode": tk.StringVar(value="wait_new_frame"),
+            "n_action_steps": tk.StringVar(value=str(DEFAULT_DIFFUSION_REPLAN_STEPS)),
+            "num_inference_steps": tk.StringVar(value=str(DEFAULT_DIFFUSION_INFERENCE_STEPS)),
+            "noise_scheduler_type": tk.StringVar(value="DDPM"),
+            "execution_mode": tk.StringVar(value=DEFAULT_DIFFUSION_EXECUTION_MODE),
+            "camera_read_mode": tk.StringVar(value=DEFAULT_CAMERA_READ_MODE),
+            "segmentation_model_path": tk.StringVar(value=str(DEFAULT_SEGMENTATION_MODEL_PATH)),
+            "segmentation_device": tk.StringVar(value="auto"),
             "fusion_steps": tk.StringVar(value="0"),
             "fusion_history_weight": tk.StringVar(value="0"),
-            "grid_size": tk.StringVar(value="3"),
+            "grid_rows": tk.StringVar(value="3"),
+            "grid_cols": tk.StringVar(value="4"),
             "grid_cell": tk.StringVar(value="(0,0)"),
-            "reset_time_s": tk.StringVar(value="3.0"),
+            "reset_time_s": tk.StringVar(value="5.0"),
             "extra_args": tk.StringVar(
                 value="--display_data=false --dataset.push_to_hub=false --dataset.num_episodes=1 --dataset.vcodec=h264"
             ),
@@ -291,30 +742,36 @@ class EvalPolicyApp:
             "object_exposed": tk.StringVar(value="no"),
             "object_pushed_out": tk.StringVar(value="no"),
             "object_push_success": tk.StringVar(value="no"),
-            "contact_failure_count": tk.StringVar(value="0"),
-            "failure_recovery_count": tk.StringVar(value="0"),
+            "result_tags": tk.StringVar(value=""),
         }
         self.enable_realsense = tk.BooleanVar(value=False)
-        self.include_side_camera = tk.BooleanVar(value=False)
+        self.include_side_camera = tk.BooleanVar(value=True)
+        self.low_resolution = tk.BooleanVar(value=True)
         self.auto_reset_after_policy = tk.BooleanVar(value=True)
         self.lock_grippers = tk.BooleanVar(value=True)
         self.save_video = tk.BooleanVar(value=True)
         self.use_amp = tk.BooleanVar(value=True)
+        self.enable_segmentation_preview = tk.BooleanVar(value=True)
         self.camera_options: dict[str, tuple[str, str]] = {}
 
         self._build_ui()
         self._refresh_camera_config_preview()
         for key in ("realsense_serial", "opencv_front", "opencv_side"):
             self.vars[key].trace_add("write", lambda *_args: self._refresh_camera_config_preview())
+        for key in ("segmentation_model_path", "segmentation_device"):
+            self.vars[key].trace_add("write", self._reset_segmentation_preview_model)
         self.vars["front_camera_type"].trace_add("write", self._on_front_camera_type_changed)
         self.enable_realsense.trace_add("write", lambda *_args: self._refresh_camera_config_preview())
         self.include_side_camera.trace_add("write", lambda *_args: self._refresh_camera_config_preview())
-        self.vars["grid_size"].trace_add("write", self._refresh_grid_cells)
+        self.low_resolution.trace_add("write", lambda *_args: self._refresh_camera_config_preview())
+        for key in ("grid_rows", "grid_cols"):
+            self.vars[key].trace_add("write", self._refresh_grid_cells)
         for key in ("policy_type", "task", "grid_cell", "dataset_root", "trials_per_grid"):
             self.vars[key].trace_add("write", self._refresh_grid_stats)
         self.vars["result"].trace_add("write", self._on_result_changed)
         self._refresh_grid_cells()
         self._on_result_changed()
+        self.refresh_config_presets()
         self.refresh_checkpoints()
         self.root.after(200, self._tick)
 
@@ -538,6 +995,23 @@ class EvalPolicyApp:
         top.columnconfigure(3, weight=1)
 
         row = 0
+        ttk.Label(top, text="Config preset").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
+        self.config_preset_combo = ttk.Combobox(
+            top,
+            textvariable=self.vars["config_preset"],
+            state="readonly",
+            width=18,
+        )
+        self.config_preset_combo.grid(row=row, column=1, sticky=tk.W, pady=5)
+        self.config_preset_combo.bind("<<ComboboxSelected>>", self.load_selected_config_preset)
+        ttk.Button(top, text="Refresh Configs", command=self.refresh_config_presets).grid(
+            row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5
+        )
+        ttk.Button(top, text="Load Config", command=self.load_selected_config_preset).grid(
+            row=row, column=3, sticky=tk.W, padx=(8, 0), pady=5
+        )
+
+        row += 1
         ttk.Label(top, text="Algorithm").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
         ttk.Combobox(
             top,
@@ -568,7 +1042,7 @@ class EvalPolicyApp:
         ttk.Combobox(
             top,
             textvariable=self.vars["robot_mode"],
-            values=("bimanual", "single"),
+            values=("bimanual",),
             state="readonly",
             width=24,
         ).grid(row=row, column=3, sticky=tk.W)
@@ -578,7 +1052,8 @@ class EvalPolicyApp:
         ttk.Combobox(
             top,
             textvariable=self.vars["robot_type"],
-            values=("bi_so_follower", "so101_follower", "so100_follower"),
+            values=("bi_so_follower",),
+            state="readonly",
             width=24,
         ).grid(row=row, column=1, sticky=tk.W)
         ttk.Label(top, text="Runtime id").grid(row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5)
@@ -601,21 +1076,17 @@ class EvalPolicyApp:
         ttk.Entry(top, textvariable=self.vars["calibration_dir"]).grid(row=row, column=1, columnspan=3, sticky=tk.EW)
 
         row += 1
-        ttk.Label(top, text="Left leader").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
-        ttk.Entry(top, textvariable=self.vars["left_leader_port"]).grid(row=row, column=1, sticky=tk.EW)
-        ttk.Label(top, text="Right leader").grid(row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5)
-        ttk.Entry(top, textvariable=self.vars["right_leader_port"]).grid(row=row, column=3, sticky=tk.EW)
-
-        row += 1
-        ttk.Label(top, text="Leader calib ids").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
-        leader_ids = ttk.Frame(top)
-        leader_ids.grid(row=row, column=1, sticky=tk.EW)
-        leader_ids.columnconfigure(0, weight=1)
-        leader_ids.columnconfigure(1, weight=1)
-        ttk.Entry(leader_ids, textvariable=self.vars["left_leader_id"]).grid(row=0, column=0, sticky=tk.EW)
-        ttk.Entry(leader_ids, textvariable=self.vars["right_leader_id"]).grid(row=0, column=1, sticky=tk.EW, padx=(8, 0))
-        ttk.Label(top, text="Leader calib dir").grid(row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5)
-        ttk.Entry(top, textvariable=self.vars["teleop_calibration_dir"]).grid(row=row, column=3, sticky=tk.EW)
+        ttk.Label(top, text="Calibration match").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
+        ttk.Combobox(
+            top,
+            textvariable=self.vars["calibration_match"],
+            values=("Board serial", "Arm id"),
+            state="readonly",
+            width=18,
+        ).grid(row=row, column=1, sticky=tk.W, pady=5)
+        ttk.Label(top, text="Follower only; leaders are not connected for policy evaluation.").grid(
+            row=row, column=2, columnspan=2, sticky=tk.W, padx=(16, 0), pady=5
+        )
 
         row += 1
         ttk.Label(top, text="Front camera type").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
@@ -671,7 +1142,7 @@ class EvalPolicyApp:
         ttk.Button(save_frame, text="Browse", command=self.browse_dataset_root).grid(row=0, column=1, padx=(8, 0))
 
         row += 1
-        ttk.Label(top, text="Task").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
+        ttk.Label(top, text="Task type").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
         ttk.Combobox(
             top,
             textvariable=self.vars["task"],
@@ -680,20 +1151,29 @@ class EvalPolicyApp:
         ).grid(row=row, column=1, columnspan=3, sticky=tk.EW)
 
         row += 1
-        ttk.Label(top, text="Initial region grid N×N").grid(
+        ttk.Label(top, text="Initial region grid rows×cols").grid(
             row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
         )
-        ttk.Entry(top, textvariable=self.vars["grid_size"], width=12).grid(row=row, column=1, sticky=tk.W)
+        grid_shape_frame = ttk.Frame(top)
+        grid_shape_frame.grid(row=row, column=1, sticky=tk.W)
+        ttk.Entry(grid_shape_frame, textvariable=self.vars["grid_rows"], width=5).grid(row=0, column=0)
+        ttk.Label(grid_shape_frame, text="×").grid(row=0, column=1, padx=4)
+        ttk.Entry(grid_shape_frame, textvariable=self.vars["grid_cols"], width=5).grid(row=0, column=2)
         ttk.Label(top, text="Target cell (x,y)").grid(
             row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5
         )
+        cell_frame = ttk.Frame(top)
+        cell_frame.grid(row=row, column=3, sticky=tk.W)
         self.grid_cell_combo = ttk.Combobox(
-            top,
+            cell_frame,
             textvariable=self.vars["grid_cell"],
             state="readonly",
             width=12,
         )
-        self.grid_cell_combo.grid(row=row, column=3, sticky=tk.W)
+        self.grid_cell_combo.grid(row=0, column=0, sticky=tk.W)
+        ttk.Button(cell_frame, text="Next Open Cell", command=self.select_next_open_grid_cell).grid(
+            row=0, column=1, padx=(8, 0)
+        )
 
         row += 1
         ttk.Label(top, text="Trials per cell").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
@@ -767,6 +1247,9 @@ class EvalPolicyApp:
         ttk.Checkbutton(top, text="Use AMP", variable=self.use_amp).grid(
             row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
         )
+        ttk.Checkbutton(top, text="Low res cameras", variable=self.low_resolution).grid(
+            row=row, column=1, sticky=tk.W, pady=5
+        )
         ttk.Label(top, text="Camera read").grid(row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5)
         ttk.Combobox(
             top,
@@ -775,6 +1258,19 @@ class EvalPolicyApp:
             state="readonly",
             width=20,
         ).grid(row=row, column=3, sticky=tk.W)
+
+        row += 1
+        ttk.Checkbutton(
+            top,
+            text="Segmentation preview",
+            variable=self.enable_segmentation_preview,
+        ).grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
+        ttk.Entry(top, textvariable=self.vars["segmentation_model_path"]).grid(
+            row=row, column=1, columnspan=2, sticky=tk.EW, pady=5
+        )
+        ttk.Entry(top, textvariable=self.vars["segmentation_device"], width=12).grid(
+            row=row, column=3, sticky=tk.W, pady=5
+        )
 
         row += 1
         ttk.Label(top, text="Custom fusion steps (0=off)").grid(
@@ -791,7 +1287,7 @@ class EvalPolicyApp:
         )
 
         row += 1
-        ttk.Checkbutton(top, text="Auto reset after policy", variable=self.auto_reset_after_policy).grid(
+        ttk.Checkbutton(top, text="Auto reset after run", variable=self.auto_reset_after_policy).grid(
             row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
         )
         ttk.Checkbutton(top, text="Lock grippers", variable=self.lock_grippers).grid(
@@ -822,11 +1318,9 @@ class EvalPolicyApp:
         self.stop_button = ttk.Button(buttons, text="End / Stop", command=self.stop_eval, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=(10, 0), ipady=4)
         self.teleop_button = ttk.Button(buttons, text="Start Teleop", command=self.start_teleop, state=tk.DISABLED)
-        self.teleop_button.pack(side=tk.LEFT, padx=(10, 0), ipady=4)
         self.stop_teleop_button = ttk.Button(
             buttons, text="Stop Teleop", command=self.stop_teleop, state=tk.DISABLED
         )
-        self.stop_teleop_button.pack(side=tk.LEFT, padx=(10, 0), ipady=4)
         self.capture_reset_button = ttk.Button(
             buttons, text="Capture Reset Pose", command=self.capture_reset_pose, state=tk.DISABLED
         )
@@ -873,16 +1367,442 @@ class EvalPolicyApp:
         log_frame.rowconfigure(0, weight=1)
         log_frame.columnconfigure(0, weight=1)
         log_frame.columnconfigure(1, weight=0)
-        self.preview_label = ttk.Label(log_frame, anchor=tk.CENTER)
-        self.preview_label.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 10))
+        preview_frame = ttk.Frame(log_frame)
+        preview_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 10))
+        preview_frame.rowconfigure(1, weight=1)
+        preview_frame.rowconfigure(4, weight=1)
+        for col in range(3):
+            preview_frame.columnconfigure(col, weight=1, minsize=PREVIEW_MIN_WIDTH)
+        for view_index, key in enumerate(("front", "side")):
+            header_row = view_index * 3
+            image_row = header_row + 1
+            summary_row = header_row + 2
+            headers = (key, f"{key} U-Net", f"{key} model masks")
+            for col, text in enumerate(headers):
+                ttk.Label(preview_frame, text=text).grid(
+                    row=header_row,
+                    column=col,
+                    sticky=tk.W,
+                    padx=(0 if col == 0 else 8, 0),
+                    pady=(8 if view_index else 0, 0),
+                )
+
+            raw_label = ttk.Label(preview_frame, anchor=tk.CENTER)
+            raw_label.grid(row=image_row, column=0, sticky=tk.NSEW)
+            self.preview_labels[key] = raw_label
+
+            seg_label = ttk.Label(preview_frame, anchor=tk.CENTER)
+            seg_label.grid(row=image_row, column=1, sticky=tk.NSEW, padx=(8, 0))
+            self.segmentation_preview_labels[key] = seg_label
+
+            model_mask_label = ttk.Label(preview_frame, anchor=tk.CENTER)
+            model_mask_label.grid(row=image_row, column=2, sticky=tk.NSEW, padx=(8, 0))
+            self.model_mask_preview_labels[key] = model_mask_label
+
+            summary_label = ttk.Label(preview_frame, text="", wraplength=PREVIEW_MIN_WIDTH)
+            summary_label.grid(row=summary_row, column=1, sticky=tk.W, padx=(8, 0))
+            self.segmentation_summary_labels[key] = summary_label
+
+            model_summary_label = ttk.Label(preview_frame, text="", wraplength=PREVIEW_MIN_WIDTH)
+            model_summary_label.grid(row=summary_row, column=2, sticky=tk.W, padx=(8, 0))
+            self.model_mask_summary_labels[key] = model_summary_label
+
         right_log = ttk.Frame(log_frame)
         right_log.grid(row=0, column=1, sticky=tk.NS)
         ttk.Label(right_log, text="Log / Action").pack(anchor=tk.W)
-        self.log_text = tk.Text(right_log, wrap=tk.WORD, height=18)
+        self.log_text = tk.Text(right_log, wrap=tk.WORD, width=24, height=14)
         scrollbar = ttk.Scrollbar(right_log, orient=tk.VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scrollbar.set)
         self.log_text.pack(side=tk.LEFT, fill=tk.Y)
         scrollbar.pack(side=tk.LEFT, fill=tk.Y)
+
+    def _reset_segmentation_preview_model(self, *_args: Any) -> None:
+        self.segmentation_model = None
+        self.segmentation_loaded_logged = False
+        self.segmentation_error_logged = False
+
+    def _segmentation_base_task(self) -> str:
+        if not hasattr(self, "vars"):
+            return ""
+        return self.vars["task"].get().strip().removesuffix("_r")
+
+    def _segmentation_object_present_min_ratio(self) -> float:
+        if self._segmentation_base_task() == "screw":
+            return SEGMENTATION_SCREW_OBJECT_PRESENT_MIN_RATIO
+        return SEGMENTATION_OBJECT_PRESENT_MIN_RATIO
+
+    def _new_segmentation_eval_metrics(self) -> dict[str, Any]:
+        return {
+            "segmentation_enabled": self.enable_segmentation_preview.get() if hasattr(self, "enable_segmentation_preview") else True,
+            "segmentation_frames": 0,
+            "segmentation_object_present_min_ratio": self._segmentation_object_present_min_ratio(),
+            "segmentation_occluder_complete_threshold": SEGMENTATION_OCCLUDER_COMPLETE_RATIO,
+            "segmentation_side_fallback_enabled": False,
+            "segmentation_side_diagnostic_only": True,
+            "segmentation_vote_window": SEGMENTATION_VOTE_WINDOW,
+            "segmentation_vote_required": SEGMENTATION_VOTE_REQUIRED,
+            "recent_segmentation_votes": [],
+            "recent_exposed_votes": 0,
+            "recent_separated_votes": 0,
+            "recent_in_region_votes": 0,
+            "recent_front_coverage_votes": 0,
+            "recent_success_votes": 0,
+            "auto_object_exposed": False,
+            "auto_object_separated": False,
+            "auto_object_reached_region": False,
+            "auto_final_front_coverage": False,
+            "auto_task_complete": False,
+            "final_object_exposed": False,
+            "final_object_separated": False,
+            "final_object_reached_region": False,
+            "final_front_coverage": False,
+            "final_task_success": False,
+            "final_failure_reason": "not_started",
+            "auto_object_exposed_time_s": None,
+            "auto_object_separated_time_s": None,
+            "auto_object_reached_region_time_s": None,
+            "auto_final_front_coverage_time_s": None,
+            "auto_task_complete_time_s": None,
+            "max_occluder_coverage_after_region": 0.0,
+            "max_front_occluder_coverage_after_region": 0.0,
+            "max_occluder_coverage": 0.0,
+            "last_front_occluder_coverage": 0.0,
+            "last_front_object_separated": False,
+            "last_side_object_separated": False,
+            "last_any_object_separated": False,
+            "last_front_object_in_region": False,
+            "last_side_object_in_region": False,
+            "last_any_object_in_region": False,
+            "last_front_object_detected": False,
+            "last_front_object_confident": False,
+            "last_side_object_detected": False,
+            "last_decision_source": "none",
+            "last_failure_reason": "not_started",
+            "segmentation_views": {
+                "front": self._new_segmentation_view_metrics(),
+                "side": self._new_segmentation_view_metrics(),
+            },
+        }
+
+    @staticmethod
+    def _new_segmentation_view_metrics() -> dict[str, Any]:
+        return {
+            "object_seen": False,
+            "object_occluder_separated_seen": False,
+            "object_in_region_seen": False,
+            "task_complete_seen": False,
+            "max_object_ratio": 0.0,
+            "max_region_ratio": 0.0,
+            "max_occluder_ratio": 0.0,
+            "max_occluder_ratio_after_region": 0.0,
+            "last_object_ratio": 0.0,
+            "last_region_ratio": 0.0,
+            "last_occluder_ratio": 0.0,
+            "last_object_in_region": False,
+            "last_object_occluder_separated": False,
+            "last_bboxes": {},
+        }
+
+    def _update_segmentation_eval_metrics(self, measurements: dict[str, Any]) -> None:
+        if not self.eval_running or self.started_at is None:
+            return
+        metrics = self.segmentation_eval_metrics
+        metrics["segmentation_enabled"] = self.enable_segmentation_preview.get()
+        metrics["segmentation_frames"] += 1
+        elapsed_s = round(time.monotonic() - self.started_at, 3)
+        view_metrics = metrics["segmentation_views"]
+        object_min_ratio = float(
+            metrics.get("segmentation_object_present_min_ratio", SEGMENTATION_OBJECT_PRESENT_MIN_RATIO)
+        )
+
+        frame_object_in_region = False
+        frame_separated_views: set[str] = set()
+        frame_max_occluder = 0.0
+        for view, measurement in measurements.items():
+            if view not in view_metrics:
+                view_metrics[view] = self._new_segmentation_view_metrics()
+            ratios = measurement.get("class_ratios", {})
+            object_ratio = float(ratios.get("object", 0.0))
+            region_ratio = float(ratios.get("region", 0.0))
+            occluder_ratio = float(ratios.get("occluder", 0.0))
+            object_seen = object_ratio >= object_min_ratio
+            object_in_region = bool(measurement.get("object_in_region")) and object_seen
+            object_occluder_separated = bool(measurement.get("object_occluder_separated")) and object_seen
+
+            view_record = view_metrics[view]
+            view_record["last_object_ratio"] = object_ratio
+            view_record["last_region_ratio"] = region_ratio
+            view_record["last_occluder_ratio"] = occluder_ratio
+            view_record["last_object_in_region"] = object_in_region
+            view_record["last_object_occluder_separated"] = object_occluder_separated
+            view_record["last_bboxes"] = measurement.get("class_bboxes", {})
+            view_record["max_object_ratio"] = max(float(view_record["max_object_ratio"]), object_ratio)
+            view_record["max_region_ratio"] = max(float(view_record["max_region_ratio"]), region_ratio)
+            view_record["max_occluder_ratio"] = max(float(view_record["max_occluder_ratio"]), occluder_ratio)
+            view_record["object_seen"] = bool(view_record["object_seen"] or object_seen)
+            view_record["object_occluder_separated_seen"] = bool(
+                view_record["object_occluder_separated_seen"] or object_occluder_separated
+            )
+            view_record["object_in_region_seen"] = bool(view_record["object_in_region_seen"] or object_in_region)
+
+            frame_object_in_region = frame_object_in_region or object_in_region
+            if object_occluder_separated:
+                frame_separated_views.add(view)
+            frame_max_occluder = max(frame_max_occluder, occluder_ratio)
+
+        any_object_separated = bool(frame_separated_views)
+        any_object_in_region = frame_object_in_region
+        metrics["max_occluder_coverage"] = max(float(metrics["max_occluder_coverage"]), frame_max_occluder)
+        front_measurement = measurements.get("front", {})
+        front_view = view_metrics.get("front", {})
+        side_view = view_metrics.get("side", {})
+        front_object_separated = bool(front_view.get("last_object_occluder_separated"))
+        front_object_in_region = bool(front_view.get("last_object_in_region"))
+        side_object_separated = bool(side_view.get("last_object_occluder_separated"))
+        side_object_in_region = bool(side_view.get("last_object_in_region"))
+        front_object_ratio = float(front_view.get("last_object_ratio", 0.0))
+        side_object_ratio = float(side_view.get("last_object_ratio", 0.0))
+        front_object_detected = front_object_ratio >= object_min_ratio
+        front_object_confident = front_object_ratio >= SEGMENTATION_OBJECT_PRESENT_MIN_RATIO
+        side_object_detected = side_object_ratio >= object_min_ratio
+        metrics["last_front_object_separated"] = front_object_separated
+        metrics["last_side_object_separated"] = side_object_separated
+        metrics["last_any_object_separated"] = any_object_separated
+        metrics["last_front_object_in_region"] = front_object_in_region
+        metrics["last_side_object_in_region"] = side_object_in_region
+        metrics["last_any_object_in_region"] = any_object_in_region
+        metrics["last_front_object_detected"] = front_object_detected
+        metrics["last_front_object_confident"] = front_object_confident
+        metrics["last_side_object_detected"] = side_object_detected
+
+        effective_object_exposed = False
+        effective_object_separated = False
+        effective_object_in_region = False
+        decision_source = "front_missing"
+        if "front" in measurements:
+            effective_object_exposed = front_object_detected
+            effective_object_separated = front_object_separated
+            effective_object_in_region = front_object_in_region
+            if front_object_confident:
+                decision_source = "front"
+            elif front_object_detected:
+                decision_source = "front_low_confidence"
+            else:
+                decision_source = "front_not_detected"
+
+        metrics["last_decision_source"] = decision_source
+        front_occluder_ratio = float(front_measurement.get("class_ratios", {}).get("occluder", 0.0))
+        metrics["last_front_occluder_coverage"] = front_occluder_ratio
+        frame_front_coverage = front_occluder_ratio >= SEGMENTATION_OCCLUDER_COMPLETE_RATIO
+        frame_task_success = effective_object_in_region and frame_front_coverage
+        vote_history = metrics["recent_segmentation_votes"]
+        vote_history.append(
+            {
+                "object_exposed": effective_object_exposed,
+                "object_separated": effective_object_separated,
+                "object_in_region": effective_object_in_region,
+                "front_coverage": frame_front_coverage,
+                "task_success": frame_task_success,
+                "decision_source": decision_source,
+            }
+        )
+        del vote_history[:-SEGMENTATION_VOTE_WINDOW]
+
+        def vote_count(field: str) -> int:
+            return sum(bool(vote.get(field)) for vote in vote_history)
+
+        metrics["recent_exposed_votes"] = vote_count("object_exposed")
+        metrics["recent_separated_votes"] = vote_count("object_separated")
+        metrics["recent_in_region_votes"] = vote_count("object_in_region")
+        metrics["recent_front_coverage_votes"] = vote_count("front_coverage")
+        metrics["recent_success_votes"] = vote_count("task_success")
+        metrics["final_object_exposed"] = metrics["recent_exposed_votes"] >= SEGMENTATION_VOTE_REQUIRED
+        metrics["final_object_separated"] = metrics["recent_separated_votes"] >= SEGMENTATION_VOTE_REQUIRED
+        metrics["final_object_reached_region"] = metrics["recent_in_region_votes"] >= SEGMENTATION_VOTE_REQUIRED
+        metrics["final_front_coverage"] = (
+            metrics["recent_front_coverage_votes"] >= SEGMENTATION_VOTE_REQUIRED
+        )
+        metrics["final_task_success"] = metrics["recent_success_votes"] >= SEGMENTATION_VOTE_REQUIRED
+
+        if metrics["final_object_exposed"] and not metrics["auto_object_exposed"]:
+            metrics["auto_object_exposed"] = True
+            metrics["auto_object_exposed_time_s"] = elapsed_s
+        if (
+            metrics["auto_object_exposed"]
+            and metrics["final_object_separated"]
+            and not metrics["auto_object_separated"]
+        ):
+            metrics["auto_object_separated"] = True
+            metrics["auto_object_separated_time_s"] = elapsed_s
+        if metrics["final_object_reached_region"] and not metrics["auto_object_reached_region"]:
+            metrics["auto_object_reached_region"] = True
+            metrics["auto_object_reached_region_time_s"] = elapsed_s
+        if metrics["auto_object_reached_region"]:
+            metrics["max_front_occluder_coverage_after_region"] = max(
+                float(metrics["max_front_occluder_coverage_after_region"]),
+                front_occluder_ratio,
+            )
+            metrics["max_occluder_coverage_after_region"] = max(
+                float(metrics["max_occluder_coverage_after_region"]),
+                frame_max_occluder,
+            )
+            for view, measurement in measurements.items():
+                occluder_ratio = float(measurement.get("class_ratios", {}).get("occluder", 0.0))
+                view_record = view_metrics[view]
+                view_record["max_occluder_ratio_after_region"] = max(
+                    float(view_record["max_occluder_ratio_after_region"]),
+                    occluder_ratio,
+                )
+                if (
+                    view == "front"
+                    and front_object_in_region
+                    and occluder_ratio >= SEGMENTATION_OCCLUDER_COMPLETE_RATIO
+                ):
+                    view_record["task_complete_seen"] = True
+            if metrics["final_front_coverage"] and not metrics["auto_final_front_coverage"]:
+                metrics["auto_final_front_coverage"] = True
+                metrics["auto_final_front_coverage_time_s"] = elapsed_s
+            if metrics["final_task_success"] and not metrics["auto_task_complete"]:
+                metrics["auto_task_complete"] = True
+                metrics["auto_task_complete_time_s"] = elapsed_s
+                self.stop_policy_requested = True
+                self.log_queue.put(
+                    "[SEG] Auto task complete: object reached region and front occluder coverage "
+                    f"reached {100.0 * front_occluder_ratio:.1f}%; "
+                    f"votes={metrics['recent_success_votes']}/{SEGMENTATION_VOTE_WINDOW}, "
+                    f"source={decision_source}; stopping policy."
+                )
+        metrics["final_failure_reason"] = self._segmentation_final_failure_reason(metrics)
+        metrics["last_failure_reason"] = metrics["final_failure_reason"]
+
+    def _segmentation_metric_record(self) -> dict[str, Any]:
+        metrics = self.segmentation_eval_metrics
+        return {
+            "segmentation_auto_metrics": metrics,
+            "final_object_exposed": bool(metrics["final_object_exposed"]),
+            "final_object_separated": bool(metrics["final_object_separated"]),
+            "final_object_reached_region": bool(metrics["final_object_reached_region"]),
+            "final_front_coverage": bool(metrics["final_front_coverage"]),
+            "final_task_success": bool(metrics["final_task_success"]),
+            "final_failure_reason": self._segmentation_final_failure_reason(metrics),
+            "last_front_object_separated": bool(metrics.get("last_front_object_separated")),
+            "last_side_object_separated": bool(metrics.get("last_side_object_separated")),
+            "last_any_object_separated": bool(metrics.get("last_any_object_separated")),
+            "last_front_object_in_region": bool(metrics.get("last_front_object_in_region")),
+            "last_side_object_in_region": bool(metrics.get("last_side_object_in_region")),
+            "last_any_object_in_region": bool(metrics.get("last_any_object_in_region")),
+            "auto_object_exposed": bool(metrics["auto_object_exposed"]),
+            "auto_object_separated": bool(metrics["auto_object_separated"]),
+            "auto_object_reached_region": bool(metrics["auto_object_reached_region"]),
+            "auto_final_front_coverage": bool(metrics["auto_final_front_coverage"]),
+            "auto_task_complete": bool(metrics["auto_task_complete"]),
+            "auto_failure_reason": self._segmentation_failure_reason(metrics),
+            "auto_max_front_occluder_coverage_after_region": float(metrics["max_front_occluder_coverage_after_region"]),
+            "auto_max_occluder_coverage_after_region": float(metrics["max_occluder_coverage_after_region"]),
+            "segmentation_object_present_min_ratio": float(metrics["segmentation_object_present_min_ratio"]),
+            "segmentation_recent_success_votes": int(metrics["recent_success_votes"]),
+            "segmentation_vote_window": int(metrics["segmentation_vote_window"]),
+            "segmentation_vote_required": int(metrics["segmentation_vote_required"]),
+            "segmentation_decision_source": str(metrics["last_decision_source"]),
+        }
+
+    def _apply_auto_result_fields(self) -> None:
+        metrics = self.segmentation_eval_metrics
+        self.vars["result"].set("success" if metrics["final_task_success"] else "failure")
+        self.vars["object_exposed"].set("yes" if metrics["final_object_exposed"] else "no")
+        self.vars["object_pushed_out"].set("yes" if metrics["final_object_separated"] else "no")
+        self.vars["object_push_success"].set("yes" if metrics["final_task_success"] else "no")
+
+    def _auto_result_summary_text(self) -> str:
+        metrics = self.segmentation_eval_metrics
+        return (
+            "Auto segmentation: "
+            f"final exposed={'yes' if metrics['final_object_exposed'] else 'no'}, "
+            f"final separated(voted)={'yes' if metrics['final_object_separated'] else 'no'}, "
+            f"final in_region(voted)={'yes' if metrics['final_object_reached_region'] else 'no'}, "
+            f"final front_cover={'yes' if metrics['final_front_coverage'] else 'no'} "
+            f"({100.0 * float(metrics['last_front_occluder_coverage']):.1f}%), "
+            f"success_votes={metrics['recent_success_votes']}/{metrics['segmentation_vote_window']}, "
+            f"source={metrics['last_decision_source']}, "
+            f"ever exposed={'yes' if metrics['auto_object_exposed'] else 'no'}, "
+            f"ever separated={'yes' if metrics['auto_object_separated'] else 'no'}, "
+            f"ever in_region={'yes' if metrics['auto_object_reached_region'] else 'no'}, "
+            f"reason={self._segmentation_final_failure_reason(metrics)}"
+        )
+
+    def _auto_result_detail_rows(self) -> list[tuple[str, str, str]]:
+        metrics = self.segmentation_eval_metrics
+
+        def yes_no(value: Any) -> str:
+            return "yes" if value else "no"
+
+        def pct(value: Any) -> str:
+            try:
+                return f"{100.0 * float(value):.1f}%"
+            except (TypeError, ValueError):
+                return "n/a"
+
+        return [
+            ("Final object exposed", yes_no(metrics["final_object_exposed"]), "core"),
+            ("Final separated from occlusion (voted)", yes_no(metrics["final_object_separated"]), "core"),
+            ("Front separated from occlusion", yes_no(metrics.get("last_front_object_separated")), "core"),
+            ("Side separated from occlusion", yes_no(metrics.get("last_side_object_separated")), "diagnostic"),
+            ("Final object in region (voted)", yes_no(metrics["final_object_reached_region"]), "core"),
+            ("Front object in region", yes_no(metrics.get("last_front_object_in_region")), "core"),
+            ("Side object in region", yes_no(metrics.get("last_side_object_in_region")), "diagnostic"),
+            (
+                "Final front cover",
+                f"{yes_no(metrics['final_front_coverage'])} ({pct(metrics['last_front_occluder_coverage'])})",
+                "core",
+            ),
+            (
+                "Recent success votes",
+                f"{metrics['recent_success_votes']}/{metrics['segmentation_vote_window']} "
+                f"(need {metrics['segmentation_vote_required']})",
+                "core",
+            ),
+            ("Decision source", str(metrics["last_decision_source"]), "diagnostic"),
+            ("Ever object exposed", yes_no(metrics["auto_object_exposed"]), "diagnostic"),
+            ("Ever separated from occlusion", yes_no(metrics["auto_object_separated"]), "diagnostic"),
+            ("Ever object reached region", yes_no(metrics["auto_object_reached_region"]), "diagnostic"),
+            ("Ever task complete", yes_no(metrics["auto_task_complete"]), "diagnostic"),
+            ("Final failure reason", self._segmentation_final_failure_reason(metrics), "diagnostic"),
+            ("Ever failure reason", self._segmentation_failure_reason(metrics), "diagnostic"),
+        ]
+
+    @staticmethod
+    def _segmentation_failure_reason(metrics: dict[str, Any]) -> str:
+        if metrics.get("auto_task_complete"):
+            return "success"
+        if not metrics.get("auto_object_exposed"):
+            return "timeout_no_object_exposed"
+        if not metrics.get("auto_object_separated"):
+            return "timeout_exposed_not_separated_in_any_view"
+        if not metrics.get("auto_object_reached_region"):
+            return "timeout_separated_not_reached_region"
+        if not metrics.get("auto_final_front_coverage"):
+            return "timeout_region_reached_front_coverage_below_50"
+        return "timeout_unknown"
+
+    @staticmethod
+    def _segmentation_final_failure_reason(metrics: dict[str, Any]) -> str:
+        if metrics.get("final_task_success"):
+            return "success"
+        if not metrics.get("final_object_exposed"):
+            if metrics.get("auto_object_exposed"):
+                return "final_object_not_visible_after_prior_exposure"
+            return "timeout_no_object_exposed"
+        if not metrics.get("final_object_separated"):
+            if metrics.get("auto_object_separated"):
+                return "final_not_separated_after_prior_separation"
+            return "timeout_exposed_not_separated_in_any_view"
+        if not metrics.get("final_object_reached_region"):
+            if metrics.get("auto_object_reached_region"):
+                return "final_object_left_region_after_prior_region_reached"
+            return "timeout_separated_not_reached_region"
+        if not metrics.get("final_front_coverage"):
+            return "final_region_reached_front_coverage_below_50"
+        return "timeout_unknown"
 
     def _scroll_main_view(self, event: tk.Event) -> str | None:
         if hasattr(self, "log_text") and event.widget is self.log_text:
@@ -898,6 +1818,123 @@ class EvalPolicyApp:
             units = -1 if delta > 0 else 1
         self.main_canvas.yview_scroll(units, "units")
         return "break"
+
+    def refresh_config_presets(self) -> None:
+        config_paths = sorted(Path(__file__).resolve().parent.glob("*.json"))
+        self.config_preset_paths = {path.stem: path for path in config_paths}
+        values = list(self.config_preset_paths)
+        if hasattr(self, "config_preset_combo"):
+            self.config_preset_combo.configure(values=values)
+        current = self.vars["config_preset"].get()
+        if values and current not in self.config_preset_paths:
+            default_name = DEFAULT_POLICY_TYPE.upper()
+            self.vars["config_preset"].set(default_name if default_name in self.config_preset_paths else values[0])
+
+    def load_selected_config_preset(self, _event: tk.Event | None = None) -> None:
+        if self.eval_running or self.connecting or self.reset_running:
+            self.vars["status"].set("Cannot switch config while a connection, policy, or reset task is running.")
+            return
+        selected = self.vars["config_preset"].get().strip()
+        path = self.config_preset_paths.get(selected)
+        if path is None:
+            self.refresh_config_presets()
+            path = self.config_preset_paths.get(selected)
+        if path is None:
+            self.vars["status"].set("Select a config preset first.")
+            return
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            self._alert("Cannot load config", str(exc))
+            return
+        self._apply_config_preset(config)
+        self.vars["status"].set(f"Loaded config preset: {path.name}")
+        self._append_log(f"[CONFIG] Loaded {path}")
+
+    def _apply_config_preset(self, config: dict[str, Any]) -> None:
+        string_keys = (
+            "policy_type",
+            "checkpoint_path",
+            "dataset_repo_id",
+            "dataset_root",
+            "task",
+            "episode_time_s",
+            "fps",
+            "grid_rows",
+            "grid_cols",
+            "grid_cell",
+            "trials_per_grid",
+            "robot_mode",
+            "robot_type",
+            "robot_port",
+            "robot_id",
+            "left_follower_port",
+            "right_follower_port",
+            "left_follower_id",
+            "right_follower_id",
+            "calibration_dir",
+            "calibration_match",
+            "realsense_serial",
+            "opencv_front",
+            "opencv_side",
+            "front_camera_type",
+            "front_camera_choice",
+            "execution_mode",
+            "camera_read_mode",
+            "model_chunk_size",
+            "prediction_steps",
+            "n_action_steps",
+            "num_inference_steps",
+            "noise_scheduler_type",
+            "fusion_steps",
+            "fusion_history_weight",
+            "segmentation_model_path",
+            "segmentation_device",
+            "reset_time_s",
+            "extra_args",
+        )
+        for key in string_keys:
+            if key not in config or key not in self.vars:
+                continue
+            value = config[key]
+            self.vars[key].set("" if value is None else str(value))
+
+        bool_targets = {
+            "include_side_camera": self.include_side_camera,
+            "low_resolution": self.low_resolution,
+            "enable_segmentation_preview": self.enable_segmentation_preview,
+            "use_amp": self.use_amp,
+            "auto_reset_after_policy": self.auto_reset_after_policy,
+            "lock_grippers": self.lock_grippers,
+            "save_video": self.save_video,
+            "enable_realsense": self.enable_realsense,
+        }
+        for key, var in bool_targets.items():
+            if key in config:
+                var.set(bool(config[key]))
+
+        self._select_checkpoint_combo_for_path(Path(self.vars["checkpoint_path"].get()).expanduser())
+        self._refresh_camera_config_preview()
+        self._refresh_grid_cells()
+        self._refresh_grid_stats()
+        self._reset_segmentation_preview_model()
+        if self.connected:
+            self._append_log("[CONFIG] Existing robot/camera connection is still open; changed ports or cameras apply after reconnect.")
+
+    def _select_checkpoint_combo_for_path(self, checkpoint_path: Path) -> None:
+        try:
+            target = checkpoint_path.resolve()
+        except OSError:
+            target = checkpoint_path
+        for option in self.checkpoint_options:
+            try:
+                option_path = option.path.resolve()
+            except OSError:
+                option_path = option.path
+            if option_path == target:
+                self.vars["checkpoint"].set(option.label)
+                return
+        self.vars["checkpoint"].set(f"{self.vars['policy_type'].get()}: {checkpoint_path}")
 
     def refresh_checkpoints(self) -> None:
         options: list[CheckpointOption] = []
@@ -925,7 +1962,12 @@ class EvalPolicyApp:
         values = [option.label for option in options]
         self.checkpoint_combo.configure(values=values)
         if values and not self.vars["checkpoint"].get():
-            self.vars["checkpoint"].set(values[-1])
+            default_path = DEFAULT_POLICY_PATH.resolve()
+            selected_option = next(
+                (option for option in options if option.path.resolve() == default_path),
+                options[-1],
+            )
+            self.vars["checkpoint"].set(selected_option.label)
             self.on_checkpoint_selected()
         self._append_log(f"Found {len(options)} checkpoint(s) under {DEFAULT_OUTPUT_ROOT}")
 
@@ -999,33 +2041,47 @@ class EvalPolicyApp:
         horizon = data.get("horizon") if data else None
         n_obs_steps = data.get("n_obs_steps") if data else None
         prediction_steps = data.get("n_action_steps") if data else None
+        is_diffusion = isinstance(horizon, int) and isinstance(n_obs_steps, int)
         model_chunk_size = chunk_size if isinstance(chunk_size, int) else horizon
         self.vars["model_chunk_size"].set(
             str(model_chunk_size) if isinstance(model_chunk_size, int) else "N/A"
         )
         if isinstance(prediction_steps, int):
             self.vars["prediction_steps"].set(str(prediction_steps))
-            self.vars["n_action_steps"].set(str(prediction_steps))
+            replan_steps = min(DEFAULT_DIFFUSION_REPLAN_STEPS, prediction_steps) if is_diffusion else prediction_steps
+            self.vars["n_action_steps"].set(str(replan_steps))
+        elif data and self.vars["policy_type"].get().strip() not in {"act", "mask_act", "diffusion"}:
+            self.vars["prediction_steps"].set("1")
+            self.vars["n_action_steps"].set("1")
         else:
             self.vars["prediction_steps"].set("")
             self.vars["n_action_steps"].set("")
 
         num_inference_steps = data.get("num_inference_steps") if data else None
+        effective_inference_steps = num_inference_steps
+        if is_diffusion and not isinstance(effective_inference_steps, int):
+            effective_inference_steps = DEFAULT_DIFFUSION_INFERENCE_STEPS
         self.vars["num_inference_steps"].set(
-            str(num_inference_steps) if isinstance(num_inference_steps, int) else ""
+            str(effective_inference_steps) if isinstance(effective_inference_steps, int) else ""
         )
         scheduler = data.get("noise_scheduler_type") if data else None
         self.vars["noise_scheduler_type"].set(
             str(scheduler) if scheduler in {"DDPM", "DDIM"} else "checkpoint"
         )
         self.use_amp.set(bool(data.get("use_amp", False)) if data else False)
+        if is_diffusion:
+            self.use_amp.set(True)
+            self.vars["execution_mode"].set(DEFAULT_DIFFUSION_EXECUTION_MODE)
+            self.vars["camera_read_mode"].set(DEFAULT_CAMERA_READ_MODE)
 
         if isinstance(horizon, int) and isinstance(n_obs_steps, int) and isinstance(prediction_steps, int):
             usable_steps = horizon - n_obs_steps + 1
             self._append_log(
                 f"[Diffusion] horizon={horizon}, usable actions={usable_steps}, "
                 f"checkpoint prediction/replan steps={prediction_steps}, "
-                f"inference_steps={num_inference_steps}, scheduler={scheduler}."
+                f"default_replan_steps={self.vars['n_action_steps'].get()}, "
+                f"inference_steps={num_inference_steps}, effective_inference_steps={effective_inference_steps}, "
+                f"scheduler={scheduler}, default_execution={DEFAULT_DIFFUSION_EXECUTION_MODE}."
             )
         elif isinstance(chunk_size, int) and isinstance(prediction_steps, int):
             self._append_log(
@@ -1035,16 +2091,139 @@ class EvalPolicyApp:
 
     def browse_dataset_root(self) -> None:
         current = Path(self.vars["dataset_root"].get() or DEFAULT_EVAL_ROOT).expanduser()
-        selected = filedialog.askdirectory(initialdir=str(current.parent), title="Select result save parent")
+        initialdir = current if current.exists() and current.is_dir() else current.parent
+        selected = self._choose_directory("Select result save parent", initialdir)
         if selected:
-            self.vars["dataset_root"].set(str(Path(selected).expanduser()))
+            self.vars["dataset_root"].set(str(selected))
+
+    def _choose_directory(self, title: str, initialdir: Path) -> Path | None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(True, True)
+        dialog.geometry("760x520")
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(2, weight=1)
+
+        selected = {"path": None}
+        start = initialdir.expanduser()
+        try:
+            start = start.resolve()
+        except OSError:
+            start = DEFAULT_EVAL_ROOT
+        path_var = tk.StringVar(value=str(start))
+        status_var = tk.StringVar(value="")
+        directory_entries: list[Path] = []
+
+        ttk.Label(dialog, text="Folder").grid(row=0, column=0, sticky=tk.W, padx=14, pady=(14, 4))
+        path_frame = ttk.Frame(dialog)
+        path_frame.grid(row=1, column=0, sticky=tk.EW, padx=14, pady=(0, 8))
+        path_frame.columnconfigure(0, weight=1)
+        path_entry = ttk.Entry(path_frame, textvariable=path_var)
+        path_entry.grid(row=0, column=0, sticky=tk.EW)
+
+        list_frame = ttk.Frame(dialog)
+        list_frame.grid(row=2, column=0, sticky=tk.NSEW, padx=14, pady=(0, 8))
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        listbox = tk.Listbox(list_frame, activestyle="dotbox")
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=listbox.yview)
+        listbox.configure(yscrollcommand=scrollbar.set)
+        listbox.grid(row=0, column=0, sticky=tk.NSEW)
+        scrollbar.grid(row=0, column=1, sticky=tk.NS)
+
+        ttk.Label(dialog, textvariable=status_var).grid(row=3, column=0, sticky=tk.W, padx=14, pady=(0, 8))
+
+        buttons = ttk.Frame(dialog)
+        buttons.grid(row=4, column=0, sticky=tk.E, padx=14, pady=(0, 14))
+
+        def current_path() -> Path:
+            return Path(path_var.get()).expanduser()
+
+        def refresh() -> None:
+            directory_entries.clear()
+            listbox.delete(0, tk.END)
+            path = current_path()
+            try:
+                resolved = path.resolve()
+            except OSError:
+                status_var.set("Path cannot be resolved.")
+                return
+            if not resolved.exists():
+                status_var.set("Path does not exist.")
+                return
+            if not resolved.is_dir():
+                status_var.set("Path is not a folder.")
+                return
+            path_var.set(str(resolved))
+            status_var.set("Double-click a folder to enter it, or choose Use This Folder.")
+            parent = resolved.parent
+            if parent != resolved:
+                directory_entries.append(parent)
+                listbox.insert(tk.END, "..")
+            try:
+                children = sorted(
+                    (child for child in resolved.iterdir() if child.is_dir()),
+                    key=lambda item: item.name.lower(),
+                )
+            except OSError as exc:
+                status_var.set(f"Cannot list folder: {exc}")
+                return
+            for child in children:
+                directory_entries.append(child)
+                listbox.insert(tk.END, child.name)
+
+        def enter_selected(_event: tk.Event | None = None) -> None:
+            selection = listbox.curselection()
+            if not selection:
+                return
+            index = int(selection[0])
+            if 0 <= index < len(directory_entries):
+                path_var.set(str(directory_entries[index]))
+                refresh()
+
+        def use_current() -> None:
+            path = current_path()
+            if not path.exists() or not path.is_dir():
+                status_var.set("Choose an existing folder.")
+                return
+            try:
+                selected["path"] = path.resolve()
+            except OSError:
+                selected["path"] = path
+            dialog.destroy()
+
+        def cancel() -> None:
+            selected["path"] = None
+            dialog.destroy()
+
+        ttk.Button(buttons, text="Refresh", command=refresh).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="Open Selected", command=enter_selected).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(buttons, text="Use This Folder", command=use_current).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(buttons, text="Cancel", command=cancel).pack(side=tk.LEFT, padx=(8, 0))
+
+        listbox.bind("<Double-Button-1>", enter_selected)
+        path_entry.bind("<Return>", lambda _event: refresh())
+        dialog.bind("<Escape>", lambda _event: cancel())
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        refresh()
+        path_entry.focus_set()
+        self.root.wait_window(dialog)
+        return selected["path"]
 
     def _refresh_grid_cells(self, *_args: Any) -> None:
         try:
-            grid_size = int(self.vars["grid_size"].get())
+            grid_rows = int(self.vars["grid_rows"].get())
+            grid_cols = int(self.vars["grid_cols"].get())
         except ValueError:
-            grid_size = 0
-        cells = [f"({x},{y})" for y in range(grid_size) for x in range(grid_size)] if grid_size > 0 else []
+            grid_rows = 0
+            grid_cols = 0
+        cells = (
+            [f"({x},{y})" for y in range(grid_rows) for x in range(grid_cols)]
+            if grid_rows > 0 and grid_cols > 0
+            else []
+        )
         if hasattr(self, "grid_cell_combo"):
             self.grid_cell_combo.configure(values=cells)
         current = self.vars["grid_cell"].get()
@@ -1053,18 +2232,21 @@ class EvalPolicyApp:
         self._refresh_grid_stats()
 
     def _grid_metadata(self) -> dict[str, Any]:
-        grid_size = int(self.vars["grid_size"].get())
+        grid_rows = int(self.vars["grid_rows"].get())
+        grid_cols = int(self.vars["grid_cols"].get())
         cell = self.vars["grid_cell"].get().strip()
         if not (cell.startswith("(") and cell.endswith(")") and "," in cell):
             raise ValueError("Target cell must use the (x,y) format.")
         x_text, y_text = cell[1:-1].split(",", 1)
         grid_x, grid_y = int(x_text), int(y_text)
-        if grid_size < 1:
-            raise ValueError("Initial region grid N must be greater than zero.")
-        if not (0 <= grid_x < grid_size and 0 <= grid_y < grid_size):
-            raise ValueError(f"Grid cell {cell} is outside the {grid_size}x{grid_size} grid.")
+        if grid_rows < 1 or grid_cols < 1:
+            raise ValueError("Initial region grid rows and columns must be greater than zero.")
+        if not (0 <= grid_x < grid_cols and 0 <= grid_y < grid_rows):
+            raise ValueError(f"Grid cell {cell} is outside the {grid_rows}x{grid_cols} grid.")
         return {
-            "grid_size": grid_size,
+            "grid_size": grid_rows if grid_rows == grid_cols else None,
+            "grid_rows": grid_rows,
+            "grid_cols": grid_cols,
             "grid_x": grid_x,
             "grid_y": grid_y,
             "grid_cell": f"({grid_x},{grid_y})",
@@ -1072,6 +2254,14 @@ class EvalPolicyApp:
             "grid_x_direction": "right",
             "grid_y_direction": "down",
         }
+
+    @staticmethod
+    def _record_matches_grid(record: dict[str, Any], grid: dict[str, Any]) -> bool:
+        if record.get("grid_cell") != grid["grid_cell"]:
+            return False
+        if "grid_rows" in record or "grid_cols" in record:
+            return record.get("grid_rows") == grid["grid_rows"] and record.get("grid_cols") == grid["grid_cols"]
+        return grid.get("grid_rows") == grid.get("grid_cols") and record.get("grid_size") == grid.get("grid_size")
 
     def _base_save_root(self) -> Path:
         return Path(self.vars["dataset_root"].get()).expanduser()
@@ -1171,6 +2361,40 @@ class EvalPolicyApp:
             )
         return records
 
+    @staticmethod
+    def _parse_result_tags(text: str) -> list[str]:
+        tags: list[str] = []
+        seen: set[str] = set()
+        for raw_tag in text.replace(";", ",").split(","):
+            tag = " ".join(raw_tag.strip().split())
+            key = tag.lower()
+            if tag and key not in seen:
+                seen.add(key)
+                tags.append(tag)
+        return tags
+
+    @staticmethod
+    def _tags_from_record(record: dict[str, Any]) -> list[str]:
+        tags = record.get("tags")
+        if isinstance(tags, list):
+            return [str(tag).strip() for tag in tags if str(tag).strip()]
+        tags_text = record.get("tags_text")
+        if isinstance(tags_text, str):
+            return EvalPolicyApp._parse_result_tags(tags_text)
+        return []
+
+    def _result_tag_candidates(self) -> list[str]:
+        try:
+            result_paths = sorted(self._base_save_root().rglob(RESULTS_FILENAME))
+        except OSError:
+            result_paths = []
+        candidates: dict[str, str] = {}
+        for result_path in result_paths:
+            for record in self._read_jsonl_records(result_path):
+                for tag in self._tags_from_record(record):
+                    candidates.setdefault(tag.lower(), tag)
+        return sorted(candidates.values(), key=str.lower)
+
     def _current_result_path(self) -> Path:
         return self._policy_save_parent(create=False) / RESULTS_FILENAME
 
@@ -1197,8 +2421,7 @@ class EvalPolicyApp:
                 isinstance(record, dict)
                 and record.get("policy_type") == policy_type
                 and record.get("task") == task
-                and record.get("grid_size") == grid["grid_size"]
-                and record.get("grid_cell") == grid["grid_cell"]
+                and self._record_matches_grid(record, grid)
                 and (
                     policy_type != "mask_act"
                     or record.get("policy_variant") == policy_variant
@@ -1273,8 +2496,7 @@ class EvalPolicyApp:
                 isinstance(record, dict)
                 and record.get("policy_type") == policy_type
                 and record.get("task") == task
-                and record.get("grid_size") == grid["grid_size"]
-                and record.get("grid_cell") == grid["grid_cell"]
+                and self._record_matches_grid(record, grid)
                 and (
                     policy_type != "mask_act"
                     or record.get("policy_variant") == policy_variant
@@ -1384,20 +2606,19 @@ class EvalPolicyApp:
         self._refresh_grid_stats()
         return delete_roots
 
-    @staticmethod
     def _grid_stats_from_records(
+        self,
         records: list[dict[str, Any]],
         *,
         task: str,
-        grid_size: int,
+        grid: dict[str, Any],
         grid_cell: str,
     ) -> tuple[int, int]:
         matching = [
             record
             for record in records
             if record.get("task") == task
-            and record.get("grid_size") == grid_size
-            and record.get("grid_cell") == grid_cell
+            and self._record_matches_grid(record, {**grid, "grid_cell": grid_cell})
         ]
         successes = sum(record.get("result") == "success" for record in matching)
         return len(matching), successes
@@ -1410,33 +2631,83 @@ class EvalPolicyApp:
         return self._grid_stats_from_records(
             records,
             task=self.vars["task"].get().strip(),
-            grid_size=grid["grid_size"],
+            grid=grid,
             grid_cell=grid["grid_cell"],
         )
 
     def _refresh_grid_stats(self, *_args: Any) -> None:
         try:
-            total, successes = self._current_grid_stats()
+            grid = self._grid_metadata()
             target = int(self.vars["trials_per_grid"].get())
             if target < 1:
                 raise ValueError
+            policy_type = self.vars["policy_type"].get().strip()
+            policy_variant = self._selected_policy_variant(policy_type)
+            records = self._result_records(self._base_save_root(), policy_type, policy_variant)
+            task = self.vars["task"].get().strip()
+            total, successes = self._grid_stats_from_records(
+                records,
+                task=task,
+                grid=grid,
+                grid_cell=grid["grid_cell"],
+            )
         except (OSError, ValueError):
             self.vars["grid_stats"].set("Enter a valid grid and trials-per-cell value.")
             return
         rate = 0.0 if total == 0 else successes / total * 100
-        policy_type = self.vars["policy_type"].get().strip()
-        policy_variant = self._selected_policy_variant(policy_type)
         policy_label = f"{policy_type}/{policy_variant}" if policy_variant else policy_type
-        cell = self.vars["grid_cell"].get().strip()
+        cell = grid["grid_cell"]
+        other_task_counts: dict[str, int] = {}
+        if total == 0:
+            for record in records:
+                record_task = str(record.get("task") or "")
+                if record_task and record_task != task and self._record_matches_grid(record, grid):
+                    other_task_counts[record_task] = other_task_counts.get(record_task, 0) + 1
+        hint = ""
+        if other_task_counts:
+            hint = "; other tasks here: " + ", ".join(
+                f"{name}={count}" for name, count in sorted(other_task_counts.items())
+            )
         self.vars["grid_stats"].set(
-            f"{policy_label} {cell}: {total}/{target} trials, {successes} success ({rate:.1f}%)"
+            f"{policy_label} task={task} {cell}: {total}/{target} trials, "
+            f"{successes} success ({rate:.1f}%){hint}"
         )
 
+    def select_next_open_grid_cell(self) -> None:
+        try:
+            grid = self._grid_metadata()
+            target = int(self.vars["trials_per_grid"].get())
+            if target < 1:
+                raise ValueError("Trials per cell must be greater than zero.")
+            policy_type = self.vars["policy_type"].get().strip()
+            policy_variant = self._selected_policy_variant(policy_type)
+            records = self._result_records(self._base_save_root(), policy_type, policy_variant)
+            task = self.vars["task"].get().strip()
+        except (OSError, ValueError) as exc:
+            self.vars["status"].set(f"Cannot select next grid cell: {exc}")
+            return
+
+        for y in range(int(grid["grid_rows"])):
+            for x in range(int(grid["grid_cols"])):
+                cell = f"({x},{y})"
+                total, _successes = self._grid_stats_from_records(
+                    records,
+                    task=task,
+                    grid=grid,
+                    grid_cell=cell,
+                )
+                if total < target:
+                    self.vars["grid_cell"].set(cell)
+                    self.vars["status"].set(f"Selected next open grid cell {cell}: {total}/{target} saved.")
+                    return
+        self.vars["status"].set(f"All {grid['grid_rows']}x{grid['grid_cols']} grid cells have at least {target} saved trials.")
+
     def _on_result_changed(self, *_args: Any) -> None:
-        exposed = "yes" if self.vars["result"].get() == "success" else "no"
-        self.vars["object_exposed"].set(exposed)
-        self.vars["object_pushed_out"].set(exposed)
-        self.vars["object_push_success"].set(exposed)
+        if self.vars["result"].get() != "success":
+            return
+        self.vars["object_exposed"].set("yes")
+        self.vars["object_pushed_out"].set("yes")
+        self.vars["object_push_success"].set("yes")
 
     def open_save_folder(self) -> None:
         path = self._policy_save_parent()
@@ -1555,6 +2826,7 @@ class EvalPolicyApp:
             capture = None
             camera = None
             try:
+                camera_width, camera_height = self._camera_size()
                 if camera_type == "opencv":
                     import cv2
 
@@ -1562,19 +2834,21 @@ class EvalPolicyApp:
                     capture = cv2.VideoCapture(target)
                     if not capture.isOpened():
                         raise RuntimeError(f"Could not open OpenCV camera {camera_id}")
-                    capture.set(cv2.CAP_PROP_FRAME_WIDTH, DEFAULT_CAMERA_WIDTH)
-                    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, DEFAULT_CAMERA_HEIGHT)
+                    capture.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
+                    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
                     capture.set(cv2.CAP_PROP_FPS, DEFAULT_CAMERA_FPS)
                     while not stop_event.is_set():
                         ok, frame = capture.read()
                         if not ok:
                             raise RuntimeError(f"Failed to read OpenCV camera {camera_id}")
+                        if frame.shape[1] != camera_width or frame.shape[0] != camera_height:
+                            frame = cv2.resize(frame, (camera_width, camera_height), interpolation=cv2.INTER_AREA)
                         put_latest("frame", cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 else:
                     camera = PersistentFlexibleRealSenseCamera(
                         camera_id,
-                        DEFAULT_CAMERA_WIDTH,
-                        DEFAULT_CAMERA_HEIGHT,
+                        camera_width,
+                        camera_height,
                     )
                     camera.connect()
                     while not stop_event.is_set():
@@ -1651,22 +2925,34 @@ class EvalPolicyApp:
         self.vars["realsense_serial"].set(serial)
         return serial
 
+    def _camera_size(self) -> tuple[int, int]:
+        if self.low_resolution.get():
+            return LOW_CAMERA_WIDTH, LOW_CAMERA_HEIGHT
+        return CAMERA_WIDTH, CAMERA_HEIGHT
+
     def _build_camera_config(self) -> str:
         cameras: list[str] = []
-        if self.enable_realsense.get():
-            serial = self.vars["realsense_serial"].get().strip() or "<auto>"
+        camera_width, camera_height = self._camera_size()
+        front_path = self.vars["opencv_front"].get().strip()
+        serial = self.vars["realsense_serial"].get().strip() or "<auto>"
+        front_is_realsense_video = bool(
+            self.enable_realsense.get()
+            and front_path
+            and self._is_realsense_video_path(front_path)
+        )
+        if self.enable_realsense.get() and (not front_path or front_is_realsense_video):
             if serial != "<auto>":
                 cameras.append(
                     "front: {"
                     f'type: intelrealsense, serial_number_or_name: "{serial}", '
-                    f"width: {DEFAULT_CAMERA_WIDTH}, height: {DEFAULT_CAMERA_HEIGHT}, "
+                    f"width: {camera_width}, height: {camera_height}, "
                     f"fps: {DEFAULT_CAMERA_FPS}, use_depth: true"
                     "}"
                 )
             else:
                 cameras.append("front: {type: intelrealsense, serial_number_or_name: <auto>}")
-        elif self.vars["opencv_front"].get().strip():
-            cameras.append(self._opencv_camera_entry("front", self.vars["opencv_front"].get().strip()))
+        elif front_path:
+            cameras.append(self._opencv_camera_entry("front", front_path))
 
         if self.include_side_camera.get() and self.vars["opencv_side"].get().strip():
             cameras.append(self._opencv_camera_entry("side", self.vars["opencv_side"].get().strip()))
@@ -1675,28 +2961,29 @@ class EvalPolicyApp:
             raise ValueError("at least one front camera is required")
         return "{ " + ", ".join(cameras) + " }"
 
-    @staticmethod
-    def _opencv_camera_entry(name: str, index_or_path: str) -> str:
+    def _opencv_camera_entry(self, name: str, index_or_path: str) -> str:
         value = index_or_path if index_or_path.isdigit() else f'"{index_or_path}"'
+        width, height = self._camera_size()
         return (
             f"{name}: {{"
             f"type: opencv, index_or_path: {value}, "
-            f"width: {DEFAULT_CAMERA_WIDTH}, height: {DEFAULT_CAMERA_HEIGHT}, fps: {DEFAULT_CAMERA_FPS}, fourcc: \"MJPG\""
+            f"width: {width}, height: {height}, fps: {DEFAULT_CAMERA_FPS}, fourcc: \"MJPG\""
             "}"
         )
 
     def _camera_config_for_command(self) -> str:
-        if self.enable_realsense.get():
+        front_path = self.vars["opencv_front"].get().strip()
+        camera_width, camera_height = self._camera_size()
+        if self.enable_realsense.get() and (not front_path or self._is_realsense_video_path(front_path)):
             serial = self._resolve_realsense_serial()
             entries = [
                 "front: {"
                 f'type: intelrealsense, serial_number_or_name: "{serial}", '
-                f"width: {DEFAULT_CAMERA_WIDTH}, height: {DEFAULT_CAMERA_HEIGHT}, "
+                f"width: {camera_width}, height: {camera_height}, "
                 f"fps: {DEFAULT_CAMERA_FPS}, use_depth: true"
                 "}"
             ]
         else:
-            front_path = self.vars["opencv_front"].get().strip()
             if not front_path:
                 raise ValueError("RealSense disabled: OpenCV front cannot be empty.")
             entries = [self._opencv_camera_entry("front", front_path)]
@@ -1845,6 +3132,7 @@ class EvalPolicyApp:
         self.stop_policy_requested = False
         self.last_run = {}
         self.result_saved = True
+        self.segmentation_eval_metrics = self._new_segmentation_eval_metrics()
         save_root = self._base_save_root()
         policy_variant = self._selected_policy_variant()
         policy_save_parent = self._policy_save_parent()
@@ -1860,8 +3148,8 @@ class EvalPolicyApp:
                 else None
             ),
             "n_action_steps": (
-                int(self.vars["prediction_steps"].get())
-                if self.vars["prediction_steps"].get().strip()
+                int(self.vars["n_action_steps"].get())
+                if self.vars["n_action_steps"].get().strip()
                 else None
             ),
             "replan_interval_steps": int(self.vars["n_action_steps"].get()),
@@ -1922,10 +3210,7 @@ class EvalPolicyApp:
     def _connect_worker(self) -> None:
         robot = None
         try:
-            from lerobot.robots import make_robot_from_config
-
-            cfg = self._make_robot_config()
-            robot = make_robot_from_config(cfg)
+            robot = self._make_robot()
             self._patch_realsense_like_recorder(robot)
             robot.connect()
             obs = robot.get_observation()
@@ -1947,8 +3232,12 @@ class EvalPolicyApp:
     def _patch_realsense_like_recorder(self, robot: Any) -> None:
         if not self.enable_realsense.get():
             return
+        front_path = self.vars["opencv_front"].get().strip()
+        if front_path and not self._is_realsense_video_path(front_path):
+            return
         serial = self._resolve_realsense_serial()
-        replacement = PersistentFlexibleRealSenseCamera(serial, DEFAULT_CAMERA_WIDTH, DEFAULT_CAMERA_HEIGHT)
+        camera_width, camera_height = self._camera_size()
+        replacement = PersistentFlexibleRealSenseCamera(serial, camera_width, camera_height)
         if hasattr(robot, "left_arm") and "front" in robot.left_arm.cameras:
             robot.left_arm.cameras["front"] = replacement
             robot.cameras["front"] = replacement
@@ -1970,7 +3259,6 @@ class EvalPolicyApp:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
         from lerobot.datasets.pipeline_features import aggregate_pipeline_dataset_features, create_initial_features
         from lerobot.datasets.utils import build_dataset_frame, combine_feature_dicts
-        from lerobot.datasets.video_utils import VideoEncodingManager
         from lerobot.policies.factory import make_policy, make_pre_post_processors
         from lerobot.policies.utils import make_robot_action
         from lerobot.processor import make_default_processors
@@ -2073,7 +3361,7 @@ class EvalPolicyApp:
                 use_videos=save_video,
                 image_writer_processes=0,
                 image_writer_threads=max(1, 4 * len(robot.cameras)),
-                batch_encoding_size=1,
+                batch_encoding_size=1_000_000 if save_video else 1,
                 vcodec="h264",
             )
             evaluation_metadata = {
@@ -2156,7 +3444,7 @@ class EvalPolicyApp:
                         "The gripper keeps its current/initial angle."
                     )
             self.log_queue.put(
-                "[RECORD] MP4 encoding enabled."
+                "[RECORD] MP4 video saving enabled for front/side; encoding is deferred until Save."
                 if save_video
                 else "[RECORD] MP4 encoding disabled; trajectory and image frames will still be saved."
             )
@@ -2165,7 +3453,7 @@ class EvalPolicyApp:
                 f"camera_read_mode={self.vars['camera_read_mode'].get()}, target_fps={fps}."
             )
 
-            encoding_context = VideoEncodingManager(dataset) if save_video else nullcontext()
+            encoding_context = nullcontext()
             with encoding_context:
                 start_t = time.perf_counter()
                 timestamp = 0.0
@@ -2348,9 +3636,16 @@ class EvalPolicyApp:
                     action_frame = build_dataset_frame(dataset.features, action_dict, prefix=ACTION)
                     dataset.add_frame({**observation_frame, **action_frame, "task": task})
 
-                    image_key, image = self._select_preview_image(raw_obs)
                     loop_s = max(time.perf_counter() - loop_t, 1e-6)
-                    self._put_preview(image_key, image, action_dict, 1.0 / loop_s, ", ".join(sorted(observation_frame)))
+                    latest_masks = getattr(policy, "latest_inference_mask_preview", None)
+                    model_masks = latest_masks() if callable(latest_masks) else {}
+                    self._put_preview(
+                        raw_obs,
+                        action_dict,
+                        1.0 / loop_s,
+                        ", ".join(sorted(observation_frame)),
+                        model_masks,
+                    )
                     now = time.perf_counter()
                     if now - last_action_log_t > 1.0:
                         last_action_log_t = now
@@ -2370,16 +3665,12 @@ class EvalPolicyApp:
                     timestamp = time.perf_counter() - start_t
 
                 dataset.save_episode()
-                self.log_queue.put("Policy episode saved. Robot remains connected.")
+                self.log_queue.put("Policy episode data saved. Robot remains connected.")
         finally:
             if replan_executor is not None:
                 replan_executor.shutdown(wait=True, cancel_futures=True)
             if dataset is not None:
                 dataset.finalize()
-            if self.auto_reset_after_policy.get() and self.initial_joint_action and self.connected:
-                self.log_queue.put("[RESET] Returning arms to captured policy-start pose.")
-                self._move_robot_to_action(self.initial_joint_action, float(self.vars["reset_time_s"].get()))
-                self.log_queue.put("[RESET] Arms returned to the captured policy-start pose.")
 
     def _validate_eval_settings(self) -> None:
         checkpoint = self.vars["checkpoint_path"].get().strip()
@@ -2407,6 +3698,10 @@ class EvalPolicyApp:
             raise ValueError("Execution mode must be synchronous or asynchronous.")
         if self.vars["camera_read_mode"].get() not in {"wait_new_frame", "latest_nonblocking"}:
             raise ValueError("Camera read mode must be wait_new_frame or latest_nonblocking.")
+        if self.enable_segmentation_preview.get():
+            segmentation_path = Path(self.vars["segmentation_model_path"].get()).expanduser()
+            if not segmentation_path.is_file():
+                raise ValueError(f"Segmentation checkpoint path does not exist: {segmentation_path}")
         action_steps_text = self.vars["n_action_steps"].get().strip()
         if not action_steps_text or int(action_steps_text) <= 0:
             raise ValueError("Replan interval must be greater than zero.")
@@ -2493,6 +3788,18 @@ class EvalPolicyApp:
                     f"{type(policy_cfg).__name__} does not expose chunk_size/n_action_steps, "
                     "so action-chunk fusion cannot be enabled for this policy."
                 )
+            if requested_replan != 1:
+                raise ValueError(
+                    f"{type(policy_cfg).__name__} does not expose action chunks; set replan interval to 1."
+                )
+            if hasattr(policy_cfg, "use_amp"):
+                policy_cfg.use_amp = self.use_amp.get()
+            self.vars["model_chunk_size"].set("N/A")
+            self.vars["prediction_steps"].set("1")
+            self.log_queue.put(
+                f"[Policy] {type(policy_cfg).__name__} uses single-step action execution; "
+                f"replan_interval=1, AMP={getattr(policy_cfg, 'use_amp', self.use_amp.get())}."
+            )
             return
         chunk_size = int(policy_cfg.chunk_size)
         if requested_replan < 1 or requested_replan > chunk_size:
@@ -2523,67 +3830,225 @@ class EvalPolicyApp:
             f"initial_history_weight={float(self.vars['fusion_history_weight'].get()):.3f}."
         )
 
-    def _make_robot_config(self) -> Any:
-        from lerobot.robots.bi_so_follower.config_bi_so_follower import BiSOFollowerConfig
-        from lerobot.robots.so_follower.config_so_follower import SOFollowerConfig, SOFollowerRobotConfig
+    def _make_robot(self) -> LocalBimanualSOFollower | Any:
+        from lerobot.robots.so_follower import SO101Follower, SOFollowerRobotConfig
 
-        robot_mode = self.vars["robot_mode"].get()
-        robot_type = self.vars["robot_type"].get().strip()
+        if self.vars["robot_mode"].get() != "bimanual" or self.vars["robot_type"].get().strip() != "bi_so_follower":
+            raise ValueError("Policy evaluation is configured to connect exactly two SO101 follower arms.")
+
+        calibration_dir = Path(self.vars["calibration_dir"].get()).expanduser()
+        if not calibration_dir.exists():
+            raise ValueError(f"Calibration directory does not exist: {calibration_dir}")
         cameras = self._camera_config_objects()
-        if robot_mode == "bimanual":
-            if robot_type != "bi_so_follower":
-                raise ValueError("For bimanual evaluation, set Robot type to bi_so_follower.")
-            return BiSOFollowerConfig(
-                id=self.vars["robot_id"].get().strip(),
-                calibration_dir=self._prepare_bimanual_calibration(),
-                left_arm_config=SOFollowerConfig(
-                    port=self.vars["left_follower_port"].get().strip(),
-                    cameras=cameras,
-                ),
-                right_arm_config=SOFollowerConfig(
-                    port=self.vars["right_follower_port"].get().strip(),
-                ),
-            )
-        return SOFollowerRobotConfig(
-            id=self.vars["left_follower_id"].get().strip(),
-            calibration_dir=Path(self.vars["calibration_dir"].get()).expanduser(),
-            port=self.vars["robot_port"].get().strip() or self.vars["left_follower_port"].get().strip(),
-            cameras=cameras,
+        left_id = self._calibration_id_for_port(
+            "Left follower",
+            self.vars["left_follower_port"].get().strip(),
+            self.vars["left_follower_id"].get().strip(),
+            calibration_dir,
         )
+        right_id = self._calibration_id_for_port(
+            "Right follower",
+            self.vars["right_follower_port"].get().strip(),
+            self.vars["right_follower_id"].get().strip(),
+            calibration_dir,
+        )
+        left_arm = SO101Follower(
+            SOFollowerRobotConfig(
+                id=left_id,
+                calibration_dir=calibration_dir,
+                port=self.vars["left_follower_port"].get().strip(),
+                disable_torque_on_disconnect=True,
+                cameras=cameras,
+            )
+        )
+        right_arm = SO101Follower(
+            SOFollowerRobotConfig(
+                id=right_id,
+                calibration_dir=calibration_dir,
+                port=self.vars["right_follower_port"].get().strip(),
+                disable_torque_on_disconnect=True,
+            )
+        )
+        self._patch_opencv_cameras_for_eval(left_arm)
+        self.log_queue.put(f"Robot calibration dir: {calibration_dir}")
+        self.log_queue.put(f"Left follower calibration id: {left_id}")
+        self.log_queue.put(f"Right follower calibration id: {right_id}")
+        return LocalBimanualSOFollower(left_arm, right_arm)
+
+    def _patch_opencv_cameras_for_eval(self, arm: Any) -> None:
+        from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
+
+        for key, camera in list(getattr(arm, "cameras", {}).items()):
+            if isinstance(camera, OpenCVCamera):
+                arm.cameras[key] = EvalFlexibleOpenCVCamera(camera.config)
+                self.log_queue.put(
+                    f"OpenCV {key} will be resized to {camera.config.width}x{camera.config.height} for policy input."
+                )
 
     def _camera_config_objects(self) -> dict[str, Any]:
+        from lerobot.cameras.configs import ColorMode
         from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
         from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 
         cameras: dict[str, Any] = {}
-        if self.enable_realsense.get():
+        camera_width, camera_height = self._camera_size()
+        serial = self._resolve_realsense_serial() if self.enable_realsense.get() else ""
+        front_path = self.vars["opencv_front"].get().strip()
+        front_is_realsense_video = bool(front_path and serial and self._is_realsense_video_path(front_path))
+        if self.enable_realsense.get() and (not front_path or front_is_realsense_video):
             cameras["front"] = RealSenseCameraConfig(
-                serial_number_or_name=self._resolve_realsense_serial(),
-                width=DEFAULT_CAMERA_WIDTH,
-                height=DEFAULT_CAMERA_HEIGHT,
+                serial_number_or_name=serial,
+                width=camera_width,
+                height=camera_height,
                 fps=DEFAULT_CAMERA_FPS,
+                color_mode=ColorMode.RGB,
                 use_depth=True,
             )
+            if front_is_realsense_video:
+                self.log_queue.put(
+                    f"OpenCV front {front_path} is a RealSense RGB node; using the RealSense SDK like the recorder."
+                )
         else:
-            front_path = self.vars["opencv_front"].get().strip()
             if not front_path:
                 raise ValueError("RealSense disabled: OpenCV front cannot be empty.")
             cameras["front"] = OpenCVCameraConfig(
                 index_or_path=self._opencv_value(front_path),
-                width=DEFAULT_CAMERA_WIDTH,
-                height=DEFAULT_CAMERA_HEIGHT,
+                width=camera_width,
+                height=camera_height,
                 fps=DEFAULT_CAMERA_FPS,
                 fourcc="MJPG",
             )
-        if self.include_side_camera.get() and self.vars["opencv_side"].get().strip():
+            if serial:
+                self.log_queue.put(f"Using OpenCV front RGB {front_path}; RealSense is not used for front RGB.")
+
+        side_path = (
+            self._resolve_opencv_side_path(self.vars["opencv_side"].get().strip())
+            if self.include_side_camera.get()
+            else ""
+        )
+        if side_path:
+            side_description = self._describe_video_path(side_path)
+            if side_description:
+                self.log_queue.put(f"OpenCV side RGB {side_path} is {side_description}.")
             cameras["side"] = OpenCVCameraConfig(
-                index_or_path=self._opencv_value(self.vars["opencv_side"].get().strip()),
-                width=DEFAULT_CAMERA_WIDTH,
-                height=DEFAULT_CAMERA_HEIGHT,
+                index_or_path=self._opencv_value(side_path),
+                width=camera_width,
+                height=camera_height,
                 fps=DEFAULT_CAMERA_FPS,
                 fourcc="MJPG",
             )
         return cameras
+
+    def _resolve_opencv_side_path(self, requested_path: str) -> str:
+        if not requested_path:
+            return ""
+        if not self._is_realsense_video_path(requested_path):
+            return requested_path
+
+        by_id_root = Path("/dev/v4l/by-id")
+        if by_id_root.exists():
+            for link in sorted(by_id_root.iterdir()):
+                name = link.name.lower()
+                if "realsense" in name or "intel(r)_real" in name:
+                    continue
+                try:
+                    target = link.resolve()
+                except OSError:
+                    continue
+                if target.name.startswith("video"):
+                    self.log_queue.put(
+                        f"OpenCV side {requested_path} is a RealSense node; using non-RealSense side RGB {target}."
+                    )
+                    return str(target)
+        self.log_queue.put(
+            "Only RealSense OpenCV video nodes were detected for side; evaluating without side RGB."
+        )
+        return ""
+
+    @staticmethod
+    def _describe_video_path(video_path: str) -> str:
+        path = Path(video_path)
+        if not path.exists():
+            return ""
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return ""
+        by_id_root = Path("/dev/v4l/by-id")
+        if by_id_root.exists():
+            for link in sorted(by_id_root.iterdir()):
+                try:
+                    if link.resolve() == resolved:
+                        return link.name
+                except OSError:
+                    continue
+        return EvalPolicyApp._video_device_name(path)
+
+    @staticmethod
+    def _is_realsense_video_path(video_path: str) -> bool:
+        description = EvalPolicyApp._describe_video_path(video_path).lower()
+        return "realsense" in description or "intel(r) real sense" in description or "intel(r)_real" in description
+
+    @staticmethod
+    def _video_device_name(path: Path) -> str:
+        if not path.name.startswith("video"):
+            return ""
+        name_path = Path("/sys/class/video4linux") / path.name / "name"
+        try:
+            return name_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    @staticmethod
+    def _serial_from_by_id_name(name: str) -> str:
+        marker = "USB_Single_Serial_"
+        if marker in name:
+            return name.split(marker, 1)[1].split("-if", 1)[0]
+        if "_Serial_" in name:
+            return name.rsplit("_Serial_", 1)[1].split("-if", 1)[0]
+        if "-if" in name and "_" in name:
+            return name.rsplit("_", 1)[1].split("-if", 1)[0]
+        return ""
+
+    @staticmethod
+    def _board_serial_from_port(port: str) -> str:
+        port = port.strip()
+        if not port:
+            return ""
+        serial = EvalPolicyApp._serial_from_by_id_name(Path(port).name)
+        if serial:
+            return serial
+        try:
+            target = Path(port).resolve()
+        except OSError:
+            return ""
+        by_id_root = Path("/dev/serial/by-id")
+        if not by_id_root.exists():
+            return ""
+        for link in sorted(by_id_root.iterdir()):
+            try:
+                if link.resolve() == target:
+                    return EvalPolicyApp._serial_from_by_id_name(link.name)
+            except OSError:
+                continue
+        return ""
+
+    def _calibration_id_for_port(
+        self, label: str, port: str, legacy_id: str, calibration_dir: Path | None
+    ) -> str:
+        if self.vars["calibration_match"].get() == "Arm id":
+            return legacy_id
+        serial = self._board_serial_from_port(port)
+        if not serial:
+            self.log_queue.put(f"{label} uses legacy calibration id '{legacy_id}' because no board serial was found.")
+            return legacy_id
+        if calibration_dir is not None:
+            serial_path = calibration_dir / f"{serial}.json"
+            legacy_path = calibration_dir / f"{legacy_id}.json"
+            if not serial_path.exists() and legacy_path.exists():
+                shutil.copy2(legacy_path, serial_path)
+                self.log_queue.put(f"{label} calibration migrated: {legacy_path.name} -> {serial_path.name}")
+        return serial
 
     def _get_eval_observation(self, robot: Any) -> dict[str, Any]:
         """Read arm state synchronously and optionally peek the latest camera frame without waiting."""
@@ -2605,11 +4070,16 @@ class EvalPolicyApp:
             return observation
 
         if hasattr(robot, "left_arm") and hasattr(robot, "right_arm"):
-            left_observation = read_arm(robot.left_arm)
-            right_observation = read_arm(robot.right_arm)
+            left_positions = robot.left_arm.bus.sync_read("Present_Position")
+            right_positions = robot.right_arm.bus.sync_read("Present_Position")
+            camera_obs = {
+                camera_key: read_camera(camera)
+                for camera_key, camera in getattr(robot, "cameras", {}).items()
+            }
             return {
-                **{f"left_{key}": value for key, value in left_observation.items()},
-                **{f"right_{key}": value for key, value in right_observation.items()},
+                **{f"left_{motor}.pos": value for motor, value in left_positions.items()},
+                **{f"right_{motor}.pos": value for motor, value in right_positions.items()},
+                **camera_obs,
             }
         if hasattr(robot, "bus") and hasattr(robot, "cameras"):
             return read_arm(robot)
@@ -2729,16 +4199,29 @@ class EvalPolicyApp:
         return int(index_or_path) if index_or_path.isdigit() else Path(index_or_path)
 
     @staticmethod
-    def _select_preview_image(raw_obs: dict[str, Any]) -> tuple[str, Any | None]:
-        if "left_front" in raw_obs:
-            return "left_front", raw_obs["left_front"]
+    def _preview_images(raw_obs: dict[str, Any]) -> dict[str, Any]:
+        images: dict[str, Any] = {}
+        for key in ("front", "side", "left_front", "left_side"):
+            value = raw_obs.get(key)
+            if hasattr(value, "ndim") and value.ndim == 3:
+                display_key = key.removeprefix("left_")
+                images[display_key] = value
+        if images:
+            return images
         for key, value in raw_obs.items():
             if hasattr(value, "ndim") and value.ndim == 3:
-                return key, value
-        return "none", None
+                images[str(key)] = value
+        return images
 
-    def _put_preview(self, image_key: str, image: Any, action: dict[str, Any], fps_hz: float, input_keys: str) -> None:
-        item = (image_key, image, action, fps_hz, input_keys)
+    def _put_preview(
+        self,
+        raw_obs: dict[str, Any],
+        action: dict[str, Any],
+        fps_hz: float,
+        input_keys: str,
+        model_masks: dict[str, Any] | None = None,
+    ) -> None:
+        item = (self._preview_images(raw_obs), action, fps_hz, input_keys, model_masks or {})
         try:
             self.preview_queue.put_nowait(item)
         except queue.Full:
@@ -2840,6 +4323,8 @@ class EvalPolicyApp:
             self.log_queue.put("__DEFAULT_POSE_DONE__|1|")
 
     def start_teleop(self) -> None:
+        self.vars["status"].set("Leader teleop is disabled; policy evaluation only connects two follower arms.")
+        return
         if not self.connected or self.robot is None:
             self.vars["status"].set("Robot is not connected.")
             return
@@ -2910,27 +4395,36 @@ class EvalPolicyApp:
                     self.log_queue.put(f"[TELEOP] Warning: leader disconnect failed: {exc}")
 
     def _make_teleop(self) -> Any:
-        from lerobot.teleoperators.so_leader import SO101Leader, SOLeaderTeleopConfig
+        raise RuntimeError("Leader teleop is disabled; policy evaluation only connects two follower arms.")
 
-        if self.vars["robot_mode"].get() != "bimanual":
-            raise RuntimeError("Teleop adjustment is currently configured for bimanual SO leader arms.")
-        calibration_dir = Path(self.vars["teleop_calibration_dir"].get()).expanduser()
-        return LocalBimanualSOLeader(
-            SO101Leader(
-                SOLeaderTeleopConfig(
-                    id=self.vars["left_leader_id"].get().strip(),
-                    calibration_dir=calibration_dir,
-                    port=self.vars["left_leader_port"].get().strip(),
-                )
-            ),
-            SO101Leader(
-                SOLeaderTeleopConfig(
-                    id=self.vars["right_leader_id"].get().strip(),
-                    calibration_dir=calibration_dir,
-                    port=self.vars["right_leader_port"].get().strip(),
-                )
-            ),
-        )
+    def _start_post_run_reset(self) -> None:
+        if not self.auto_reset_after_policy.get():
+            return
+        if not self.connected or self.robot is None:
+            self._append_log("[RESET] Post-run reset skipped because the robot is not connected.")
+            return
+        if self.initial_joint_action is None:
+            self._append_log("[RESET] Post-run reset skipped because no policy-start pose was captured.")
+            return
+        if self.reset_running:
+            self._append_log("[RESET] Post-run reset skipped because reset is already running.")
+            return
+        try:
+            reset_time_s = float(self.vars["reset_time_s"].get())
+        except ValueError as exc:
+            self._append_log(f"[RESET] Post-run reset skipped because reset time is invalid: {exc}")
+            return
+        target_action = dict(self.initial_joint_action)
+
+        def worker() -> None:
+            try:
+                self._append_log("[RESET] Returning arms to captured policy-start pose after policy end.")
+                self._move_robot_to_action(target_action, reset_time_s)
+                self._append_log("[RESET] Arms returned to the captured policy-start pose.")
+            except Exception as exc:
+                self._append_log(f"[RESET] Failed to return arms after policy end: {exc}")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _move_robot_to_action(
         self,
@@ -2943,33 +4437,54 @@ class EvalPolicyApp:
         robot = self.robot
         if robot is None:
             raise RuntimeError("Robot is not connected.")
-        fps = max(int(self.vars["fps"].get()), 1)
+        fps = min(max(int(self.vars["fps"].get()), 1), 30)
         duration_s = max(duration_s, 0.1)
+        was_reset_running = self.reset_running
+        self.reset_running = True
+        try:
+            start_action = self._current_robot_motor_action(robot)
+            keys = [key for key in robot.action_features if key in target_action and key in start_action]
+            if self.lock_grippers.get() and not include_grippers:
+                keys = [key for key in keys if not self._is_gripper_key(key)]
+            if not keys:
+                raise RuntimeError("No shared action keys found for reset.")
+
+            steps = max(int(duration_s * fps), 1)
+            move_start_t = time.perf_counter()
+            for step in range(1, steps + 1):
+                if not self.connected:
+                    break
+                alpha = step / steps
+                eased = alpha * alpha * (3 - 2 * alpha)
+                action = {
+                    key: start_action[key] + (target_action[key] - start_action[key]) * eased
+                    for key in keys
+                }
+                loop_t = time.perf_counter()
+                with self.robot_lock:
+                    robot.send_action(action)
+                precise_sleep(max(1 / fps - (time.perf_counter() - loop_t), 0.0))
+            with self.robot_lock:
+                robot.send_action({key: target_action[key] for key in keys})
+            elapsed_s = max(time.perf_counter() - move_start_t, 1e-6)
+            self._append_log(f"[RESET] Sent {steps} reset steps over {elapsed_s:.2f}s ({steps / elapsed_s:.1f}Hz target={fps}Hz).")
+        finally:
+            self.reset_running = was_reset_running
+
+    def _current_robot_motor_action(self, robot: Any) -> dict[str, float]:
+        if hasattr(robot, "left_arm") and hasattr(robot, "right_arm"):
+            with self.robot_lock:
+                left_future = robot._io_executor.submit(robot._read_arm_motors, robot.left_arm)
+                right_future = robot._io_executor.submit(robot._read_arm_motors, robot.right_arm)
+                left_obs = left_future.result()
+                right_obs = right_future.result()
+            return {
+                **{f"left_{key}": value for key, value in left_obs.items()},
+                **{f"right_{key}": value for key, value in right_obs.items()},
+            }
         with self.robot_lock:
             start_obs = robot.get_observation()
-            start_action = self._action_from_observation(robot, start_obs)
-        keys = [key for key in robot.action_features if key in target_action and key in start_action]
-        if self.lock_grippers.get() and not include_grippers:
-            keys = [key for key in keys if not self._is_gripper_key(key)]
-        if not keys:
-            raise RuntimeError("No shared action keys found for reset.")
-
-        steps = max(int(duration_s * fps), 1)
-        for step in range(1, steps + 1):
-            if not self.connected:
-                break
-            alpha = step / steps
-            eased = alpha * alpha * (3 - 2 * alpha)
-            action = {
-                key: start_action[key] + (target_action[key] - start_action[key]) * eased
-                for key in keys
-            }
-            loop_t = time.perf_counter()
-            with self.robot_lock:
-                robot.send_action(action)
-            precise_sleep(max(1 / fps - (time.perf_counter() - loop_t), 0.0))
-        with self.robot_lock:
-            robot.send_action({key: target_action[key] for key in keys})
+        return self._action_from_observation(robot, start_obs)
 
     @staticmethod
     def _action_from_observation(robot: Any, observation: dict[str, Any]) -> dict[str, float]:
@@ -3022,6 +4537,7 @@ class EvalPolicyApp:
         threading.Thread(target=self._disconnect_worker, daemon=True).start()
 
     def _disconnect_worker(self) -> None:
+        self._stop_connected_preview()
         robot = self.robot
         self._safe_disconnect_robot(robot)
         with self.robot_lock:
@@ -3029,6 +4545,45 @@ class EvalPolicyApp:
             self.connected = False
             self.initial_joint_action = None
         self.log_queue.put("__DISCONNECT_DONE__|0|")
+
+    def _start_connected_preview(self) -> None:
+        if self.connected_preview_thread is not None and self.connected_preview_thread.is_alive():
+            return
+        stop_event = threading.Event()
+        self.connected_preview_stop = stop_event
+        self.connected_preview_thread = threading.Thread(
+            target=self._connected_preview_worker,
+            args=(stop_event,),
+            daemon=True,
+        )
+        self.connected_preview_thread.start()
+
+    def _stop_connected_preview(self) -> None:
+        if self.connected_preview_stop is not None:
+            self.connected_preview_stop.set()
+        self.connected_preview_stop = None
+        self.connected_preview_thread = None
+
+    def _connected_preview_worker(self, stop_event: threading.Event) -> None:
+        last_error_t = 0.0
+        while not stop_event.is_set():
+            if not self.connected or self.robot is None:
+                break
+            if self.eval_running or self.reset_running:
+                time.sleep(0.1)
+                continue
+            loop_t = time.perf_counter()
+            try:
+                with self.robot_lock:
+                    raw_obs = self._get_eval_observation(self.robot)
+                loop_s = max(time.perf_counter() - loop_t, 1e-6)
+                self._put_preview(raw_obs, {}, 1.0 / loop_s, ", ".join(sorted(raw_obs)))
+            except Exception as exc:
+                now = time.perf_counter()
+                if now - last_error_t > 2.0:
+                    last_error_t = now
+                    self.log_queue.put(f"[PREVIEW] Warning: {exc}")
+            time.sleep(0.1)
 
     def _safe_disconnect_robot(self, robot: Any | None) -> None:
         if robot is None:
@@ -3250,12 +4805,14 @@ class EvalPolicyApp:
                 self.connect_button.configure(state=tk.DISABLED if ok else tk.NORMAL)
                 self.start_button.configure(state=tk.NORMAL if ok else tk.DISABLED)
                 self.disconnect_button.configure(state=tk.NORMAL if ok else tk.DISABLED)
-                self.teleop_button.configure(state=tk.NORMAL if ok else tk.DISABLED)
+                self.teleop_button.configure(state=tk.DISABLED)
                 self.capture_reset_button.configure(state=tk.NORMAL if ok else tk.DISABLED)
                 self.reset_button.configure(state=tk.NORMAL if ok and self.initial_joint_action else tk.DISABLED)
                 self.default_pose_button.configure(state=tk.NORMAL if ok else tk.DISABLED)
                 self.stop_teleop_button.configure(state=tk.DISABLED)
                 self.stop_button.configure(state=tk.DISABLED)
+                if ok:
+                    self._start_connected_preview()
                 self.vars["status"].set(
                     "Connected. Start will reuse this connection."
                     if ok
@@ -3270,7 +4827,7 @@ class EvalPolicyApp:
                 self.start_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
                 self.stop_button.configure(state=tk.DISABLED)
                 self.disconnect_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
-                self.teleop_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
+                self.teleop_button.configure(state=tk.DISABLED)
                 self.capture_reset_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
                 self.reset_button.configure(
                     state=tk.NORMAL if self.connected and self.initial_joint_action else tk.DISABLED
@@ -3293,15 +4850,16 @@ class EvalPolicyApp:
                     "task": self.vars["task"].get(),
                     "command": "in-process persistent eval",
                     **self.active_eval_metadata,
+                    **self._segmentation_metric_record(),
                 }
                 self.result_saved = False
                 self._reset_result_fields()
-                if ok and self.auto_reset_after_policy.get():
-                    status = "Policy stopped/saved and arms reset. Robot remains connected."
-                elif ok:
-                    status = "Policy stopped/saved. Auto reset was disabled; robot remains connected."
+                self._apply_auto_result_fields()
+                self._start_post_run_reset()
+                if ok:
+                    status = "Policy stopped; reset is running in background. Save Result will encode videos."
                 else:
-                    status = "Policy failed. Check the log for reset status; robot remains connected."
+                    status = "Policy failed; reset is running in background. Review the auto labels, then save or discard."
                 self.vars["status"].set(status)
                 self._show_result_dialog()
             elif message.startswith("__DISCONNECT_DONE__|"):
@@ -3320,7 +4878,7 @@ class EvalPolicyApp:
                 self.teleop_running = False
                 self.stop_teleop_requested = False
                 self.start_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
-                self.teleop_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
+                self.teleop_button.configure(state=tk.DISABLED)
                 self.stop_teleop_button.configure(state=tk.DISABLED)
                 self.disconnect_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
                 self.capture_reset_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
@@ -3337,7 +4895,7 @@ class EvalPolicyApp:
                 ok = message.split("|", 2)[1] == "0"
                 self.reset_running = False
                 self.start_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
-                self.teleop_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
+                self.teleop_button.configure(state=tk.DISABLED)
                 self.disconnect_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
                 self.capture_reset_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
                 self.reset_button.configure(
@@ -3349,7 +4907,7 @@ class EvalPolicyApp:
                 ok = message.split("|", 2)[1] == "0"
                 self.reset_running = False
                 self.start_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
-                self.teleop_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
+                self.teleop_button.configure(state=tk.DISABLED)
                 self.disconnect_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
                 self.capture_reset_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
                 self.reset_button.configure(
@@ -3376,10 +4934,10 @@ class EvalPolicyApp:
 
         while True:
             try:
-                image_key, image, action, fps_hz, input_keys = self.preview_queue.get_nowait()
+                images, action, fps_hz, input_keys, model_masks = self.preview_queue.get_nowait()
             except queue.Empty:
                 break
-            self._update_preview(image_key, image, action, fps_hz, input_keys)
+            self._update_preview(images, action, fps_hz, input_keys, model_masks)
 
         if self.started_at is not None and (self.eval_running or self.process is not None):
             elapsed = int(time.monotonic() - self.started_at)
@@ -3387,25 +4945,162 @@ class EvalPolicyApp:
 
         self.root.after(200, self._tick)
 
-    def _update_preview(self, image_key: str, image: Any, action: dict[str, Any], fps_hz: float, input_keys: str) -> None:
+    @staticmethod
+    def _fit_preview_image(image: Any, target_width: int, *, nearest: bool = False) -> Any:
+        from PIL import Image
+
+        resampling = Image.Resampling.NEAREST if nearest else Image.Resampling.LANCZOS
+        width = min(max(int(target_width), PREVIEW_MIN_WIDTH), PREVIEW_MAX_WIDTH)
+        target_size = (width, round(width * 9 / 16))
+        fitted = image.copy()
+        fitted.thumbnail(target_size, resampling)
+        canvas = Image.new("RGB", target_size, "black")
+        canvas.paste(
+            fitted,
+            ((target_size[0] - fitted.width) // 2, (target_size[1] - fitted.height) // 2),
+        )
+        return canvas
+
+    @staticmethod
+    def _render_model_mask_previews(
+        model_masks: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        import numpy as np
+
+        semantic_order = ("occluder", "object", "region", "tool")
+        semantic_colors = {
+            semantic: SEGMENTATION_PALETTE[idx]
+            for idx, semantic in enumerate(semantic_order, start=1)
+        }
+        masks_by_view: dict[str, dict[str, Any]] = {"front": {}, "side": {}}
+        for key, value in model_masks.items():
+            leaf = str(key).rsplit(".", 1)[-1]
+            view, separator, semantic = leaf.partition("_")
+            if not separator or view not in masks_by_view or semantic not in semantic_colors:
+                continue
+            if hasattr(value, "numpy"):
+                value = value.numpy()
+            array = np.asarray(value)
+            if array.ndim > 2:
+                array = np.squeeze(array)
+            if array.ndim != 2:
+                continue
+            masks_by_view[view][semantic] = array.astype(np.float32) / 255.0
+
+        overlays: dict[str, Any] = {}
+        summaries: dict[str, str] = {}
+        for view, semantic_masks in masks_by_view.items():
+            if not semantic_masks:
+                continue
+            available = [semantic for semantic in semantic_order if semantic in semantic_masks]
+            probabilities = np.stack([semantic_masks[semantic] for semantic in available], axis=0)
+            winning_index = probabilities.argmax(axis=0)
+            confidence = probabilities.max(axis=0)
+            overlay = np.zeros((*confidence.shape, 3), dtype=np.uint8)
+            for idx, semantic in enumerate(available):
+                selected = (winning_index == idx) & (confidence >= 0.5)
+                overlay[selected] = semantic_colors[semantic]
+            overlays[view] = np.ascontiguousarray(overlay)
+            summaries[view] = ", ".join(
+                f"{semantic} {100.0 * float((semantic_masks[semantic] >= 0.5).mean()):.1f}%"
+                for semantic in available
+            )
+        return overlays, summaries
+
+    def _update_preview(
+        self,
+        images: dict[str, Any],
+        action: dict[str, Any],
+        fps_hz: float,
+        input_keys: str,
+        model_masks: dict[str, Any],
+    ) -> None:
         try:
             from PIL import Image, ImageTk
             import numpy as np
 
-            if image is not None:
+            for image_key, image in images.items():
+                label = self.preview_labels.get(image_key)
+                if label is None or image is None:
+                    continue
                 arr = np.asarray(image)
                 if arr.ndim == 3 and arr.shape[2] == 3:
                     pil = Image.fromarray(arr.astype(np.uint8), mode="RGB")
-                    pil.thumbnail((700, 520))
-                    self.current_image = ImageTk.PhotoImage(pil)
-                    self.preview_label.configure(image=self.current_image)
+                    pil = self._fit_preview_image(pil, label.winfo_width())
+                    self.current_images[image_key] = ImageTk.PhotoImage(pil)
+                    label.configure(image=self.current_images[image_key])
+            if self.enable_segmentation_preview.get():
+                if self.segmentation_model is None:
+                    self.segmentation_model = SegmentationPreviewModel(
+                        self.vars["segmentation_model_path"].get(),
+                        self.vars["segmentation_device"].get(),
+                    )
+                overlays, summaries, measurements = self.segmentation_model.predict(images)
+                self._update_segmentation_eval_metrics(measurements)
+                for image_key, overlay in overlays.items():
+                    label = self.segmentation_preview_labels.get(image_key)
+                    if label is None:
+                        continue
+                    pil = Image.fromarray(np.asarray(overlay).astype(np.uint8), mode="RGB")
+                    pil = self._fit_preview_image(pil, label.winfo_width(), nearest=True)
+                    self.current_segmentation_images[image_key] = ImageTk.PhotoImage(pil)
+                    label.configure(image=self.current_segmentation_images[image_key])
+                    summary = self.segmentation_summary_labels.get(image_key)
+                    if summary is not None:
+                        summary.configure(text=summaries.get(image_key, ""))
+                if not self.segmentation_loaded_logged and self.segmentation_model.loaded_device != "not-loaded":
+                    self.segmentation_loaded_logged = True
+                    self._append_log(
+                        f"[SEG] Loaded {self.vars['segmentation_model_path'].get()} "
+                        f"on {self.segmentation_model.loaded_device}."
+                    )
+            else:
+                self.current_segmentation_images.clear()
+                for label in self.segmentation_preview_labels.values():
+                    label.configure(image="")
+                for summary in self.segmentation_summary_labels.values():
+                    summary.configure(text="")
+
+            model_overlays, model_summaries = self._render_model_mask_previews(model_masks)
+            for image_key, label in self.model_mask_preview_labels.items():
+                overlay = model_overlays.get(image_key)
+                summary = self.model_mask_summary_labels.get(image_key)
+                if overlay is None:
+                    self.current_model_mask_images.pop(image_key, None)
+                    label.configure(image="")
+                    if summary is not None:
+                        summary.configure(text="Waiting for Mask-ACT inference")
+                    continue
+                pil = Image.fromarray(overlay, mode="RGB")
+                pil = self._fit_preview_image(pil, label.winfo_width(), nearest=True)
+                self.current_model_mask_images[image_key] = ImageTk.PhotoImage(pil)
+                label.configure(image=self.current_model_mask_images[image_key])
+                if summary is not None:
+                    summary.configure(text=model_summaries.get(image_key, ""))
         except Exception as exc:
-            self._append_log(f"[GUI] Preview update failed: {exc}")
+            if not self.segmentation_error_logged:
+                self.segmentation_error_logged = True
+                self._append_log(f"[GUI] Preview/segmentation update failed: {exc}")
 
         self.log_text.delete("1.0", tk.END)
-        self.log_text.insert(tk.END, f"image_key: {image_key}\n")
+        self.log_text.insert(tk.END, f"image_keys: {', '.join(images) or 'none'}\n")
         self.log_text.insert(tk.END, f"loop_hz: {fps_hz:.1f}\n")
         self.log_text.insert(tk.END, f"policy inputs: {input_keys}\n\n")
+        auto = self.segmentation_eval_metrics
+        self.log_text.insert(
+            tk.END,
+            "auto metrics: "
+            f"final_exposed={auto['final_object_exposed']}, "
+            f"final_separated={auto['final_object_separated']}, "
+            f"final_in_region={auto['final_object_reached_region']}, "
+            f"final_front_cover={auto['final_front_coverage']}, "
+            f"final_success={auto['final_task_success']}, "
+            f"ever_exposed={auto['auto_object_exposed']}, "
+            f"ever_separated={auto['auto_object_separated']}, "
+            f"ever_in_region={auto['auto_object_reached_region']}, "
+            f"front_occ_last={100.0 * float(auto['last_front_occluder_coverage']):.1f}%, "
+            f"reason={self._segmentation_final_failure_reason(auto)}\n\n",
+        )
         self.log_text.insert(tk.END, "policy action:\n")
         for key, value in action.items():
             try:
@@ -3436,6 +5131,7 @@ class EvalPolicyApp:
         }
         self.result_saved = False
         self._reset_result_fields()
+        self._apply_auto_result_fields()
         self.process = None
         self.started_at = None
         self.process_kind = ""
@@ -3458,17 +5154,26 @@ class EvalPolicyApp:
             else f"Run exited with code {return_code}. Choose result, then Save Result."
         )
         self._append_log(f"[GUI] Process exited with code {return_code}")
+        self._start_post_run_reset()
         self._show_result_dialog()
 
     def _show_result_dialog(self) -> None:
         if not self.last_run:
             self.vars["status"].set("No finished run to review.")
             return
+        if self.result_dialog is not None and self.result_dialog.winfo_exists():
+            self.result_dialog.deiconify()
+            self.result_dialog.lift()
+            self.result_dialog.focus_set()
+            return
+        self._apply_auto_result_fields()
         dialog = tk.Toplevel(self.root)
+        self.result_dialog = dialog
         dialog.title("Save evaluation result")
         dialog.transient(self.root)
-        dialog.grab_set()
         dialog.resizable(False, False)
+        dialog.columnconfigure(0, weight=0)
+        dialog.columnconfigure(1, weight=1)
         ttk.Label(dialog, text="Result").grid(row=0, column=0, sticky=tk.W, padx=14, pady=(14, 8))
         ttk.Combobox(
             dialog,
@@ -3487,7 +5192,7 @@ class EvalPolicyApp:
             width=18,
         ).grid(row=1, column=1, sticky=tk.EW, padx=(0, 14), pady=8)
 
-        ttk.Label(dialog, text="Object pushed out of occlusion").grid(
+        ttk.Label(dialog, text="Object separated from occlusion").grid(
             row=2, column=0, sticky=tk.W, padx=14, pady=8
         )
         ttk.Combobox(
@@ -3498,7 +5203,7 @@ class EvalPolicyApp:
             width=18,
         ).grid(row=2, column=1, sticky=tk.EW, padx=(0, 14), pady=8)
 
-        ttk.Label(dialog, text="Successfully pushed object").grid(
+        ttk.Label(dialog, text="Task success (region + front cover)").grid(
             row=3, column=0, sticky=tk.W, padx=14, pady=8
         )
         ttk.Combobox(
@@ -3509,14 +5214,69 @@ class EvalPolicyApp:
             width=18,
         ).grid(row=3, column=1, sticky=tk.EW, padx=(0, 14), pady=8)
 
-        ttk.Label(dialog, text="Contact failure count").grid(row=4, column=0, sticky=tk.W, padx=14, pady=8)
-        ttk.Entry(dialog, textvariable=self.vars["contact_failure_count"], width=20).grid(
-            row=4, column=1, sticky=tk.EW, padx=(0, 14), pady=8
-        )
+        details_frame = ttk.LabelFrame(dialog, text="Auto segmentation details", padding=(10, 8))
+        details_frame.grid(row=4, column=0, columnspan=2, sticky=tk.EW, padx=14, pady=(4, 8))
+        details_frame.columnconfigure(1, weight=1)
+        detail_labels: list[tuple[str, tk.Label, tk.Label]] = []
+        for detail_row, (name, value, category) in enumerate(self._auto_result_detail_rows()):
+            name_label = tk.Label(details_frame, text=name, anchor="w")
+            value_label = tk.Label(details_frame, text=value, anchor="w")
+            name_label.grid(row=detail_row, column=0, sticky=tk.W, padx=(0, 18), pady=2)
+            value_label.grid(row=detail_row, column=1, sticky=tk.W, pady=2)
+            detail_labels.append((category, name_label, value_label))
 
-        ttk.Label(dialog, text="Failure recovery count").grid(row=5, column=0, sticky=tk.W, padx=14, pady=8)
-        ttk.Entry(dialog, textvariable=self.vars["failure_recovery_count"], width=20).grid(
-            row=5, column=1, sticky=tk.EW, padx=(0, 14), pady=8
+        def update_detail_state(*_args: Any) -> None:
+            result_success = self.vars["result"].get() == "success"
+            for category, name_label, value_label in detail_labels:
+                color = "#8a8a8a" if result_success and category == "diagnostic" else "#000000"
+                name_label.configure(fg=color)
+                value_label.configure(fg=color)
+
+        result_trace_id = self.vars["result"].trace_add("write", update_detail_state)
+        update_detail_state()
+
+        def close_dialog() -> None:
+            try:
+                self.vars["result"].trace_remove("write", result_trace_id)
+            except tk.TclError:
+                pass
+            if self.result_dialog is dialog:
+                self.result_dialog = None
+            dialog.destroy()
+
+        tags_frame = ttk.LabelFrame(dialog, text="Tags", padding=(10, 8))
+        tags_frame.grid(row=5, column=0, columnspan=2, sticky=tk.EW, padx=14, pady=(0, 8))
+        tags_frame.columnconfigure(0, weight=1)
+        ttk.Entry(tags_frame, textvariable=self.vars["result_tags"]).grid(
+            row=0, column=0, columnspan=3, sticky=tk.EW
+        )
+        ttk.Label(tags_frame, text="Comma-separated labels saved with this trial.").grid(
+            row=1, column=0, columnspan=3, sticky=tk.W, pady=(4, 0)
+        )
+        tag_candidate_var = tk.StringVar(value="")
+        tag_candidates = self._result_tag_candidates()
+        tag_combo = ttk.Combobox(
+            tags_frame,
+            textvariable=tag_candidate_var,
+            values=tag_candidates,
+            state="readonly" if tag_candidates else tk.DISABLED,
+        )
+        tag_combo.grid(row=2, column=0, sticky=tk.EW, pady=(8, 0))
+
+        def add_selected_tag() -> None:
+            selected_tag = tag_candidate_var.get().strip()
+            if not selected_tag:
+                return
+            tags = self._parse_result_tags(self.vars["result_tags"].get())
+            if selected_tag.lower() not in {tag.lower() for tag in tags}:
+                tags.append(selected_tag)
+            self.vars["result_tags"].set(", ".join(tags))
+
+        ttk.Button(tags_frame, text="Add Tag", command=add_selected_tag).grid(
+            row=2, column=1, sticky=tk.E, padx=(8, 0), pady=(8, 0)
+        )
+        ttk.Button(tags_frame, text="Clear", command=lambda: self.vars["result_tags"].set("")).grid(
+            row=2, column=2, sticky=tk.E, padx=(8, 0), pady=(8, 0)
         )
 
         ttk.Label(dialog, text=self.vars["elapsed"].get()).grid(
@@ -3525,61 +5285,132 @@ class EvalPolicyApp:
         buttons = ttk.Frame(dialog)
         buttons.grid(row=7, column=0, columnspan=2, sticky=tk.E, padx=14, pady=(4, 14))
 
+        save_button: ttk.Button
+        later_button: ttk.Button
+        discard_button: ttk.Button
+
         def save_and_close() -> None:
-            if self.save_result():
-                dialog.destroy()
+            if self.saving_result:
+                return
+            try:
+                record, result_path = self._prepare_result_save()
+            except ValueError as exc:
+                self._alert("Cannot save result", str(exc))
+                return
+            self.saving_result = True
+            self.vars["status"].set("Saving result and encoding videos...")
+            for button in (save_button, later_button, discard_button):
+                button.configure(state=tk.DISABLED)
+
+            def worker() -> None:
+                try:
+                    self._commit_result_save(record, result_path)
+                except Exception as exc:
+                    self.root.after(0, lambda exc=exc: save_failed(exc))
+                    return
+                self.root.after(0, save_finished)
+
+            def save_finished() -> None:
+                self.saving_result = False
+                self.last_run = {}
+                self.result_saved = True
+                self._refresh_grid_stats()
+                self.vars["status"].set(f"Saved result: {result_path}")
+                self._append_log(f"[GUI] Saved result metadata to {result_path}")
+                close_dialog()
+
+            def save_failed(exc: Exception) -> None:
+                self.saving_result = False
+                for button in (save_button, later_button, discard_button):
+                    button.configure(state=tk.NORMAL)
+                self.vars["status"].set("Save failed. Check the error and try again.")
+                self._alert("Cannot save result", str(exc))
+
+            threading.Thread(target=worker, daemon=True).start()
 
         def keep_for_later() -> None:
             self.vars["status"].set("Result kept as pending. Use Review / Save Result before the next run.")
-            dialog.destroy()
+            close_dialog()
 
         def discard_and_close() -> None:
             if self.discard_result(confirm=True):
-                dialog.destroy()
+                close_dialog()
 
-        ttk.Button(buttons, text="Save", command=save_and_close).pack(side=tk.LEFT)
-        ttk.Button(buttons, text="Later (Keep Data)", command=keep_for_later).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(
+        save_button = ttk.Button(buttons, text="Save", command=save_and_close)
+        save_button.pack(side=tk.LEFT)
+        later_button = ttk.Button(buttons, text="Later (Keep Data)", command=keep_for_later)
+        later_button.pack(side=tk.LEFT, padx=(8, 0))
+        discard_button = ttk.Button(
             buttons,
             text="Discard + Delete Data",
             command=discard_and_close,
-        ).pack(side=tk.LEFT, padx=(8, 0))
+        )
+        discard_button.pack(side=tk.LEFT, padx=(8, 0))
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+
+        def activate_dialog(attempt: int = 0) -> None:
+            try:
+                if not dialog.winfo_exists():
+                    return
+                dialog.lift()
+                if not dialog.winfo_viewable():
+                    if attempt < 50:
+                        dialog.after(20, activate_dialog, attempt + 1)
+                    return
+                dialog.grab_set()
+                dialog.focus_set()
+            except tk.TclError:
+                if attempt < 50:
+                    self.root.after(20, activate_dialog, attempt + 1)
+
+        dialog.update_idletasks()
+        x = self.root.winfo_rootx() + max((self.root.winfo_width() - dialog.winfo_reqwidth()) // 2, 0)
+        y = self.root.winfo_rooty() + max((self.root.winfo_height() - dialog.winfo_reqheight()) // 2, 0)
+        dialog.geometry(f"+{x}+{y}")
+        dialog.after_idle(activate_dialog)
 
     def _reset_result_fields(self) -> None:
         self.vars["result"].set("failure")
         self.vars["object_exposed"].set("no")
         self.vars["object_pushed_out"].set("no")
         self.vars["object_push_success"].set("no")
-        self.vars["contact_failure_count"].set("0")
-        self.vars["failure_recovery_count"].set("0")
+        self.vars["result_tags"].set("")
 
     def _result_metrics(self) -> dict[str, Any]:
-        try:
-            contact_failures = int(self.vars["contact_failure_count"].get())
-            recoveries = int(self.vars["failure_recovery_count"].get())
-        except ValueError as exc:
-            raise ValueError("Contact failure count and failure recovery count must be integers.") from exc
-        if contact_failures < 0 or recoveries < 0:
-            raise ValueError("Contact failure count and failure recovery count cannot be negative.")
-        if recoveries > contact_failures:
-            raise ValueError("Failure recovery count cannot exceed contact failure count.")
+        tags = self._parse_result_tags(self.vars["result_tags"].get())
         return {
             "object_exposed": self.vars["object_exposed"].get() == "yes",
+            "object_separated_from_occlusion": self.vars["object_pushed_out"].get() == "yes",
             "object_pushed_out_of_occlusion": self.vars["object_pushed_out"].get() == "yes",
             "object_push_success": self.vars["object_push_success"].get() == "yes",
-            "contact_failure_count": contact_failures,
-            "failure_recovery_count": recoveries,
+            "tags": tags,
+            "tags_text": ", ".join(tags),
         }
 
     def save_result(self) -> bool:
-        if not self.last_run:
-            self.vars["status"].set("No finished run to save yet.")
-            return False
         try:
-            metrics = self._result_metrics()
+            record, result_path = self._prepare_result_save()
+            self._commit_result_save(record, result_path)
         except ValueError as exc:
             self._alert("Cannot save result", str(exc))
             return False
+        except Exception as exc:
+            self._alert("Cannot save result", str(exc))
+            return False
+        self.last_run = {}
+        self.result_saved = True
+        self._refresh_grid_stats()
+        self.vars["status"].set(f"Saved result: {result_path}")
+        self._append_log(f"[GUI] Saved result metadata to {result_path}")
+        return True
+
+    def _prepare_result_save(self) -> tuple[dict[str, Any], Path]:
+        if not self.last_run:
+            raise ValueError("No finished run to save yet.")
+        try:
+            metrics = self._result_metrics()
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         policy_type = str(self.last_run.get("policy_type") or self.vars["policy_type"].get())
         policy_variant_value = self.last_run.get("policy_variant") or self.last_run.get("mask_act_experiment")
         policy_variant = str(policy_variant_value) if policy_variant_value else None
@@ -3591,14 +5422,22 @@ class EvalPolicyApp:
             default_save_parent /= policy_variant
         save_parent = Path(str(self.last_run.get("save_parent") or default_save_parent)).expanduser()
         save_parent.mkdir(parents=True, exist_ok=True)
-        grid_size = int(self.last_run["grid_size"])
+        grid = {
+            "grid_size": self.last_run.get("grid_size"),
+            "grid_rows": self.last_run.get("grid_rows"),
+            "grid_cols": self.last_run.get("grid_cols"),
+            "grid_cell": self.last_run.get("grid_cell"),
+        }
+        if grid["grid_rows"] is None or grid["grid_cols"] is None:
+            grid["grid_rows"] = grid["grid_size"]
+            grid["grid_cols"] = grid["grid_size"]
         grid_cell = str(self.last_run["grid_cell"])
         task = str(self.last_run["task"])
         prior_records = self._result_records(save_root, policy_type, policy_variant)
         prior_count, _prior_successes = self._grid_stats_from_records(
             prior_records,
             task=task,
-            grid_size=grid_size,
+            grid=grid,
             grid_cell=grid_cell,
         )
         record = {
@@ -3609,6 +5448,10 @@ class EvalPolicyApp:
             "saved_at": datetime.now().isoformat(timespec="seconds"),
         }
         result_path = save_parent / RESULTS_FILENAME
+        return record, result_path
+
+    def _commit_result_save(self, record: dict[str, Any], result_path: Path) -> None:
+        self._encode_confirmed_run_videos(record)
         with result_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         dataset_root = record.get("dataset_root")
@@ -3619,12 +5462,87 @@ class EvalPolicyApp:
                     json.dumps(record, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
-        self.last_run = {}
-        self.result_saved = True
-        self._refresh_grid_stats()
-        self.vars["status"].set(f"Saved result: {result_path}")
-        self._append_log(f"[GUI] Saved result metadata to {result_path}")
-        return True
+
+    def _encode_confirmed_run_videos(self, record: dict[str, Any]) -> None:
+        if not record.get("save_video"):
+            return
+        dataset_root = record.get("dataset_root")
+        repo_id = record.get("dataset_repo_id")
+        if not dataset_root or not repo_id:
+            raise ValueError("The pending result does not contain a valid dataset root/repo id.")
+        run_root = Path(str(dataset_root)).expanduser()
+        if not run_root.exists():
+            raise ValueError(f"Recorded-data path does not exist: {run_root}")
+
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+        from lerobot.datasets.utils import DEFAULT_EPISODES_PATH, load_episodes
+
+        import pandas as pd
+
+        encoder = LeRobotDataset.__new__(LeRobotDataset)
+        encoder.repo_id = str(repo_id)
+        encoder.root = run_root
+        encoder.meta = LeRobotDatasetMetadata(str(repo_id), run_root)
+        encoder.revision = None
+        encoder.image_writer = None
+        encoder.batch_encoding_size = 1_000_000
+        encoder.episodes_since_last_encoding = 0
+        encoder.vcodec = "h264"
+        encoder.episodes = None
+        encoder.hf_dataset = None
+        encoder.writer = None
+        encoder.latest_episode = None
+        encoder._current_file_start_frame = None
+        encoder._lazy_loading = True
+        encoder._recorded_frames = encoder.meta.total_frames
+        encoder._writer_closed_for_reading = False
+
+        video_keys = list(encoder.meta.video_keys)
+        if not video_keys:
+            return
+        if encoder.meta.total_episodes != 1:
+            raise ValueError(
+                f"Expected exactly one pending episode for confirmation-time video encoding; "
+                f"found {encoder.meta.total_episodes} in {run_root}."
+            )
+
+        episode_index = 0
+        episode = encoder.meta.episodes[episode_index]
+        if all(
+            f"videos/{video_key}/chunk_index" in episode
+            and (run_root / encoder.meta.get_video_file_path(episode_index, video_key)).is_file()
+            for video_key in video_keys
+        ):
+            self._append_log("[RECORD] MP4 videos already exist for this run; skipping encoding.")
+            return
+
+        self._append_log(f"[RECORD] Encoding confirmed MP4 videos for {', '.join(video_keys)}.")
+        chunk_idx = episode["data/chunk_index"]
+        file_idx = episode["data/file_index"]
+        episode_df_path = run_root / DEFAULT_EPISODES_PATH.format(
+            chunk_index=chunk_idx,
+            file_index=file_idx,
+        )
+        episode_df = pd.read_parquet(episode_df_path)
+        video_metadata: dict[str, Any] = {}
+        original_episodes = encoder.meta.episodes
+        try:
+            # This run directory contains one pending episode. Temporarily hiding existing
+            # episode metadata makes LeRobot initialize each camera video from file-000.
+            encoder.meta.episodes = []
+            for video_key in video_keys:
+                video_metadata.update(encoder._save_episode_video(video_key, episode_index))
+        finally:
+            encoder.meta.episodes = original_episodes
+        video_metadata.pop("episode_index", None)
+        video_df = pd.DataFrame(video_metadata, index=[episode_index]).convert_dtypes(
+            dtype_backend="pyarrow"
+        )
+        episode_df = episode_df.combine_first(video_df)
+        episode_df.to_parquet(episode_df_path)
+        encoder.meta.episodes = load_episodes(run_root)
+        encoder.finalize()
+        self._append_log("[RECORD] Confirmed MP4 video encoding finished.")
 
     def discard_result(self, confirm: bool = True) -> bool:
         if not self.last_run:
@@ -3674,6 +5592,9 @@ class EvalPolicyApp:
         return run_root
 
     def _append_log(self, text: str) -> None:
+        if threading.current_thread() is not threading.main_thread():
+            self.log_queue.put(text)
+            return
         print(text, flush=True)
         self.log_text.insert(tk.END, text + "\n")
         self.log_text.see(tk.END)

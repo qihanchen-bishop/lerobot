@@ -324,6 +324,7 @@ class MaskACTPolicy(nn.Module):
         self.metric_loss_weight = metric_loss_weight
         self.metric_eps = metric_eps
         self.bce = nn.BCEWithLogitsLoss()
+        self._latest_inference_mask_preview: dict[str, Tensor] = {}
 
         if self.experiment not in {"1A", "1B", "2A", "2B", "2C", "3", "4A", "4B", "4C", "5"}:
             raise ValueError(
@@ -351,6 +352,11 @@ class MaskACTPolicy(nn.Module):
 
     def reset(self) -> None:
         self.act_policy.reset()
+        self._latest_inference_mask_preview = {}
+
+    def latest_inference_mask_preview(self) -> dict[str, Tensor]:
+        """Return the latest inference masks as CPU uint8 probability maps."""
+        return dict(self._latest_inference_mask_preview)
 
     def _resize_inference_rgb(self, rgb: Tensor) -> Tensor:
         image_size = getattr(self, "inference_image_size", None)
@@ -399,6 +405,10 @@ class MaskACTPolicy(nn.Module):
         else:
             mask_logits, rgb_latent = self.predict_masks_and_latent_from_rgbs(rgbs)
             mask_probs = torch.sigmoid(mask_logits)
+            preview = mask_probs[0].detach().clamp(0.0, 1.0).mul(255).to(dtype=torch.uint8).cpu()
+            self._latest_inference_mask_preview = {
+                key: preview[idx] for idx, key in enumerate(self.mask_keys)
+            }
 
             if self.act_uses_latent():
                 act_batch[OBS_ENV_STATE] = rgb_latent

@@ -170,6 +170,7 @@ wandb/
 /simdata/
 /eval_runs/
 /eval_new/
+/eval/
 /sample/
 /datanew/
 /calibration/
