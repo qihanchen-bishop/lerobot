@@ -15,6 +15,8 @@ Experiments:
       trains ACT only.
   2B: ACT sees predicted masks plus a pooled RGB encoder latent. Action loss trains the latent encoder
       path, but not the mask decoder path.
+  2C: ACT sees predicted masks plus the original RGB images. Masks and RGB share ACT's image backbone,
+      and action loss also backpropagates through the U-Net mask path.
   3:  ACT sees only the pooled RGB encoder latent. U-Net mask decoder is kept as an auxiliary task.
 """
 
@@ -323,8 +325,10 @@ class MaskACTPolicy(nn.Module):
         self.metric_eps = metric_eps
         self.bce = nn.BCEWithLogitsLoss()
 
-        if self.experiment not in {"1A", "1B", "2A", "2B", "3", "4A", "4B", "4C", "5"}:
-            raise ValueError(f"Unknown experiment '{experiment}'. Choose 1A, 1B, 2A, 2B, 3, 4A, 4B, 4C, or 5.")
+        if self.experiment not in {"1A", "1B", "2A", "2B", "2C", "3", "4A", "4B", "4C", "5"}:
+            raise ValueError(
+                f"Unknown experiment '{experiment}'. Choose 1A, 1B, 2A, 2B, 2C, 3, 4A, 4B, 4C, or 5."
+            )
         self.seg_net = UNetSegNet(
             out_masks=len(self.mask_suffixes),
             latent_dim=latent_dim,
@@ -424,13 +428,13 @@ class MaskACTPolicy(nn.Module):
         return self.act_policy.predict_action_chunk(self._prepare_inference_batch(batch))
 
     def mask_action_grad_enabled(self) -> bool:
-        return self.experiment in {"1B", "4A", "4B", "4C"}
+        return self.experiment in {"1B", "2C", "4A", "4B", "4C"}
 
     def latent_action_grad_enabled(self) -> bool:
         return self.experiment in {"2B", "3"}
 
     def act_uses_masks(self) -> bool:
-        return self.experiment in {"1A", "1B", "2A", "2B", "4A", "4B", "4C"}
+        return self.experiment in {"1A", "1B", "2A", "2B", "2C", "4A", "4B", "4C"}
 
     def act_uses_latent(self) -> bool:
         return self.experiment in {"2A", "2B", "3"}
@@ -672,7 +676,11 @@ class MaskACTPolicy(nn.Module):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--experiment", choices=["1A", "1B", "2A", "2B", "3", "4A", "4B", "4C", "5"], required=True)
+    parser.add_argument(
+        "--experiment",
+        choices=["1A", "1B", "2A", "2B", "2C", "3", "4A", "4B", "4C", "5"],
+        required=True,
+    )
     parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--rgb-key", default=DEFAULT_RGB_KEY)
@@ -854,6 +862,8 @@ def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
         return list(args.mask_target_keys)
     if experiment in {"2A", "2B"}:
         return list(args.mask_target_keys)
+    if experiment == "2C":
+        return [*args.mask_target_keys, *args.rgb_keys]
     if experiment in {"4A", "4B", "4C"}:
         return list(args.mask_target_keys)
     if experiment in {"3", "5"}:
