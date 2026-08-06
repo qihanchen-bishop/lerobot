@@ -63,6 +63,8 @@ class DiffusionConfig(PreTrainedConfig):
             `None` means no pretrained weights.
         use_group_norm: Whether to replace batch normalization with group normalization in the backbone.
             The group sizes are set to be about 16 (to be precise, feature_dim // 16).
+        use_frozen_batch_norm: Whether to use frozen batch normalization in the backbone. This preserves
+            pretrained BatchNorm statistics and affine parameters, and is mutually exclusive with group norm.
         spatial_softmax_num_keypoints: Number of keypoints for SpatialSoftmax.
         use_separate_rgb_encoder_per_camera: Whether to use a separate RGB encoder for each camera view.
         down_dims: Feature dimension for each stage of temporal downsampling in the diffusion modeling Unet.
@@ -118,6 +120,7 @@ class DiffusionConfig(PreTrainedConfig):
     crop_is_random: bool = True
     pretrained_backbone_weights: str | None = None
     use_group_norm: bool = True
+    use_frozen_batch_norm: bool = False
     spatial_softmax_num_keypoints: int = 32
     use_separate_rgb_encoder_per_camera: bool = False
     # Unet.
@@ -144,6 +147,7 @@ class DiffusionConfig(PreTrainedConfig):
 
     # Training presets
     optimizer_lr: float = 1e-4
+    optimizer_lr_backbone: float | None = None
     optimizer_betas: tuple = (0.95, 0.999)
     optimizer_eps: float = 1e-8
     optimizer_weight_decay: float = 1e-6
@@ -157,6 +161,26 @@ class DiffusionConfig(PreTrainedConfig):
         if not self.vision_backbone.startswith("resnet"):
             raise ValueError(
                 f"`vision_backbone` must be one of the ResNet variants. Got {self.vision_backbone}."
+            )
+
+        if self.use_group_norm and self.use_frozen_batch_norm:
+            raise ValueError("`use_group_norm` and `use_frozen_batch_norm` are mutually exclusive.")
+        if self.n_obs_steps < 1:
+            raise ValueError(f"`n_obs_steps` must be at least 1. Got {self.n_obs_steps}.")
+        max_action_steps = self.horizon - self.n_obs_steps + 1
+        if not 1 <= self.n_action_steps <= max_action_steps:
+            raise ValueError(
+                "`n_action_steps` must be between 1 and `horizon - n_obs_steps + 1`. "
+                f"Got {self.n_action_steps=} and maximum {max_action_steps}."
+            )
+        if self.drop_n_last_frames < 0:
+            raise ValueError(f"`drop_n_last_frames` must be non-negative. Got {self.drop_n_last_frames}.")
+        if self.num_train_timesteps < 1:
+            raise ValueError(f"`num_train_timesteps` must be positive. Got {self.num_train_timesteps}.")
+        if self.num_inference_steps is not None and not 1 <= self.num_inference_steps <= self.num_train_timesteps:
+            raise ValueError(
+                "`num_inference_steps` must be between 1 and `num_train_timesteps`. "
+                f"Got {self.num_inference_steps=} and {self.num_train_timesteps=}."
             )
 
         supported_prediction_types = ["epsilon", "sample"]

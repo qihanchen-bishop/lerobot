@@ -86,6 +86,46 @@ def parse_args() -> argparse.Namespace:
         help="Diffusion executed action steps per policy call.",
     )
     parser.add_argument(
+        "--diffusion-full-frame",
+        action="store_true",
+        help="Disable Diffusion Policy's default 84x84 crop and send the complete image to its backbone.",
+    )
+    parser.add_argument(
+        "--diffusion-backbone-norm",
+        choices=["group", "batch", "frozen_batch"],
+        default="group",
+        help="Normalization inside the diffusion ResNet. Use frozen_batch with pretrained weights.",
+    )
+    parser.add_argument(
+        "--diffusion-drop-n-last-frames",
+        type=int,
+        default=None,
+        help="Exclude this many frames at each episode end from diffusion training sampling.",
+    )
+    parser.add_argument(
+        "--diffusion-mask-padding-loss",
+        action="store_true",
+        help="Exclude copy-padded action targets from the diffusion denoising loss.",
+    )
+    parser.add_argument(
+        "--diffusion-num-train-timesteps",
+        type=int,
+        default=100,
+        help="Number of noise levels in the diffusion training schedule.",
+    )
+    parser.add_argument(
+        "--diffusion-num-inference-steps",
+        type=int,
+        default=None,
+        help="Reverse denoising steps per action chunk. Defaults to all training noise levels.",
+    )
+    parser.add_argument(
+        "--diffusion-lr-backbone",
+        type=float,
+        default=None,
+        help="Optional learning rate for the diffusion visual backbone; other DP parameters use 1e-4.",
+    )
+    parser.add_argument(
         "--pretrained-backbone-weights",
         default=None,
         help="Optional torchvision backbone weights for ACT or diffusion, e.g. ResNet18_Weights.IMAGENET1K_V1.",
@@ -362,6 +402,22 @@ def build_policy_config(policy_type: str, meta: LeRobotDatasetMetadata, args: ar
         kwargs["horizon"] = args.diffusion_horizon
         kwargs["n_action_steps"] = args.diffusion_n_action_steps
         kwargs["pretrained_backbone_weights"] = args.pretrained_backbone_weights
+        if getattr(args, "diffusion_full_frame", False):
+            kwargs["crop_shape"] = None
+        backbone_norm = getattr(args, "diffusion_backbone_norm", "group")
+        kwargs["use_group_norm"] = backbone_norm == "group"
+        kwargs["use_frozen_batch_norm"] = backbone_norm == "frozen_batch"
+        drop_n_last_frames = getattr(args, "diffusion_drop_n_last_frames", None)
+        if drop_n_last_frames is not None:
+            kwargs["drop_n_last_frames"] = drop_n_last_frames
+        kwargs["do_mask_loss_for_padding"] = getattr(args, "diffusion_mask_padding_loss", False)
+        kwargs["num_train_timesteps"] = getattr(args, "diffusion_num_train_timesteps", 100)
+        num_inference_steps = getattr(args, "diffusion_num_inference_steps", None)
+        if num_inference_steps is not None:
+            kwargs["num_inference_steps"] = num_inference_steps
+        lr_backbone = getattr(args, "diffusion_lr_backbone", None)
+        if lr_backbone is not None:
+            kwargs["optimizer_lr_backbone"] = lr_backbone
 
     return make_policy_config(policy_type, **kwargs)
 
@@ -415,6 +471,26 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     print(f"Training dataset view: {filtered_root}")
     print(f"Input features: {list(policy_cfg.input_features)}")
     print(f"Output features: {list(policy_cfg.output_features)}")
+    if args.policy_type == "diffusion":
+        print(
+            "Diffusion temporal config: "
+            f"obs={policy_cfg.n_obs_steps}, horizon={policy_cfg.horizon}, "
+            f"execute={policy_cfg.n_action_steps}, drop_last={policy_cfg.drop_n_last_frames}"
+        )
+        print(
+            "Diffusion visual config: "
+            f"crop={policy_cfg.crop_shape or 'full frame'}, "
+            f"pretrained={policy_cfg.pretrained_backbone_weights}, "
+            f"group_norm={policy_cfg.use_group_norm}, "
+            f"frozen_batch_norm={policy_cfg.use_frozen_batch_norm}, "
+            f"backbone_lr={policy_cfg.optimizer_lr_backbone or policy_cfg.optimizer_lr:g}"
+        )
+        print(
+            "Diffusion schedule: "
+            f"train_timesteps={policy_cfg.num_train_timesteps}, "
+            f"inference_steps={policy_cfg.num_inference_steps or policy_cfg.num_train_timesteps}, "
+            f"mask_padding_loss={policy_cfg.do_mask_loss_for_padding}"
+        )
     if args.no_gripper:
         print("No gripper: dropped gripper dimensions when present in action and selected state features.")
     print(f"Train log: {log_path}")

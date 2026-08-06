@@ -32,6 +32,7 @@ import torchvision
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from torch import Tensor, nn
+from torchvision.ops.misc import FrozenBatchNorm2d
 
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
@@ -76,8 +77,25 @@ class DiffusionPolicy(PreTrainedPolicy):
 
         self.reset()
 
-    def get_optim_params(self) -> dict:
-        return self.diffusion.parameters()
+    def get_optim_params(self):
+        if self.config.optimizer_lr_backbone is None:
+            return self.diffusion.parameters()
+
+        non_backbone_params = []
+        backbone_params = []
+        for name, parameter in self.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            if name.startswith("diffusion.rgb_encoder") and ".backbone." in name:
+                backbone_params.append(parameter)
+            else:
+                non_backbone_params.append(parameter)
+
+        backbone_group = {
+            "params": backbone_params,
+            "lr": self.config.optimizer_lr_backbone,
+        }
+        return [{"params": non_backbone_params}, backbone_group]
 
     def reset(self):
         """Clear observation and action queues. Should be called on `env.reset()`"""
@@ -142,7 +160,10 @@ class DiffusionPolicy(PreTrainedPolicy):
         """Run the batch through the model and compute the loss for training or validation."""
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
-            batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
+            images = [batch[key] for key in self.config.image_features]
+            if self.config.n_obs_steps == 1:
+                images = [image.unsqueeze(1) if image.ndim == 4 else image for image in images]
+            batch[OBS_IMAGES] = torch.stack(images, dim=-4)
         loss = self.diffusion.compute_loss(batch)
         # no output_dict so returning None
         return loss, None
@@ -458,9 +479,10 @@ class DiffusionRgbEncoder(nn.Module):
             self.do_crop = False
 
         # Set up backbone.
-        backbone_model = getattr(torchvision.models, config.vision_backbone)(
-            weights=config.pretrained_backbone_weights
-        )
+        backbone_kwargs = {"weights": config.pretrained_backbone_weights}
+        if config.use_frozen_batch_norm:
+            backbone_kwargs["norm_layer"] = FrozenBatchNorm2d
+        backbone_model = getattr(torchvision.models, config.vision_backbone)(**backbone_kwargs)
         # Note: This assumes that the layer4 feature map is children()[-3]
         # TODO(alexander-soare): Use a safer alternative.
         self.backbone = nn.Sequential(*(list(backbone_model.children())[:-2]))
