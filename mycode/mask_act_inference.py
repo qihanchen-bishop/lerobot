@@ -69,9 +69,10 @@ def _metadata_has_features(root: Path, required_features: set[str]) -> bool:
 
 
 def _find_metadata_root(run_cfg: dict[str, Any], project_root: Path) -> Path:
+    rgb_keys = run_cfg.get("rgb_keys") or [run_cfg["rgb_key"]]
     required = {
         "action",
-        run_cfg["rgb_key"],
+        *rgb_keys,
         *run_cfg["state_keys"],
         *run_cfg["mask_target_keys"],
     }
@@ -164,5 +165,6 @@ def load_mask_act_for_inference(
         "metadata_root": str(metadata_root),
         "experiment": args.experiment,
         "rgb_key": args.rgb_key,
+        "rgb_keys": list(args.rgb_keys),
     }
     return model, preprocessor, postprocessor, details

@@ -7,16 +7,19 @@ Experiments:
   4A: Same as 1B, with sqrt(object area ratio) and object-region centroid distance as ACT env state.
   4B: Same as 1B, with two ACT encoder metric tokens supervised to predict the two mask metrics.
   4C: Same as 1B, with the two metrics predicted by the ACT decoder and fed back chunk-autoregressively.
-  All experiments use the same canonical five binary semantic masks in this order:
+  Legacy single-view experiments default to five binary semantic masks in this order:
       occluder, object, region, left_arm, right_arm.
   5:  RGB-only inference with latent semantic distillation. During training, ACT receives an RGB main latent
       plus those five mask-encoder semantic teacher latents; RGB semantic heads are aligned to the teachers.
   2A: ACT sees predicted masks plus a pooled RGB encoder latent. Seg loss trains U-Net; action loss
       trains ACT only.
-  2B: ACT sees predicted masks plus a pooled RGB encoder latent. Action loss trains the latent encoder
-      path, but not the mask decoder path.
+  2B: ACT sees predicted masks plus a pooled RGB encoder latent. Action loss backpropagates through
+      the U-Net mask path, while the pooled latent path is detached.
   2C: ACT sees predicted masks plus the original RGB images. Masks and RGB share ACT's image backbone,
       and action loss also backpropagates through the U-Net mask path.
+  SEM-1: Each view's masks are merged into one soft semantic RGB map. ACT sees semantic maps plus
+      the original RGB views through one shared image backbone; no pooled RGB latent is used.
+  SEM-2: Same soft semantic maps as SEM-1, but ACT sees no original RGB images and no pooled latent.
   3:  ACT sees only the pooled RGB encoder latent. U-Net mask decoder is kept as an auxiliary task.
 """
 
@@ -71,6 +74,24 @@ CANONICAL_SEMANTIC_MASK_KEYS = [
     "observation.images.right_arm",
 ]
 DEFAULT_MASK_KEYS = CANONICAL_SEMANTIC_MASK_KEYS
+SEMANTIC_EXPERIMENTS = {"SEM-1", "SEM-2"}
+SEMANTIC_CLASSES = ("occluder", "object", "region", "tool")
+SEMANTIC_PALETTE_BY_CLASS = {
+    "background": (0.0, 0.0, 0.0),
+    "occluder": (50 / 255, 160 / 255, 1.0),
+    "object": (1.0, 80 / 255, 80 / 255),
+    "region": (60 / 255, 220 / 255, 120 / 255),
+    "tool": (210 / 255, 210 / 255, 80 / 255),
+}
+SEMANTIC_CLASS_WEIGHT_BY_NAME = {
+    "background": 0.5,
+    "occluder": 1.0,
+    "object": 2.0,
+    "region": 1.0,
+    "tool": 1.0,
+}
+IMAGENET_VISUAL_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_VISUAL_STD = (0.229, 0.224, 0.225)
 
 
 warnings.filterwarnings(
@@ -107,6 +128,8 @@ class MaskActRunConfig:
     pretrained_backbone_weights: str | None
     canonical_mask_definition: list[str]
     no_gripper: bool
+    dice_loss_weight: float
+    semantic_temperature: float
 
 
 class DoubleConv(nn.Module):
@@ -292,6 +315,10 @@ def find_semantic_mask_index(mask_keys: list[str], semantic_name: str) -> int:
     raise ValueError(f"Could not find semantic mask '{semantic_name}' in mask keys: {mask_keys}")
 
 
+def semantic_image_key(rgb_key: str) -> str:
+    return f"{rgb_key}_semantic"
+
+
 class MaskACTPolicy(nn.Module):
     def __init__(
         self,
@@ -304,9 +331,11 @@ class MaskACTPolicy(nn.Module):
         unet_base_channels: int,
         seg_loss_weight: float,
         action_loss_weight: float,
+        dice_loss_weight: float,
         semantic_loss_weight: float,
         metric_loss_weight: float,
         metric_eps: float,
+        semantic_temperature: float,
         pretrained_backbone_weights: str | None,
     ):
         super().__init__()
@@ -320,21 +349,56 @@ class MaskACTPolicy(nn.Module):
         self.latent_dim = latent_dim
         self.seg_loss_weight = seg_loss_weight
         self.action_loss_weight = action_loss_weight
+        self.dice_loss_weight = dice_loss_weight
         self.semantic_loss_weight = semantic_loss_weight
         self.metric_loss_weight = metric_loss_weight
         self.metric_eps = metric_eps
+        self.semantic_temperature = semantic_temperature
         self.bce = nn.BCEWithLogitsLoss()
         self._latest_inference_mask_preview: dict[str, Tensor] = {}
 
-        if self.experiment not in {"1A", "1B", "2A", "2B", "2C", "3", "4A", "4B", "4C", "5"}:
+        valid_experiments = {
+            "1A",
+            "1B",
+            "2A",
+            "2B",
+            "2C",
+            "3",
+            "4A",
+            "4B",
+            "4C",
+            "5",
+            *SEMANTIC_EXPERIMENTS,
+        }
+        if self.experiment not in valid_experiments:
             raise ValueError(
-                f"Unknown experiment '{experiment}'. Choose 1A, 1B, 2A, 2B, 2C, 3, 4A, 4B, 4C, or 5."
+                f"Unknown experiment '{experiment}'. Choose one of {sorted(valid_experiments)}."
             )
+        if self.semantic_temperature <= 0:
+            raise ValueError(f"semantic_temperature must be positive, got {self.semantic_temperature}.")
+        if self.uses_semantic_maps() and set(self.mask_suffixes) != set(SEMANTIC_CLASSES):
+            raise ValueError(
+                f"{self.experiment} requires exactly these semantic mask suffixes: {list(SEMANTIC_CLASSES)}; "
+                f"got {self.mask_suffixes}."
+            )
+
+        semantic_output_channels = (
+            len(self.mask_suffixes) + 1 if self.uses_semantic_maps() else len(self.mask_suffixes)
+        )
         self.seg_net = UNetSegNet(
-            out_masks=len(self.mask_suffixes),
+            out_masks=semantic_output_channels,
             latent_dim=latent_dim,
             base_channels=unet_base_channels,
         )
+        if self.uses_semantic_maps():
+            palette = [SEMANTIC_PALETTE_BY_CLASS["background"]]
+            palette.extend(SEMANTIC_PALETTE_BY_CLASS[suffix] for suffix in self.mask_suffixes)
+            class_weights = [SEMANTIC_CLASS_WEIGHT_BY_NAME["background"]]
+            class_weights.extend(SEMANTIC_CLASS_WEIGHT_BY_NAME[suffix] for suffix in self.mask_suffixes)
+            self.register_buffer("semantic_palette", torch.tensor(palette, dtype=torch.float32))
+            self.register_buffer("semantic_class_weights", torch.tensor(class_weights, dtype=torch.float32))
+            self.register_buffer("semantic_visual_mean", torch.tensor(IMAGENET_VISUAL_MEAN).view(1, 3, 1, 1))
+            self.register_buffer("semantic_visual_std", torch.tensor(IMAGENET_VISUAL_STD).view(1, 3, 1, 1))
         self.semantic_net = (
             SemanticLatentNet(
                 num_masks=len(self.mask_suffixes),
@@ -364,7 +428,13 @@ class MaskACTPolicy(nn.Module):
             return rgb
         return F.interpolate(rgb, size=tuple(image_size), mode="bilinear", align_corners=False, antialias=True)
 
-    def _get_rgb_inputs(self, batch: dict[str, Tensor], *, device: torch.device | None = None) -> list[Tensor]:
+    def _get_rgb_inputs(
+        self,
+        batch: dict[str, Tensor],
+        *,
+        device: torch.device | None = None,
+        denormalize: bool = False,
+    ) -> list[Tensor]:
         rgbs = []
         missing = [key for key in self.rgb_keys if key not in batch]
         if missing:
@@ -376,6 +446,8 @@ class MaskACTPolicy(nn.Module):
             rgb = batch[key]
             if device is not None:
                 rgb = rgb.to(device=device)
+            if denormalize:
+                rgb = self.denormalize_visual_like(rgb, key)
             rgbs.append(self._resize_inference_rgb(rgb.to(dtype=torch.float32)))
         return rgbs
 
@@ -391,7 +463,7 @@ class MaskACTPolicy(nn.Module):
     @torch.no_grad()
     def _prepare_inference_batch(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         self.eval()
-        rgbs = self._get_rgb_inputs(batch)
+        rgbs = self._get_rgb_inputs(batch, denormalize=self.act_uses_raw_rgb_images())
         act_batch = dict(batch)
 
         if self.uses_semantic_latents():
@@ -402,6 +474,20 @@ class MaskACTPolicy(nn.Module):
                 [rgb_main_latent, rgb_semantic_latents.reshape(rgb_semantic_latents.shape[0], -1)],
                 dim=-1,
             )
+        elif self.uses_semantic_maps():
+            logits_by_view, _ = self.predict_view_logits_and_latent_from_rgbs(rgbs)
+            probabilities_by_view = self.semantic_probabilities(logits_by_view)
+            mask_probs = self.semantic_foreground_probs_for_mask_keys(probabilities_by_view)
+            preview = mask_probs[0].detach().clamp(0.0, 1.0).mul(255).to(dtype=torch.uint8).cpu()
+            self._latest_inference_mask_preview = {
+                key: preview[idx] for idx, key in enumerate(self.mask_keys)
+            }
+            for rgb_key, semantic_rgb in zip(
+                self.rgb_keys,
+                self.semantic_rgb_maps(probabilities_by_view),
+                strict=True,
+            ):
+                act_batch[semantic_image_key(rgb_key)] = self.normalize_semantic_map(semantic_rgb)
         else:
             mask_logits, rgb_latent = self.predict_masks_and_latent_from_rgbs(rgbs)
             mask_probs = torch.sigmoid(mask_logits)
@@ -438,10 +524,10 @@ class MaskACTPolicy(nn.Module):
         return self.act_policy.predict_action_chunk(self._prepare_inference_batch(batch))
 
     def mask_action_grad_enabled(self) -> bool:
-        return self.experiment in {"1B", "2C", "4A", "4B", "4C"}
+        return self.experiment in {"1B", "2B", "2C", "4A", "4B", "4C"}
 
     def latent_action_grad_enabled(self) -> bool:
-        return self.experiment in {"2B", "3"}
+        return self.experiment == "3"
 
     def act_uses_masks(self) -> bool:
         return self.experiment in {"1A", "1B", "2A", "2B", "2C", "4A", "4B", "4C"}
@@ -455,11 +541,23 @@ class MaskACTPolicy(nn.Module):
     def uses_semantic_latents(self) -> bool:
         return self.experiment == "5"
 
+    def uses_semantic_maps(self) -> bool:
+        return self.experiment in SEMANTIC_EXPERIMENTS
+
+    def act_uses_raw_rgb_images(self) -> bool:
+        return self.experiment in {"2C", "SEM-1"}
+
     def normalize_visual_like(self, image: Tensor, key: str) -> Tensor:
         key_stats = self.stats[key]
         mean = torch.as_tensor(key_stats["mean"], dtype=image.dtype, device=image.device)
         std = torch.as_tensor(key_stats["std"], dtype=image.dtype, device=image.device).clamp_min(1e-6)
         return (image - mean) / std
+
+    def denormalize_visual_like(self, image: Tensor, key: str) -> Tensor:
+        key_stats = self.stats[key]
+        mean = torch.as_tensor(key_stats["mean"], dtype=image.dtype, device=image.device)
+        std = torch.as_tensor(key_stats["std"], dtype=image.dtype, device=image.device)
+        return image * std + mean
 
     def build_mask_targets(self, raw_batch: dict[str, Tensor], device: torch.device) -> Tensor:
         masks = []
@@ -472,17 +570,113 @@ class MaskACTPolicy(nn.Module):
             masks.append(mask.clamp(0.0, 1.0))
         return torch.cat(masks, dim=1)
 
+    def build_semantic_targets(
+        self,
+        raw_batch: dict[str, Tensor],
+        device: torch.device,
+    ) -> list[Tensor]:
+        targets_by_view = []
+        for view_idx in range(len(self.rgb_keys)):
+            masks = []
+            for suffix_idx in range(len(self.mask_suffixes)):
+                key = next(
+                    key
+                    for key, mapped_position in self.mask_key_map.items()
+                    if mapped_position == (view_idx, suffix_idx)
+                )
+                mask = raw_batch[key].to(device=device, dtype=torch.float32)
+                mask = mask.mean(dim=1) if mask.shape[1] == 3 else mask[:, 0]
+                masks.append(mask >= 0.5)
+            stacked = torch.stack(masks, dim=1)
+            overlap = stacked.sum(dim=1) > 1
+            if overlap.any():
+                overlap_count = int(overlap.sum().detach().cpu())
+                raise ValueError(
+                    f"{self.experiment} requires mutually exclusive semantic labels, but view "
+                    f"'{self.rgb_keys[view_idx]}' has {overlap_count} overlapping pixels in this batch."
+                )
+            foreground_present = stacked.any(dim=1)
+            target = stacked.to(dtype=torch.int64).argmax(dim=1) + 1
+            targets_by_view.append(torch.where(foreground_present, target, torch.zeros_like(target)))
+        return targets_by_view
+
+    def semantic_probabilities(self, logits_by_view: list[Tensor]) -> list[Tensor]:
+        return [
+            torch.softmax(logits / self.semantic_temperature, dim=1)
+            for logits in logits_by_view
+        ]
+
+    def semantic_rgb_maps(self, probabilities_by_view: list[Tensor]) -> list[Tensor]:
+        return [
+            torch.einsum("bkhw,kc->bchw", probabilities, self.semantic_palette)
+            for probabilities in probabilities_by_view
+        ]
+
+    def normalize_semantic_map(self, semantic_rgb: Tensor) -> Tensor:
+        mean = self.semantic_visual_mean.to(dtype=semantic_rgb.dtype)
+        std = self.semantic_visual_std.to(dtype=semantic_rgb.dtype)
+        return (semantic_rgb - mean) / std
+
+    def semantic_foreground_probs_for_mask_keys(self, probabilities_by_view: list[Tensor]) -> Tensor:
+        return torch.cat(
+            [
+                probabilities_by_view[view_idx][:, suffix_idx + 1 : suffix_idx + 2]
+                for view_idx, suffix_idx in (self.mask_key_map[key] for key in self.mask_keys)
+            ],
+            dim=1,
+        )
+
+    def semantic_segmentation_loss(
+        self,
+        logits_by_view: list[Tensor],
+        targets_by_view: list[Tensor],
+    ) -> tuple[Tensor, Tensor, Tensor, dict[str, float]]:
+        ce_losses = []
+        dice_by_class = []
+        for logits, target in zip(logits_by_view, targets_by_view, strict=True):
+            ce_losses.append(F.cross_entropy(logits, target, weight=self.semantic_class_weights))
+            probabilities = torch.softmax(logits, dim=1)
+            one_hot = (
+                F.one_hot(target, num_classes=logits.shape[1])
+                .permute(0, 3, 1, 2)
+                .to(logits.dtype)
+            )
+            dims = (0, 2, 3)
+            intersection = (probabilities * one_hot).sum(dim=dims)
+            denominator = probabilities.sum(dim=dims) + one_hot.sum(dim=dims)
+            dice_by_class.append((2 * intersection + 1e-6) / (denominator + 1e-6))
+
+        ce_loss = torch.stack(ce_losses).mean()
+        mean_dice = torch.stack(dice_by_class).mean(dim=0)
+        dice_loss = 1 - mean_dice[1:].mean()
+        seg_loss = ce_loss + self.dice_loss_weight * dice_loss
+        dice_logs = {
+            f"dice_{suffix}": float(mean_dice[idx + 1].detach().cpu())
+            for idx, suffix in enumerate(self.mask_suffixes)
+        }
+        return seg_loss, ce_loss, dice_loss, dice_logs
+
     def predict_masks_and_latent(self, raw_batch: dict[str, Tensor], device: torch.device) -> tuple[Tensor, Tensor]:
         return self.predict_masks_and_latent_from_rgbs(self._get_rgb_inputs(raw_batch, device=device))
 
-    def predict_masks_and_latent_from_rgbs(self, rgbs: list[Tensor]) -> tuple[Tensor, Tensor]:
+    def predict_view_logits_and_latent_from_rgbs(self, rgbs: list[Tensor]) -> tuple[list[Tensor], Tensor]:
         logits_by_view = []
         latents = []
         for rgb in rgbs:
             logits, latent = self.seg_net(rgb)
             logits_by_view.append(logits)
             latents.append(latent)
-        return self._stack_logits_for_mask_keys(logits_by_view), torch.cat(latents, dim=-1)
+        return logits_by_view, torch.cat(latents, dim=-1)
+
+    def predict_masks_and_latent_from_rgbs(self, rgbs: list[Tensor]) -> tuple[Tensor, Tensor]:
+        logits_by_view, latent = self.predict_view_logits_and_latent_from_rgbs(rgbs)
+        if self.uses_semantic_maps():
+            probabilities_by_view = self.semantic_probabilities(logits_by_view)
+            foreground_probs_by_view = [probabilities[:, 1:] for probabilities in probabilities_by_view]
+            logits_by_view = [
+                torch.logit(probabilities.clamp(1e-6, 1 - 1e-6)) for probabilities in foreground_probs_by_view
+            ]
+        return self._stack_logits_for_mask_keys(logits_by_view), latent
 
     def predict_semantic_latents(
         self,
@@ -624,6 +818,36 @@ class MaskACTPolicy(nn.Module):
             logs.update({key: float(value) for key, value in action_logs.items() if isinstance(value, (int, float))})
             return loss, logs
 
+        if self.uses_semantic_maps():
+            rgbs = self._get_rgb_inputs(raw_batch, device=device)
+            logits_by_view, _ = self.predict_view_logits_and_latent_from_rgbs(rgbs)
+            semantic_targets = self.build_semantic_targets(raw_batch, device=device)
+            seg_loss, ce_loss, dice_loss, dice_logs = self.semantic_segmentation_loss(
+                logits_by_view,
+                semantic_targets,
+            )
+            probabilities_by_view = self.semantic_probabilities(logits_by_view)
+            semantic_maps = [
+                semantic_map.detach()
+                for semantic_map in self.semantic_rgb_maps(probabilities_by_view)
+            ]
+            act_batch = dict(batch)
+            for rgb_key, semantic_map in zip(self.rgb_keys, semantic_maps, strict=True):
+                act_batch[semantic_image_key(rgb_key)] = self.normalize_semantic_map(semantic_map)
+
+            action_loss, action_logs = self.act_policy(act_batch)
+            loss = self.action_loss_weight * action_loss + self.seg_loss_weight * seg_loss
+            logs = {
+                "loss": float(loss.detach().cpu()),
+                "action_loss": float(action_loss.detach().cpu()),
+                "seg_loss": float(seg_loss.detach().cpu()),
+                "seg_ce_loss": float(ce_loss.detach().cpu()),
+                "seg_dice_loss": float(dice_loss.detach().cpu()),
+                **dice_logs,
+            }
+            logs.update({key: float(value) for key, value in action_logs.items() if isinstance(value, (int, float))})
+            return loss, logs
+
         mask_logits, rgb_latent = self.predict_masks_and_latent(raw_batch, device=device)
         seg_loss = self.bce(mask_logits, mask_targets)
         metric_targets = self.compute_mask_metrics(mask_targets) if self.uses_mask_metrics() else None
@@ -688,7 +912,21 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--experiment",
-        choices=["1A", "1B", "2A", "2B", "2C", "3", "4A", "4B", "4C", "5"],
+        type=str.upper,
+        choices=[
+            "1A",
+            "1B",
+            "2A",
+            "2B",
+            "2C",
+            "3",
+            "4A",
+            "4B",
+            "4C",
+            "5",
+            "SEM-1",
+            "SEM-2",
+        ],
         required=True,
     )
     parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
@@ -737,6 +975,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad-clip-norm", type=float, default=10.0)
     parser.add_argument("--seg-loss-weight", type=float, default=1.0)
     parser.add_argument("--action-loss-weight", type=float, default=1.0)
+    parser.add_argument("--dice-loss-weight", type=float, default=1.0)
+    parser.add_argument("--semantic-temperature", type=float, default=1.0)
     parser.add_argument("--semantic-loss-weight", type=float, default=1.0)
     parser.add_argument("--metric-loss-weight", type=float, default=1.0)
     parser.add_argument("--metric-eps", type=float, default=1e-6)
@@ -868,6 +1108,11 @@ def reshape_visual_stats_for_channel_first(
 
 def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     experiment = args.experiment.upper()
+    semantic_keys = [semantic_image_key(rgb_key) for rgb_key in args.rgb_keys]
+    if experiment == "SEM-1":
+        return [*semantic_keys, *args.rgb_keys]
+    if experiment == "SEM-2":
+        return semantic_keys
     if experiment in {"1A", "1B"}:
         return list(args.mask_target_keys)
     if experiment in {"2A", "2B"}:
@@ -915,11 +1160,22 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
     features = dataset_to_policy_features(meta.features)
     act_image_keys = act_image_keys_for_experiment(args)
     input_keys = [*args.state_keys, *act_image_keys]
-    missing = [key for key in [*input_keys, "action"] if key not in features]
+    semantic_features = {
+        semantic_image_key(rgb_key): PolicyFeature(type=FeatureType.VISUAL, shape=features[rgb_key].shape)
+        for rgb_key in args.rgb_keys
+    }
+    missing = [
+        key
+        for key in [*input_keys, "action"]
+        if key not in features and key not in semantic_features
+    ]
     if missing:
         raise KeyError(f"Missing feature(s) for ACT policy: {missing}")
 
-    input_features = {key: features[key] for key in input_keys}
+    input_features = {
+        key: features[key] if key in features else semantic_features[key]
+        for key in input_keys
+    }
     if args.image_size is not None:
         height, width = args.image_size
         for key in act_image_keys:
@@ -960,9 +1216,11 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         unet_base_channels=args.unet_base_channels,
         seg_loss_weight=args.seg_loss_weight,
         action_loss_weight=args.action_loss_weight,
+        dice_loss_weight=getattr(args, "dice_loss_weight", 1.0),
         semantic_loss_weight=args.semantic_loss_weight,
         metric_loss_weight=args.metric_loss_weight,
         metric_eps=args.metric_eps,
+        semantic_temperature=getattr(args, "semantic_temperature", 1.0),
         pretrained_backbone_weights=args.pretrained_backbone_weights,
     )
 
@@ -986,9 +1244,11 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         unet_base_channels=args.unet_base_channels,
         seg_loss_weight=args.seg_loss_weight,
         action_loss_weight=args.action_loss_weight,
+        dice_loss_weight=args.dice_loss_weight,
         semantic_loss_weight=args.semantic_loss_weight,
         metric_loss_weight=args.metric_loss_weight,
         metric_eps=args.metric_eps,
+        semantic_temperature=args.semantic_temperature,
         chunk_size=args.chunk_size,
         n_action_steps=args.n_action_steps,
         pretrained_backbone_weights=args.pretrained_backbone_weights,
@@ -1000,6 +1260,14 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         payload = asdict(run_cfg)
         payload["dataset_view_image_keys"] = image_keys_in_view
         payload["act_image_keys"] = act_image_keys_for_experiment(args)
+        if args.experiment in SEMANTIC_EXPERIMENTS:
+            mask_suffixes, _ = build_mask_layout(list(args.rgb_keys), list(args.mask_target_keys))
+            payload["semantic_classes"] = ["background", *mask_suffixes]
+            payload["semantic_palette_rgb"] = {
+                name: [round(channel * 255) for channel in color]
+                for name, color in SEMANTIC_PALETTE_BY_CLASS.items()
+            }
+            payload["semantic_map_action_gradient"] = False
         json.dump(payload, f, indent=4)
         f.write("\n")
 
@@ -1077,6 +1345,39 @@ def save_mask_preview(checkpoint_dir: Path, step: int, model: MaskACTPolicy, raw
     was_training = model.training
     model.eval()
     device = next(model.parameters()).device
+    if model.uses_semantic_maps():
+        rgbs = model._get_rgb_inputs(raw_batch, device=device)
+        logits_by_view, _ = model.predict_view_logits_and_latent_from_rgbs(rgbs)
+        probabilities_by_view = model.semantic_probabilities(logits_by_view)
+        soft_maps = model.semantic_rgb_maps(probabilities_by_view)
+        targets_by_view = model.build_semantic_targets(raw_batch, device=device)
+
+        tiles = []
+        for view_idx, rgb_key in enumerate(model.rgb_keys):
+            view_name = rgb_key.rsplit(".", 1)[-1]
+            hard_prediction = probabilities_by_view[view_idx].argmax(dim=1)
+            gt_map = model.semantic_palette[targets_by_view[view_idx]].permute(0, 3, 1, 2)
+            hard_map = model.semantic_palette[hard_prediction].permute(0, 3, 1, 2)
+            tiles.extend(
+                [
+                    make_labeled_tile(raw_batch[rgb_key][0], f"rgb {view_name}"),
+                    make_labeled_tile(gt_map[0], f"gt semantic {view_name}"),
+                    make_labeled_tile(soft_maps[view_idx][0], f"soft semantic {view_name}"),
+                    make_labeled_tile(hard_map[0], f"hard preview {view_name}"),
+                ]
+            )
+
+        columns = 4
+        rows = (len(tiles) + columns - 1) // columns
+        tile_w, tile_h = tiles[0].size
+        grid = Image.new("RGB", (columns * tile_w, rows * tile_h), "white")
+        for idx, tile in enumerate(tiles):
+            grid.paste(tile, ((idx % columns) * tile_w, (idx // columns) * tile_h))
+        grid.save(checkpoint_dir / f"semantic_preview_step_{step:06d}.png")
+        if was_training:
+            model.train()
+        return
+
     mask_targets = model.build_mask_targets(raw_batch, device=device)
     mask_logits, _ = model.predict_masks_and_latent(raw_batch, device=device)
     mask_probs = torch.sigmoid(mask_logits)
@@ -1296,6 +1597,12 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     print(f"ACT image keys: {act_image_keys_for_experiment(args)}")
     print(f"Mask supervision keys: {args.mask_target_keys}")
     print(f"Training image size: {args.image_size or 'dataset native resolution'}")
+    if args.experiment in SEMANTIC_EXPERIMENTS:
+        print(f"Semantic classes: {['background', *build_mask_layout(args.rgb_keys, args.mask_target_keys)[0]]}")
+        print(
+            "Semantic loss: weighted multiclass CE + "
+            f"{args.dice_loss_weight:g} * foreground Dice; action gradient to semantic map: disabled."
+        )
     if args.no_gripper:
         print("No gripper: dropped gripper dimensions when present in action and selected state features.")
     print(f"Output dir: {args.output_dir}")
