@@ -171,6 +171,7 @@ wandb/
 /eval_runs/
 /eval_new/
 /eval/
+/result/
 /sample/
 /datanew/
 /calibration/

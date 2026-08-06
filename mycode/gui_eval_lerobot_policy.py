@@ -32,8 +32,12 @@ DEFAULT_EVAL_ROOT = PROJECT_ROOT / "eval" / "object3color2"
 DEFAULT_CALIBRATION_DIR = Path(__file__).resolve().parents[1] / "calibration" / "robots" / "so_follower"
 DEFAULT_POLICY_PATH = DEFAULT_OUTPUT_ROOT / "1A_3object" / "checkpoint_step_100000"
 DEFAULT_POLICY_TYPE = "mask_act"
-DEFAULT_DIFFUSION_INFERENCE_STEPS = 8
+DEFAULT_DIFFUSION_PREDICTION_STEPS = 24
+DEFAULT_DIFFUSION_INFERENCE_STEPS = 16
 DEFAULT_DIFFUSION_REPLAN_STEPS = 8
+DEFAULT_DIFFUSION_FUSION_STEPS = 4
+DEFAULT_DIFFUSION_FUSION_HISTORY_WEIGHT = 0.8
+DEFAULT_DIFFUSION_OBSERVATION_WARMUP_FRAMES = 4
 DEFAULT_DIFFUSION_EXECUTION_MODE = "asynchronous"
 DEFAULT_CAMERA_READ_MODE = "wait_new_frame"
 DEFAULT_SEGMENTATION_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "best.pt"
@@ -2046,10 +2050,25 @@ class EvalPolicyApp:
         self.vars["model_chunk_size"].set(
             str(model_chunk_size) if isinstance(model_chunk_size, int) else "N/A"
         )
-        if isinstance(prediction_steps, int):
-            self.vars["prediction_steps"].set(str(prediction_steps))
-            replan_steps = min(DEFAULT_DIFFUSION_REPLAN_STEPS, prediction_steps) if is_diffusion else prediction_steps
+        if is_diffusion:
+            usable_steps = horizon - n_obs_steps + 1
+            default_prediction_steps = min(DEFAULT_DIFFUSION_PREDICTION_STEPS, usable_steps)
+            replan_steps = min(DEFAULT_DIFFUSION_REPLAN_STEPS, default_prediction_steps)
+            fusion_steps = min(
+                DEFAULT_DIFFUSION_FUSION_STEPS,
+                default_prediction_steps - replan_steps,
+            )
+            self.vars["prediction_steps"].set(str(default_prediction_steps))
             self.vars["n_action_steps"].set(str(replan_steps))
+            self.vars["fusion_steps"].set(str(fusion_steps))
+            self.vars["fusion_history_weight"].set(
+                str(DEFAULT_DIFFUSION_FUSION_HISTORY_WEIGHT if fusion_steps else 0.0)
+            )
+        elif isinstance(prediction_steps, int):
+            self.vars["prediction_steps"].set(str(prediction_steps))
+            self.vars["n_action_steps"].set(str(prediction_steps))
+            self.vars["fusion_steps"].set("0")
+            self.vars["fusion_history_weight"].set("0")
         elif data and self.vars["policy_type"].get().strip() not in {"act", "mask_act", "diffusion"}:
             self.vars["prediction_steps"].set("1")
             self.vars["n_action_steps"].set("1")
@@ -2079,9 +2098,12 @@ class EvalPolicyApp:
             self._append_log(
                 f"[Diffusion] horizon={horizon}, usable actions={usable_steps}, "
                 f"checkpoint prediction/replan steps={prediction_steps}, "
-                f"default_replan_steps={self.vars['n_action_steps'].get()}, "
+                f"default prediction/replan={self.vars['prediction_steps'].get()}/"
+                f"{self.vars['n_action_steps'].get()}, "
                 f"inference_steps={num_inference_steps}, effective_inference_steps={effective_inference_steps}, "
-                f"scheduler={scheduler}, default_execution={DEFAULT_DIFFUSION_EXECUTION_MODE}."
+                f"scheduler={scheduler}, fusion={self.vars['fusion_steps'].get()}@"
+                f"{self.vars['fusion_history_weight'].get()}, "
+                f"default_execution={DEFAULT_DIFFUSION_EXECUTION_MODE}."
             )
         elif isinstance(chunk_size, int) and isinstance(prediction_steps, int):
             self._append_log(
@@ -3165,6 +3187,11 @@ class EvalPolicyApp:
             "locked_gripper_observation_baseline": self.lock_grippers.get(),
             "fusion_steps": int(self.vars["fusion_steps"].get()),
             "fusion_history_weight": float(self.vars["fusion_history_weight"].get()),
+            "observation_warmup_frames": (
+                DEFAULT_DIFFUSION_OBSERVATION_WARMUP_FRAMES
+                if self.vars["policy_type"].get().strip() == "diffusion"
+                else 0
+            ),
             "fps": int(self.vars["fps"].get()),
             "save_root": str(save_root),
             "save_parent": str(policy_save_parent),
@@ -3463,6 +3490,40 @@ class EvalPolicyApp:
                 observation_history: deque[dict[str, Any]] = deque(
                     maxlen=int(policy.config.n_obs_steps) if is_diffusion_policy else 1
                 )
+                if is_diffusion_policy:
+                    warmup_frames = max(
+                        int(policy.config.n_obs_steps),
+                        DEFAULT_DIFFUSION_OBSERVATION_WARMUP_FRAMES,
+                    )
+                    self.log_queue.put(
+                        f"[Diffusion] Collecting {warmup_frames} observation warm-up frames; "
+                        "no robot action will be sent."
+                    )
+                    for warmup_index in range(warmup_frames):
+                        raw_warmup_obs = self._get_eval_observation(robot)
+                        processed_warmup_obs = robot_observation_processor(raw_warmup_obs)
+                        warmup_observation_frame = build_dataset_frame(
+                            dataset.features,
+                            processed_warmup_obs,
+                            prefix=OBS_STR,
+                        )
+                        observation_history.append(
+                            copy(
+                                self._policy_observation_frame(
+                                    warmup_observation_frame,
+                                    dataset.features,
+                                    policy_cfg.input_features,
+                                )
+                            )
+                        )
+                        if warmup_index + 1 < warmup_frames:
+                            precise_sleep(1 / fps)
+                    start_t = time.perf_counter()
+                    rate_window_started = start_t
+                    self.log_queue.put(
+                        f"[Diffusion] Observation history ready with "
+                        f"{len(observation_history)} real frame(s)."
+                    )
                 pending_replan: tuple[
                     Future[tuple[torch.Tensor, float]],
                     int,
