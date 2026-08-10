@@ -32,12 +32,13 @@ DEFAULT_EVAL_ROOT = PROJECT_ROOT / "eval" / "object3color2"
 DEFAULT_CALIBRATION_DIR = Path(__file__).resolve().parents[1] / "calibration" / "robots" / "so_follower"
 DEFAULT_POLICY_PATH = DEFAULT_OUTPUT_ROOT / "1A_3object" / "checkpoint_step_100000"
 DEFAULT_POLICY_TYPE = "mask_act"
-DEFAULT_DIFFUSION_PREDICTION_STEPS = 24
+DEFAULT_DIFFUSION_PREDICTION_STEPS = 64
 DEFAULT_DIFFUSION_INFERENCE_STEPS = 16
-DEFAULT_DIFFUSION_REPLAN_STEPS = 8
-DEFAULT_DIFFUSION_FUSION_STEPS = 4
-DEFAULT_DIFFUSION_FUSION_HISTORY_WEIGHT = 0.8
-DEFAULT_DIFFUSION_OBSERVATION_WARMUP_FRAMES = 4
+DEFAULT_DIFFUSION_REPLAN_STEPS = 24
+DEFAULT_DIFFUSION_SCHEDULER = "DDIM"
+DEFAULT_DIFFUSION_FUSION_STEPS = 0
+DEFAULT_DIFFUSION_FUSION_HISTORY_WEIGHT = 0.0
+DEFAULT_DIFFUSION_OBSERVATION_WARMUP_FRAMES = 1
 DEFAULT_DIFFUSION_EXECUTION_MODE = "asynchronous"
 DEFAULT_CAMERA_READ_MODE = "wait_new_frame"
 DEFAULT_SEGMENTATION_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "best.pt"
@@ -712,8 +713,8 @@ class EvalPolicyApp:
             "realsense_serial": tk.StringVar(value=""),
             "front_camera_type": tk.StringVar(value="opencv"),
             "front_camera_choice": tk.StringVar(value=""),
-            "opencv_front": tk.StringVar(value="/dev/video10"),
-            "opencv_side": tk.StringVar(value="/dev/video4"),
+            "opencv_front": tk.StringVar(value="/dev/video8"),
+            "opencv_side": tk.StringVar(value="/dev/video10"),
             "camera_config": tk.StringVar(value=""),
             "dataset_repo_id": tk.StringVar(value="seeed/eval_test"),
             "dataset_root": tk.StringVar(value=str(DEFAULT_EVAL_ROOT)),
@@ -724,7 +725,7 @@ class EvalPolicyApp:
             "prediction_steps": tk.StringVar(value=""),
             "n_action_steps": tk.StringVar(value=str(DEFAULT_DIFFUSION_REPLAN_STEPS)),
             "num_inference_steps": tk.StringVar(value=str(DEFAULT_DIFFUSION_INFERENCE_STEPS)),
-            "noise_scheduler_type": tk.StringVar(value="DDPM"),
+            "noise_scheduler_type": tk.StringVar(value=DEFAULT_DIFFUSION_SCHEDULER),
             "execution_mode": tk.StringVar(value=DEFAULT_DIFFUSION_EXECUTION_MODE),
             "camera_read_mode": tk.StringVar(value=DEFAULT_CAMERA_READ_MODE),
             "segmentation_model_path": tk.StringVar(value=str(DEFAULT_SEGMENTATION_MODEL_PATH)),
@@ -2077,16 +2078,19 @@ class EvalPolicyApp:
             self.vars["n_action_steps"].set("")
 
         num_inference_steps = data.get("num_inference_steps") if data else None
-        effective_inference_steps = num_inference_steps
-        if is_diffusion and not isinstance(effective_inference_steps, int):
-            effective_inference_steps = DEFAULT_DIFFUSION_INFERENCE_STEPS
+        effective_inference_steps = (
+            DEFAULT_DIFFUSION_INFERENCE_STEPS if is_diffusion else num_inference_steps
+        )
         self.vars["num_inference_steps"].set(
             str(effective_inference_steps) if isinstance(effective_inference_steps, int) else ""
         )
         scheduler = data.get("noise_scheduler_type") if data else None
-        self.vars["noise_scheduler_type"].set(
-            str(scheduler) if scheduler in {"DDPM", "DDIM"} else "checkpoint"
+        effective_scheduler = (
+            DEFAULT_DIFFUSION_SCHEDULER
+            if is_diffusion
+            else str(scheduler) if scheduler in {"DDPM", "DDIM"} else "checkpoint"
         )
+        self.vars["noise_scheduler_type"].set(effective_scheduler)
         self.use_amp.set(bool(data.get("use_amp", False)) if data else False)
         if is_diffusion:
             self.use_amp.set(True)
@@ -2100,8 +2104,9 @@ class EvalPolicyApp:
                 f"checkpoint prediction/replan steps={prediction_steps}, "
                 f"default prediction/replan={self.vars['prediction_steps'].get()}/"
                 f"{self.vars['n_action_steps'].get()}, "
-                f"inference_steps={num_inference_steps}, effective_inference_steps={effective_inference_steps}, "
-                f"scheduler={scheduler}, fusion={self.vars['fusion_steps'].get()}@"
+                f"checkpoint/effective inference_steps={num_inference_steps}/{effective_inference_steps}, "
+                f"checkpoint/effective scheduler={scheduler}/{effective_scheduler}, "
+                f"fusion={self.vars['fusion_steps'].get()}@"
                 f"{self.vars['fusion_history_weight'].get()}, "
                 f"default_execution={DEFAULT_DIFFUSION_EXECUTION_MODE}."
             )
