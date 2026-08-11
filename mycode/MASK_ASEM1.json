@@ -1,8 +1,8 @@
 {
   "policy_type": "mask_act",
-  "checkpoint_path": "/home/romilab/Projects/IsaacLab/source/lerobot/outputs/train/mask-sem1/checkpoint_step_100000",
+  "checkpoint_path": "/home/romilab/Projects/IsaacLab/source/lerobot/outputs/train/mask-asem1/checkpoint_step_100000",
   "dataset_repo_id": "seeed/eval_test",
-  "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/object3color2",
+  "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/eval20",
   "task": "cube",
   "episode_time_s": 25,
   "fps": 30,

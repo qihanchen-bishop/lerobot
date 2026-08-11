@@ -51,6 +51,9 @@ RESULTS_FILENAME = "eval_results.jsonl"
 DEFAULT_TRIALS_PER_GRID = 10
 DEFAULT_LEFT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E122511-if00"
 DEFAULT_RIGHT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E119029-if00"
+DEFAULT_FRONT_CAMERA_ID = "v4l2-serial://244523062711/rgb"
+DEFAULT_SIDE_CAMERA_ID = "v4l2-serial://202412231836/rgb"
+V4L2_SERIAL_PREFIX = "v4l2-serial://"
 
 POLICY_TYPES = (
     "mask_act",
@@ -713,8 +716,8 @@ class EvalPolicyApp:
             "realsense_serial": tk.StringVar(value=""),
             "front_camera_type": tk.StringVar(value="opencv"),
             "front_camera_choice": tk.StringVar(value=""),
-            "opencv_front": tk.StringVar(value="/dev/video8"),
-            "opencv_side": tk.StringVar(value="/dev/video10"),
+            "opencv_front": tk.StringVar(value=DEFAULT_FRONT_CAMERA_ID),
+            "opencv_side": tk.StringVar(value=DEFAULT_SIDE_CAMERA_ID),
             "camera_config": tk.StringVar(value=""),
             "dataset_repo_id": tk.StringVar(value="seeed/eval_test"),
             "dataset_root": tk.StringVar(value=str(DEFAULT_EVAL_ROOT)),
@@ -2857,10 +2860,13 @@ class EvalPolicyApp:
                 if camera_type == "opencv":
                     import cv2
 
-                    target = int(camera_id) if camera_id.isdigit() else camera_id
+                    resolved_camera_id = self._resolve_opencv_identifier(camera_id)
+                    target = int(resolved_camera_id) if resolved_camera_id.isdigit() else resolved_camera_id
                     capture = cv2.VideoCapture(target)
                     if not capture.isOpened():
-                        raise RuntimeError(f"Could not open OpenCV camera {camera_id}")
+                        raise RuntimeError(
+                            f"Could not open OpenCV camera {camera_id} (resolved to {resolved_camera_id})"
+                        )
                     capture.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
                     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
                     capture.set(cv2.CAP_PROP_FPS, DEFAULT_CAMERA_FPS)
@@ -2989,6 +2995,7 @@ class EvalPolicyApp:
         return "{ " + ", ".join(cameras) + " }"
 
     def _opencv_camera_entry(self, name: str, index_or_path: str) -> str:
+        index_or_path = self._resolve_opencv_identifier(index_or_path)
         value = index_or_path if index_or_path.isdigit() else f'"{index_or_path}"'
         width, height = self._camera_size()
         return (
@@ -2999,7 +3006,8 @@ class EvalPolicyApp:
         )
 
     def _camera_config_for_command(self) -> str:
-        front_path = self.vars["opencv_front"].get().strip()
+        requested_front_path = self.vars["opencv_front"].get().strip()
+        front_path = self._resolve_opencv_identifier(requested_front_path)
         camera_width, camera_height = self._camera_size()
         if self.enable_realsense.get() and (not front_path or self._is_realsense_video_path(front_path)):
             serial = self._resolve_realsense_serial()
@@ -3959,7 +3967,8 @@ class EvalPolicyApp:
         cameras: dict[str, Any] = {}
         camera_width, camera_height = self._camera_size()
         serial = self._resolve_realsense_serial() if self.enable_realsense.get() else ""
-        front_path = self.vars["opencv_front"].get().strip()
+        requested_front_path = self.vars["opencv_front"].get().strip()
+        front_path = self._resolve_opencv_identifier(requested_front_path)
         front_is_realsense_video = bool(front_path and serial and self._is_realsense_video_path(front_path))
         if self.enable_realsense.get() and (not front_path or front_is_realsense_video):
             cameras["front"] = RealSenseCameraConfig(
@@ -3984,6 +3993,8 @@ class EvalPolicyApp:
                 fps=DEFAULT_CAMERA_FPS,
                 fourcc="MJPG",
             )
+            if requested_front_path != front_path:
+                self.log_queue.put(f"OpenCV front {requested_front_path} resolved to {front_path}.")
             if serial:
                 self.log_queue.put(f"Using OpenCV front RGB {front_path}; RealSense is not used for front RGB.")
 
@@ -4005,9 +4016,81 @@ class EvalPolicyApp:
             )
         return cameras
 
+    @staticmethod
+    def _resolve_opencv_identifier(identifier: str) -> str:
+        if not identifier.startswith(V4L2_SERIAL_PREFIX):
+            return identifier
+
+        selector = identifier.removeprefix(V4L2_SERIAL_PREFIX)
+        serial, separator, role = selector.partition("/")
+        if not serial or (separator and role != "rgb"):
+            raise ValueError(
+                f"Invalid V4L2 camera identifier '{identifier}'. "
+                f"Expected {V4L2_SERIAL_PREFIX}<serial>/rgb."
+            )
+
+        candidates: list[tuple[int, Path]] = []
+        serial_nodes: list[str] = []
+        format_scores = {"MJPG": 4, "YUYV": 3, "RGB3": 2, "BGR3": 2}
+        for path in sorted(Path("/dev").glob("video*")):
+            try:
+                properties_result = subprocess.run(
+                    ["udevadm", "info", "--query=property", f"--name={path}"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            properties = dict(
+                line.split("=", 1)
+                for line in properties_result.stdout.splitlines()
+                if "=" in line
+            )
+            device_serials = (
+                properties.get("ID_SERIAL_SHORT", ""),
+                properties.get("ID_SERIAL", ""),
+            )
+            if not any(serial == value or serial in value for value in device_serials if value):
+                continue
+            serial_nodes.append(str(path))
+
+            try:
+                formats_result = subprocess.run(
+                    ["v4l2-ctl", "-d", str(path), "--list-formats"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            formats = formats_result.stdout
+            score = max(
+                (
+                    preference
+                    for pixel_format, preference in format_scores.items()
+                    if f"'{pixel_format}'" in formats
+                ),
+                default=0,
+            )
+            if score:
+                candidates.append((score, path))
+
+        if not candidates:
+            matched = ", ".join(serial_nodes) if serial_nodes else "none"
+            raise ValueError(
+                f"Could not find an RGB V4L2 node for camera serial {serial}. "
+                f"Matching video nodes: {matched}."
+            )
+        candidates.sort(key=lambda item: (-item[0], item[1].name))
+        return str(candidates[0][1])
+
     def _resolve_opencv_side_path(self, requested_path: str) -> str:
         if not requested_path:
             return ""
+        requested_path = self._resolve_opencv_identifier(requested_path)
         if not self._is_realsense_video_path(requested_path):
             return requested_path
 

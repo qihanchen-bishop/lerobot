@@ -1,0 +1,606 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+
+\usepackage{amsmath,amssymb,amsthm,bm,mathtools}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{cite}
+\usepackage{hyperref}
+
+\geometry{left=24mm,right=24mm,top=25mm,bottom=25mm}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  citecolor=green!40!black,
+  urlcolor=blue!60!black
+}
+
+\newtheorem{definition}{定义}
+\newtheorem{assumption}{假设}
+\newtheorem{lemma}{引理}
+\newtheorem{theorem}{定理}
+\newtheorem{corollary}{推论}
+\newtheorem{proposition}{命题}
+\theoremstyle{remark}
+\newtheorem{remark}{说明}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\pos}[1]{\left[#1\right]_{+}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\softmax}{\operatorname{softmax}}
+
+\title{阶段条件语义残差视觉伺服与事件触发动作分块策略\\
+\large 面向双臂遮挡物操作的可解释闭环模仿学习框架（初稿）}
+\author{作者待定}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+动作分块模仿策略能够从少量示范中学习双臂协作和柔性物体接触行为，但长动作块的开环执行会积累视觉误差、接触扰动和执行器滞后。本文提出一种阶段条件语义残差视觉伺服框架：由前视和侧视语义分割构造可解释的低维视觉状态；采用显式监督的阶段模型区分掀布、暴露与分离、目标运输、布料恢复及完成状态；以动作分块 Transformer（ACT）作为名义策略；利用动作条件语义动力学预测动作对未来视觉状态的影响；并通过鲁棒控制李雅普诺夫函数二次规划（CLF-QP）对 ACT 动作实施最小残差修正。进一步地，模型学习逐步重规划危险率以生成可变执行长度，而李雅普诺夫可认证执行长度与在线事件触发器对学习结果进行裁剪。本文给出阶段内目标集合的实用指数稳定性、前向混合阶段到达完成集合以及事件触发执行保持稳定性的充分条件。该框架不声称在任意遮挡、不可达或布料缠绕情况下全局收敛；其理论保证限定在语义状态可观测、阶段目标局部可控、学习动力学误差有界且 CLF-QP 可行的认证运行域内。
+\end{abstract}
+
+\noindent\textbf{关键词：}动作分块 Transformer；视觉伺服；语义分割；控制李雅普诺夫函数；残差控制；混合系统；事件触发控制
+
+\section{引言}
+
+双臂柔性遮挡物操作同时包含高维视觉感知、双臂协作、不可预知接触以及多阶段任务逻辑。端到端模仿学习能够绕过精确接触建模，并通过动作分块降低单步行为克隆中的误差累积。ACT 采用 Transformer 预测一段动作序列，并通过时间集成改善动作连续性\cite{zhao2023act}。然而，当策略基于单帧观测生成长动作块并在较长时间内开环执行时，实际物体、布料与执行器状态可能在动作块结束前已经明显偏离预测状态。
+
+本文关注如下任务：双臂机械臂首先移动遮挡布料，使目标物体暴露并与布料分离；随后将物体推入指定目标区域；最后恢复布料至规定覆盖状态并停止。系统具有固定的前视与侧视相机，语义类别包括布料、目标物体、目标区域和执行器。机械臂连杆未被单独分割，其进入视野时会在布料掩码中形成缺失区域。任务完成依赖多个连续视觉事件，而不是单一末端位姿。
+
+经典图像视觉伺服以图像特征误差作为反馈，并通过交互矩阵构造使误差下降的速度控制律\cite{chaumette2006visual}。视觉预测和视觉模型预测控制进一步展示了从数据学习动作条件视觉动力学的可行性\cite{finn2016deep,ebert2018visual}。预测逆动力学方法则将未来视觉状态与动作生成直接连接\cite{wang2019visual,tian2024seer}。受上述工作启发，本文不以视觉伺服替代 ACT，而是将 ACT 视为包含复杂双臂先验的名义控制器，将阶段语义误差用于小范围闭环修正。
+
+本文的主要贡献拟概括为：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 提出一种由软语义掩码、时序状态和双视角不确定性组成的可解释视觉状态，并以显式监督学习任务阶段；
+  \item 建立动作条件语义动力学模型，使策略能够预测动作块对布料覆盖、物体可见度、物体位置和目标重叠率的影响；
+  \item 将 ACT 名义动作、结构化视觉伺服残差和鲁棒 CLF-QP 统一起来，使控制器在尽可能保持 ACT 行为的同时满足阶段误差下降条件；
+  \item 提出逐步危险率形式的可学习执行长度，并使用 CLF 可认证长度与事件触发机制保证学习调度器不会延长到不满足稳定条件的区间；
+  \item 给出阶段内实用稳定性、阶段切换到达性和事件触发执行的理论分析框架，并明确保证成立所需的可观测性、可控性和误差界假设。
+\end{enumerate}
+
+\section{相关工作}
+
+\subsection{动作分块模仿学习}
+
+ACT 通过条件变分自编码器与 Transformer 预测动作块，用动作序列建模降低高频动作中的局部噪声\cite{zhao2023act}。动作分块减少了推理调用频率，但也引入了动作块陈旧和块间不连续问题。原始 ACT 的时间集成通过对重叠动作预测加权提高闭环平滑性。本文保留动作分块表达能力，但将执行长度变为状态相关变量，并在每次短执行后以语义反馈检查实际进展。
+
+\subsection{视觉预测、点轨迹与逆动力学}
+
+视觉前瞻方法通过动作条件视频预测和模型预测控制完成无抓取推动\cite{finn2016deep,ebert2018visual}。视觉计划与执行方法先生成目标导向的视觉轨迹，再由学习的逆动力学控制器跟踪该轨迹，并应用于柔性绳索操作\cite{wang2019visual}。Seer 将未来视觉预测与逆动力学动作预测端到端结合\cite{tian2024seer}；ACT-JEPA 则让动作分块策略同时预测抽象未来观测\cite{vujinovic2025actjepa}。RoboTAP、ATM 和 kPAM 表明，关键点或点轨迹是比完整 RGB 更紧凑且更适于反馈控制的表示\cite{vecerik2023robotap,wen2023atm,gao2021kpam}。本文使用语义面积、中心、重叠和分离指标作为任务特定的结构化视觉状态，避免在有限示范数据上训练完整像素生成模型。
+
+\subsection{残差控制与稳定性过滤}
+
+残差策略学习通过在已有控制器上学习小修正来结合模型控制与学习策略的优势\cite{silver2018residual}。CLF-QP 将稳定性条件写成控制输入的约束，并以二次规划寻找距离名义动作最近的可行控制\cite{ames2017cbf}. 鲁棒 CLF/CBF-QP 可进一步在模型不确定性下提供跟踪稳定性与安全约束\cite{nguyen2021robust}。本文将 ACT 作为名义动作，将语义视觉伺服视为残差提议，并由鲁棒 CLF-QP 完成最终投影。
+
+\subsection{事件触发与混合系统}
+
+事件触发控制依据状态而非固定周期更新控制器，并可通过李雅普诺夫条件保证非线性闭环稳定性\cite{postoyan2013event,proskurnikov2018event}。任务阶段切换形成混合系统；多李雅普诺夫函数、驻留时间和混合不变性原理可用于分析不同模式下的稳定性\cite{goebel2008invariance,dellarossa2024converse}。本文将学习得到的执行长度解释为效率提议，并让事件触发条件保留最终控制权。
+
+\section{任务与符号定义}
+
+\subsection{观测、动作与任务阶段}
+
+令控制周期为 $\Delta t$，机器人关节位置为 $\bm q_t\in\R^{n_q}$。前视和侧视图像分别记作 $I_t^f,I_t^s$。策略输出的绝对关节目标记作 $\bm a_t$，理论分析中使用相对当前状态的增量控制量
+\begin{equation}
+  \bm u_t = \bm a_t-\bm q_t.
+\end{equation}
+该转换使残差修正与速度、增量限幅具有一致含义。最终发送的绝对目标为 $\bm q_t+\bm u_t$。
+
+任务阶段集合定义为
+\begin{equation}
+  \mathcal M=\{U,E,T,R,D\},
+\end{equation}
+分别表示掀布（Uncover）、暴露与分离（Expose/Separate）、运输（Transport）、布料恢复（Restore）和完成（Done）。阶段变量 $m_t\in\mathcal M$ 由时序阶段模型预测，第一版使用显式逐帧阶段标签进行监督。
+
+\subsection{软语义状态}
+
+对视角 $v\in\{f,s\}$ 和语义类别 $c\in\{C,O,G,A\}$，令
+\begin{equation}
+  P_{t,c}^{v}(x,y)\in[0,1]
+\end{equation}
+分别表示布料（cloth）、目标物体（object）、目标区域（goal region）和执行器（actuator）的软分割概率。对有效图像区域 $\Omega_v$，类别面积比例为
+\begin{equation}
+  r_{t,c}^{v}=\frac{1}{|\Omega_v|}\sum_{(x,y)\in\Omega_v}P_{t,c}^{v}(x,y).
+\end{equation}
+物体软中心为
+\begin{equation}
+  \bm p_{t,O}^{v}=
+  \frac{\sum_{(x,y)\in\Omega_v}P_{t,O}^{v}(x,y)[x,y]^\top}
+  {\sum_{(x,y)\in\Omega_v}P_{t,O}^{v}(x,y)+\epsilon}.
+\end{equation}
+物体与目标区域的软重叠率定义为
+\begin{equation}
+  \eta_t^v=
+  \frac{\sum_{(x,y)}P_{t,O}^{v}(x,y)P_{t,G}^{v}(x,y)}
+  {\sum_{(x,y)}P_{t,O}^{v}(x,y)+\epsilon}.
+\end{equation}
+
+通过桌面单应变换或双目外参，将可靠的物体、目标区域和执行器位置映射至统一桌面坐标。布料面积保留前视和侧视两个独立量，因为透视差异使二者不具有直接可比性。最终语义状态写为
+\begin{equation}
+  \bm z_t=
+  [r_{C}^{f},r_{C}^{s},r_{O}^{f},r_{O}^{s},
+  \bm p_O,\bm p_G,d_{OG},\eta,
+  \eta_{OC},d_{AO},\bm v_O,
+  \bm c_{seg}]_t,
+\end{equation}
+其中 $d_{OG}$ 是物体到目标的距离，$\eta_{OC}$ 是物体与布料的重叠或接触指标，$d_{AO}$ 是执行器到物体距离，$\bm v_O$ 是由时序估计得到的物体速度，$\bm c_{seg}$ 包含各视角置信度和跨视角分歧。
+
+\subsection{遮挡与状态不确定性}
+
+机械臂连杆未被显式分割。当机械臂位于布料前方时，可见布料掩码中出现缺口。第一版不恢复完整机械臂类别，而将突然的布料缺失、物体短时消失、执行器邻接关系、时间一致性和跨视角一致性组合为观测不确定性。记语义估计为 $\hat{\bm z}_t$，其置信集合为
+\begin{equation}
+  \mathcal Z_t=
+  \left\{\bm z:
+  (\bm z-\hat{\bm z}_t)^\top
+  \bm\Sigma_{z,t}^{-1}
+  (\bm z-\hat{\bm z}_t)\leq \chi^2
+  \right\}.
+\end{equation}
+当分割熵、时间跳变或跨视角冲突过大时，扩大 $\bm\Sigma_{z,t}$。若置信集合超过认证域，则系统保持、减速或主动重新观察，不进行阶段切换。
+
+\section{阶段监督与可解释视觉目标}
+
+\subsection{显式阶段标签}
+
+根据语义掩码和人工修正的事件边界，定义物体首次可靠出现、可靠分离、稳定进入目标区域和布料恢复完成的时刻
+\begin{equation}
+  t_{vis},\quad t_{sep},\quad t_{goal},\quad t_{restore}.
+\end{equation}
+逐帧标签为
+\begin{equation}
+  y_t^m=
+  \begin{cases}
+    U,&t<t_{vis},\\
+    E,&t_{vis}\leq t<t_{sep},\\
+    T,&t_{sep}\leq t<t_{goal},\\
+    R,&t_{goal}\leq t<t_{restore},\\
+    D,&t\geq t_{restore}.
+  \end{cases}
+\end{equation}
+阶段模型使用最近 $L$ 帧的语义状态、关节状态和动作历史
+\begin{equation}
+  \bm\pi_t^m
+  =p_\psi(m_t\mid
+  \hat{\bm z}_{t-L+1:t},\bm q_{t-L+1:t},\bm u_{t-L:t-1}).
+\end{equation}
+时间历史是必要的，因为初始和最终状态都可能具有较大的布料面积，单帧面积无法区分掀布前与恢复后。
+
+\subsection{阶段目标集合}
+
+令 $\pos{x}=\max(0,x)$。为各阶段定义目标集合而不是单一目标点：
+\begin{align}
+  \mathcal G_U &= \{\bm z:r_C^f\leq \bar r_U,
+    \ p_{vis}\geq \bar p_{vis}\},\\
+  \mathcal G_E &= \{\bm z:p_{vis}\geq \bar p_E,
+    \eta_{OC}\leq \bar\eta_{OC},s_{sep}\geq \bar s_E\},\\
+  \mathcal G_T &= \{\bm z:d_{OG}\leq \bar d_T,
+    \eta\geq \bar\eta_T\},\\
+  \mathcal G_R &= \{\bm z:r_C^f\geq \bar r_R,
+    \eta\geq \bar\eta_D\},\\
+  \mathcal G_D &= \mathcal G_R.
+\end{align}
+第一版可取 $\bar r_R=0.55$，最终数值应由训练成功状态分布和独立验证集共同校准，而不是由测试集反复调参。
+
+\subsection{阶段控制李雅普诺夫候选函数}
+
+定义对目标集合为零的非负候选函数：
+\begin{align}
+V_U(\bm z)
+&=\frac{1}{2}\pos{r_C^f-\bar r_U}^2
+ +\frac{\lambda_{Uv}}{2}\pos{\bar p_{vis}-p_{vis}}^2,\\
+V_E(\bm z)
+&=\frac{\lambda_{Ev}}{2}\pos{\bar p_E-p_{vis}}^2
+ +\frac{\lambda_{Eo}}{2}\pos{\eta_{OC}-\bar\eta_{OC}}^2
+ +\frac{\lambda_{Es}}{2}\pos{\bar s_E-s_{sep}}^2,\\
+V_T(\bm z)
+&=\frac{1}{2}\pos{d_{OG}-\bar d_T}^2
+ +\frac{\lambda_{T\eta}}{2}\pos{\bar\eta_T-\eta}^2,\\
+V_R(\bm z)
+&=\frac{\lambda_{Rc}}{2}\pos{\bar r_R-r_C^f}^2
+ +\frac{\lambda_{R\eta}}{2}\pos{\bar\eta_D-\eta}^2,\\
+V_D(\bm z)&=0.
+\end{align}
+这些函数直接显示每个阶段的视觉目标。后续版本可将正权重 $\lambda$ 或单调一维函数从成功轨迹中学习，但应保留非负性、目标集合零值和单调方向约束，以维持可解释性及稳定性分析。
+
+正部函数在零点不可微。实际 QP 可以使用 softplus 构造的光滑近似；若保留分段形式，则应以 Clarke 广义梯度表述 CLF 条件。本文后续公式采用光滑近似后的梯度记号，但不改变目标集合的物理含义。
+
+\section{语义预测 ACT 与残差视觉伺服}
+
+\subsection{共享策略结构}
+
+模型由语义编码器、阶段历史编码器、ACT 名义策略、动作条件语义动力学、结构化视觉伺服残差、执行长度危险率和完成头组成。第一版使用共享 ACT 主干与阶段嵌入，不立即拆分为五套完全独立策略，以避免数据碎片化和动作块跨阶段造成的专家不一致。
+
+\begin{figure}[htbp]
+  \centering
+  \fbox{\begin{minipage}{0.94\linewidth}
+    \centering
+    前视/侧视 RGB $\rightarrow$ 软语义与不确定性 $\rightarrow$ 语义状态历史 $\hat{\bm z}_{t-L+1:t}$\\[0.5em]
+    $\downarrow$ 阶段概率 $\bm\pi_t^m$ 与阶段嵌入\\[0.5em]
+    \begin{tabular}{ccc}
+      ACT 名义动作块 & 动作条件语义动力学 & 重规划危险率\\
+      $\bm u_{t:t+H-1}^{ACT}$ &
+      $p(\bm z_{t+1:t+H}\mid\bm z_t,\bm u,m)$ &
+      $h_{t,1:H}$
+    \end{tabular}\\[0.5em]
+    $\downarrow$ 结构化视觉残差提议
+    $\rightarrow$ 鲁棒 CLF-QP 最小投影
+    $\rightarrow$ 可认证短执行
+    $\rightarrow$ 新视觉反馈
+  \end{minipage}}
+  \caption{阶段条件语义残差视觉伺服框架。ACT、视觉残差和 CLF 投影同时工作，而非在不同策略间硬切换。}
+  \label{fig:framework}
+\end{figure}
+
+\subsection{动作条件语义动力学}
+
+在阶段 $m$ 的局部认证域 $\mathcal D_m$ 内，假设语义状态满足控制仿射近似
+\begin{equation}
+  \dot{\bm z}
+  =\bm f_m(\bm z)+\bm G_m(\bm z)\bm u+\bm d_m,
+  \label{eq:semantic-dynamics}
+\end{equation}
+其中 $\bm d_m$ 表示接触、执行滞后和状态估计误差。神经动力学模型输出 $\hat{\bm f}_m,\hat{\bm G}_m$ 及不确定性。训练时也可直接使用离散多步模型
+\begin{equation}
+  p_\phi(\bm z_{t+1:t+H}\mid
+  \bm z_t,\bm q_t,\bm u_{t:t+H-1},m_t).
+\end{equation}
+连续仿射形式用于 CLF-QP 和理论分析，离散模型用于多步预测、执行长度认证和实验部署。
+
+\subsection{结构化残差提议}
+
+令阶段误差向量为 $\bm e_m(\bm z)$，其分量与 $V_m$ 中的可解释指标一致。视觉伺服网络学习一个受限的误差到末端或关节增量映射
+\begin{equation}
+  \bm u_t^{VS}
+  =-\bm K_\theta(\hat{\bm z}_t,\bm q_t,m_t)
+  \bm e_{m_t}(\hat{\bm z}_t).
+\end{equation}
+残差门控为
+\begin{equation}
+  \alpha_t=\alpha_{max}(m_t)
+  \sigma\!\left(g_\theta(\hat{\bm z}_t,
+  \bm c_{seg,t},\bm\pi_t^m)\right),
+\end{equation}
+并在完成阶段或观测不可信时强制置零。未经认证的组合动作是
+\begin{equation}
+  \bm u_t^{prop}
+  =\bm u_t^{ACT}+\alpha_t\bm u_t^{VS}.
+\end{equation}
+为保持物理含义，若残差在末端笛卡尔空间计算，则先对 ACT 目标执行正运动学，再加末端残差并通过逆运动学得到关节目标；不能将笛卡尔速度直接加到绝对关节位置上。
+
+\subsection{鲁棒 CLF-QP 投影}
+
+令模型误差满足 $\norm{\bm d_m}\leq \bar d_m(\bm z)$。进一步定义 $\beta_m^{obs}(\hat{\bm z},\bm\Sigma_z)$，用于上界在有界输入集合内由真实状态 $\bm z\in\mathcal Z_t$ 与估计状态 $\hat{\bm z}$ 的差异引起的 CLF 导数误差。该上界可以由动力学与 CLF 的局部 Lipschitz 常数计算，或在独立校准集上保守估计。对阶段 $m$，求解
+\begin{align}
+\bm u_t^*,\delta_t^*
+=\argmin_{\bm u,\delta\geq0}\quad
+&\frac{1}{2}\norm{\bm u-\bm u_t^{prop}}_{\bm W}^2
++p_\delta\delta^2 \\
+\text{s.t.}\quad
+&L_{\hat f_m}V_m(\hat{\bm z})
++L_{\hat G_m}V_m(\hat{\bm z})\bm u
++\norm{\nabla V_m(\hat{\bm z})}\bar d_m(\hat{\bm z})
++\beta_m^{obs}(\hat{\bm z},\bm\Sigma_z)
+\leq-c_mV_m(\hat{\bm z})+\delta,\label{eq:clf-constraint}\\
+&\bm u_{min}\leq\bm u\leq\bm u_{max},\nonumber\\
+&\bm A_{rate}\bm u\leq\bm b_{rate}.\nonumber
+\end{align}
+这里 $L_{\hat f_m}V_m=\nabla V_m^\top\hat{\bm f}_m$，$L_{\hat G_m}V_m=\nabla V_m^\top\hat{\bm G}_m$。由于 $\beta_m^{obs}$ 已对有界输入集合取统一上界，约束\eqref{eq:clf-constraint} 对控制量仍是仿射的，因此目标为二次型时得到标准 QP。QP 的最终残差
+\begin{equation}
+  \bm u_t^{res}=\bm u_t^*-\bm u_t^{ACT}
+\end{equation}
+具有清晰解释：它是满足阶段下降约束和输入限制所需的最小 ACT 修正。若任务还需要碰撞、关节范围或目标区域保持约束，可增加控制障碍函数约束\cite{ames2017cbf}。
+
+\section{可学习且可认证的执行长度}
+
+\subsection{逐步危险率模型}
+
+动作预测长度固定为 $H$，但实际执行长度 $K_t$ 可取 $1$ 到 $H$ 的任意整数。模型输出条件危险率
+\begin{equation}
+  h_{t,j}=\Prob(K_t=j\mid K_t\geq j,
+  \hat{\bm z}_t,m_t,\bm u_{t:t+H-1}),
+\end{equation}
+从而
+\begin{equation}
+  \Prob(K_t=j)=h_{t,j}\prod_{i=1}^{j-1}(1-h_{t,i}).
+\end{equation}
+该表示避免直接回归浮点长度后取整造成的不可导问题，也不依赖固定候选集合。模型提议长度可取分布众数或首次满足 $h_{t,j}\geq\tau_h$ 的位置，记为 $K_t^{learn}$。
+
+\subsection{CLF 可认证长度}
+
+使用动作条件语义动力学滚动预测置信集合 $\mathcal Z_{t+j}^{pred}$。定义最大可认证长度
+\begin{equation}
+K_t^{safe}=\max\left\{k\leq H_s:
+\sup_{\bm z\in\mathcal Z_{t+j}^{pred}}
+V_m(\bm z)
+\leq(1-\rho_m)^jV_m(\hat{\bm z}_t)+\varepsilon_j,
+\ \forall j\leq k
+\right\},
+\label{eq:ksafe}
+\end{equation}
+其中 $H_s$ 是部署期硬安全上限，而不是候选集合。最终计划长度为
+\begin{equation}
+  K_t^{plan}=\min(K_t^{learn},K_t^{safe}).
+\end{equation}
+即使模型提出较长执行，系统也不会超过当前模型误差界下可认证的区间。
+
+\subsection{在线事件触发中断}
+
+计划执行期间，轻量语义监控器以高于完整 ACT 推理的频率更新 $\hat{\bm z}$。满足以下任一条件时立即中断动作块：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 当前阶段发生可靠变化；
+  \item 实际 $V_m$ 下降速度低于认证界；
+  \item 实际状态超出预测置信集合；
+  \item 目标物体或关键视角置信度低于阈值；
+  \item 控制、速度或安全约束即将违反。
+\end{enumerate}
+因此实际执行长度满足
+\begin{equation}
+  K_t^{exec}\leq K_t^{plan}\leq K_t^{safe}.
+\end{equation}
+
+\section{理论分析}
+
+\subsection{基本假设}
+
+\begin{assumption}[认证域内的观测误差界]
+对每个阶段 $m$ 存在认证域 $\mathcal D_m$。当观测置信门通过时，真实语义状态位于 $\mathcal Z_t\subset\mathcal D_m$，且状态估计误差有已校准上界。$\beta_m^{obs}$ 保守上界该集合内真实与估计 CLF 导数之差。
+\end{assumption}
+
+\begin{assumption}[局部语义动力学误差界]
+在 $\mathcal D_m$ 内，真实语义动力学满足式\eqref{eq:semantic-dynamics}，且学习模型误差及外部扰动可由 $\bar d_m(\bm z)$ 上界。该上界通过独立校准集获得，而非仅由训练 softmax 置信度给出。
+\end{assumption}
+
+\begin{assumption}[阶段 CLF 可行性]
+对所有 $\bm z\in\mathcal D_m\setminus\mathcal G_m$，存在满足输入约束的控制 $\bm u$，使鲁棒 CLF 条件成立，且最优松弛满足 $0\leq\delta_t^*\leq\bar\delta_m$。
+\end{assumption}
+
+\begin{assumption}[目标集合与切换守卫]
+每个前向切换守卫 $\mathcal S_{m\rightarrow m+1}$ 包含阶段 CLF 的一个子水平集 $\{\bm z:V_m(\bm z)\leq\epsilon_m\}$，其中 $\epsilon_m>\bar\delta_m/c_m$。
+\end{assumption}
+
+\begin{assumption}[阶段切换]
+第一版阶段图前向无环，使用置信投票、滞回和正的最小驻留时间。若加入恢复边，则每个完整恢复周期必须使额外的全局进度函数严格下降。
+\end{assumption}
+
+\begin{assumption}[采样与执行]
+控制周期和事件触发间隔有正下界，避免 Zeno 行为；实际执行长度不超过式\eqref{eq:ksafe}定义的可认证长度。
+\end{assumption}
+
+\subsection{阶段内实用稳定性}
+
+\begin{lemma}[鲁棒 CLF 下降]
+在假设 1--3 下，QP 控制 $\bm u_t^*$ 使阶段 $m$ 的 CLF 满足
+\begin{equation}
+  \dot V_m(\bm z(t))
+  \leq-c_mV_m(\bm z(t))+\bar\delta_m.
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+真实动力学等于学习动力学与有界误差之和。由柯西--施瓦茨不等式，未知动力学项对 $\dot V_m$ 的最坏影响不超过 $\norm{\nabla V_m}\bar d_m$；状态估计误差造成的附加偏差由 $\beta_m^{obs}$ 上界。两项均已显式加入约束\eqref{eq:clf-constraint}。再利用 $\delta_t^*\leq\bar\delta_m$ 即得结论。
+\end{proof}
+
+\begin{theorem}[阶段目标集合的实用指数稳定性]
+在假设 1--3 下，对阶段 $m\neq D$，闭环轨迹满足
+\begin{equation}
+V_m(t)
+\leq e^{-c_mt}V_m(0)
++\frac{\bar\delta_m}{c_m}
+\left(1-e^{-c_mt}\right).
+\label{eq:practical-bound}
+\end{equation}
+因此轨迹指数收敛到子水平集
+\begin{equation}
+  \mathcal B_m=
+  \left\{\bm z:V_m(\bm z)
+  \leq\bar\delta_m/c_m\right\}.
+\end{equation}
+若 $\bar\delta_m=0$，则对目标集合 $\mathcal G_m$ 指数收敛。
+\end{theorem}
+
+\begin{proof}
+由引理得到标量微分不等式 $\dot V_m\leq-c_mV_m+\bar\delta_m$。应用比较引理可得式\eqref{eq:practical-bound}。当扰动项为零时，$V_m(t)\leq e^{-c_mt}V_m(0)$；当扰动有界时，极限上界为 $\bar\delta_m/c_m$。
+\end{proof}
+
+\begin{remark}
+该定理给出的是认证域内的局部实用稳定性。物体不可达、布料永久缠绕、相机完全失效或学习误差超出校准界时，假设不成立，不能据此声称任务仍然收敛。
+\end{remark}
+
+\subsection{混合阶段到达完成集合}
+
+将阶段按 $U=0,E=1,T=2,R=3,D=4$ 编号。设所有前向切换的 CLF 跳变量有统一上界
+\begin{equation}
+  V_{m+1}(\bm z^+)-V_m(\bm z)\leq\Delta_{max}.
+\end{equation}
+选择常数 $C>\Delta_{max}$，定义混合进度函数
+\begin{equation}
+  W(m,\bm z)=(4-m)C+V_m(\bm z).
+\end{equation}
+
+\begin{theorem}[有限前向阶段下的完成到达性]
+在假设 1--6 下，若对每个阶段有 $\bar\delta_m/c_m<\epsilon_m$，则系统在有限时间内依次到达各前向切换守卫，并最终进入完成集合 $\mathcal G_D$。进入 $D$ 后，若控制律强制 $\bm u=0$ 或保持当前关节目标，则 $D$ 为吸收模式。
+\end{theorem}
+
+\begin{proof}[证明草图]
+在阶段内部，$m$ 不变，$W$ 的变化等于 $V_m$ 的变化。由定理 1，轨迹在有限时间内进入 $V_m\leq\epsilon_m$，进而到达相应守卫。发生前向切换时，阶段项减少 $C$，而新旧 CLF 的增加不超过 $\Delta_{max}$，因此
+\begin{equation}
+W^+-W^-
+\leq-C+\Delta_{max}<0.
+\end{equation}
+阶段图无环且仅含有限个前向模式，所以切换次数有限并最终进入 $D$。滞回和最小驻留时间排除切换抖动及 Zeno 行为。完成模式控制为零，因此系统保持在完成集合内。
+\end{proof}
+
+\begin{remark}
+若允许阶段后退，上述有限前向证明不再自动成立。可以引入恢复模式 $Q$ 及恢复 CLF，并要求任意闭合阶段循环前后某个全局进度函数至少下降固定量；否则只能证明安全和阶段内稳定，不能证明最终完成。
+\end{remark}
+
+\subsection{可学习执行长度的稳定性}
+
+\begin{theorem}[学习提议经认证裁剪后的稳定性保持]
+假设当前动作块在 $1,\ldots,K_t^{safe}$ 的每个预测步上满足鲁棒离散 CLF 下降条件，并且在线事件触发器在真实状态违反该条件前中断执行。则对任意学习提议 $K_t^{learn}$，采用
+\begin{equation}
+K_t^{exec}
+\leq\min(K_t^{learn},K_t^{safe})
+\end{equation}
+不会破坏相同的离散实用稳定性界。
+\end{theorem}
+
+\begin{proof}
+学习模型只能缩短而不能延长可认证执行区间。对每个实际执行步，CLF 下降条件由 $K_t^{safe}$ 的定义保证；若真实轨迹因模型误差接近条件边界，事件触发器提前结束执行并重新求解控制。将每步不等式递推即可得到
+\begin{equation}
+V_{t+j}\leq(1-\rho_m)^jV_t
++\sum_{i=0}^{j-1}(1-\rho_m)^i\varepsilon_{j-1-i},
+\end{equation}
+其为离散形式的实用指数稳定界。
+\end{proof}
+
+\section{训练方法}
+
+\subsection{监督信号}
+
+从示范数据离线生成以下标签：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 可见语义掩码和有效像素标记；
+  \item 当前语义指标 $\bm z_t$ 及未来 $t+1:t+H$ 指标；
+  \item 五阶段逐帧标签及四个事件边界；
+  \item 完成标签和连续成功投票；
+  \item 动力学训练对 $(\bm z_t,\bm q_t,\bm u_{t:t+H-1},\bm z_{t+1:t+H})$；
+  \item 重规划时刻标签 $K_t^{label}$。
+\end{enumerate}
+重规划标签取未来首次出现以下事件的位置：阶段改变、视觉进度停止、接触关系改变、目标即将越过、物体可靠性骤降或专家动作方向显著转折。该标签是监督近似而非真正最优控制时刻，因此最终仍由 CLF 认证裁剪。
+
+\subsection{损失函数}
+
+总训练目标写为
+\begin{equation}
+\begin{aligned}
+\mathcal L={}&
+\mathcal L_{ACT}
++\lambda_{seg}\mathcal L_{seg}
++\lambda_{phase}\mathcal L_{phase}
++\lambda_{metric}\mathcal L_{metric}\\
+&+\lambda_{dyn}\mathcal L_{dyn}
++\lambda_{haz}\mathcal L_{haz}
++\lambda_{done}\mathcal L_{done}
++\lambda_{res}\mathcal L_{res}
++\lambda_{smooth}\mathcal L_{smooth}.
+\end{aligned}
+\end{equation}
+其中 $\mathcal L_{ACT}$ 是原 ACT 动作与 KL 损失；$\mathcal L_{phase}$ 是阶段交叉熵；$\mathcal L_{dyn}$ 是未来语义分布负对数似然；$\mathcal L_{haz}$ 是生存/危险率损失；$\mathcal L_{res}$ 可使用冻结 ACT 与专家动作差
+\begin{equation}
+  \bm u_t^{res,label}
+  =\bm u_t^{expert}-\bm u_t^{ACT}
+\end{equation}
+进行初始化；$\mathcal L_{smooth}$ 约束残差和门控的时间变化。
+
+危险率损失可写为
+\begin{equation}
+\mathcal L_{haz}
+=-\sum_{j<K^{label}}\log(1-h_{t,j})
+-\log h_{t,K^{label}}.
+\end{equation}
+
+\subsection{分阶段训练流程}
+
+建议按以下顺序训练，避免所有模块同时学习导致不可辨识：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 训练并校准语义分割，缓存所有训练帧的软掩码、指标和不确定性；
+  \item 自动生成阶段边界，人工只修正每条轨迹的少量边界点；
+  \item 冻结当前最佳 ACT，训练阶段、指标、完成和危险率头；
+  \item 使用真实专家动作训练动作条件语义动力学和误差界；
+  \item 以专家减 ACT 的动作差初始化结构化残差，并加入恢复/人工接管数据；
+  \item 冻结或慢速更新动力学模型，使策略动作通过动力学预测最小化阶段 $V_m$；
+  \item 最后联合微调，但保持 CLF 权重非负、残差限幅和不确定性校准。
+\end{enumerate}
+
+仅有成功示范时，残差主要学习正常轨迹附近的小修正。拨空气、布料卡住、目标推过头和短暂丢失后的恢复能力需要新的人工接管轨迹。为保持测试独立性，不应直接把用于最终报告的测试轨迹混入训练集。
+
+\section{在线执行流程}
+
+一次完整控制循环如下：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 获取前视、侧视和关节观测，更新软语义状态及置信集合；
+  \item 若观测不可信，则保持、减速或执行重新观察动作；
+  \item 根据历史输出阶段概率，并应用投票、滞回与最小驻留时间；
+  \item ACT 预测固定长度名义动作块，动力学预测未来语义轨迹，危险率头提出执行长度；
+  \item 对动作块前缀计算 $K^{safe}$，得到 $K^{plan}$；
+  \item 每个控制步计算视觉残差提议并求解 CLF-QP，发送最终关节目标；
+  \item 轻量语义监控器持续检查阶段变化、预测创新量和 CLF 下降；
+  \item 事件触发时立即清空剩余动作并重新规划；
+  \item 进入 $D$ 且连续成功条件通过时，清空动作队列并保持当前姿态。
+\end{enumerate}
+
+为提高可解释性，系统每次重规划记录
+\begin{equation}
+\{m_t,\bm\pi_t^m,V_m,\dot V_m,
+\bm u^{ACT},\bm u^{VS},\bm u^*,
+\alpha,K^{learn},K^{safe},K^{exec},
+\delta^*,\bm c_{seg}\}.
+\end{equation}
+由此可以回答策略处于什么阶段、视觉目标是什么、ACT 动作为何被修正、哪个稳定或安全约束被激活，以及为什么提前重规划。
+
+\section{实验设计}
+
+\subsection{消融实验}
+
+为区分短闭环、阶段表示、预测模型和稳定投影的贡献，建议至少比较：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 原 ACT：固定长动作块执行；
+  \item ACT-Short：仅缩短并固定重规划间隔；
+  \item Phase-ACT：加入显式阶段监督和阶段嵌入；
+  \item Predictive-ACT：增加未来语义预测和可学习执行长度；
+  \item Residual-ACT：增加学习视觉残差但不使用 CLF 投影；
+  \item 完整方法：残差提议、鲁棒 CLF-QP、可认证长度和事件触发。
+\end{enumerate}
+
+\subsection{评估指标}
+
+除任务成功率外，应报告：
+\begin{itemize}[leftmargin=2.3em]
+  \item 各阶段到达率、阶段耗时和阶段转移混淆矩阵；
+  \item 物体中心误差、目标距离、区域重叠和布料面积误差；
+  \item 未来语义预测负对数似然及置信区间覆盖率；
+  \item CLF 下降约束违反率、QP 可行率、平均松弛量和残差幅度；
+  \item 学习长度、认证长度和实际长度的分布；
+  \item 动作块边界跳变、关节跟踪误差和推理延迟；
+  \item 分割置信度的校准误差、风险--覆盖曲线和跨视角冲突率；
+  \item 拨空气、卡布、目标丢失、差点入区和入区后离开的失败频率。
+\end{itemize}
+
+空间测试应覆盖全部初始网格，同时在历史弱区域增加独立验证。理论相关实验需检查：当 CLF-QP 声称可认证时，真实 $V_m$ 是否按界下降；当预测不确定性升高时，置信集合是否仍覆盖真实未来状态；以及事件触发器是否在违反下降条件之前中断。
+
+\section{理论保证的边界与局限}
+
+本文框架的收敛结论依赖明确假设，不能解释为任意初态下的全局任务完成保证。主要限制包括：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 语义面积可能因机械臂遮挡而变化，若观测误差界未经校准，CLF 可能基于错误状态下降；
+  \item 柔性布料和推动接触存在离散事件，单个光滑局部动力学仅在有限区域有效；
+  \item 当物体不可达、执行器卡死或布料形成不可逆缠绕时，阶段 CLF 可行性不成立；
+  \item QP 松弛保证可解，但松弛过大时只能得到较大的实用稳定邻域；
+  \item 阶段误分类可能选择错误的 $V_m$。必须使用历史、滞回、置信门和守卫验证；
+  \item 学习危险率本身不提供稳定性，理论保证来自 $K^{safe}$ 和在线事件触发裁剪；
+  \item 若加入无限恢复循环，必须另行证明循环进度，否则只能保证安全和局部稳定。
+\end{enumerate}
+
+后续可研究完整布料的 amodal 分割、基于机械臂运动学投影的遮挡掩码、可验证神经 CLF\cite{chang2019neural}、概率 CLF 和带接触模式的分段动力学。
+
+\section{结论}
+
+本文给出一种将动作分块模仿学习与视觉伺服稳定性结构结合的理论初稿。该方法使用可解释语义状态和显式阶段监督描述任务进程，以 ACT 提供复杂双臂名义行为，以动作条件语义动力学预测动作结果，以结构化视觉残差实现实时纠偏，并以鲁棒 CLF-QP 保证在认证域内的阶段误差下降。可学习执行长度提高计算与控制效率，而 CLF 可认证长度和事件触发器防止长时间执行陈旧动作。该框架能够在合理假设下证明阶段目标集合的实用指数稳定和前向阶段到达完成集合，同时明确保留对遮挡、模型误差、不可达和恢复循环的限制。
+
+\bibliographystyle{unsrt}
+\bibliography{references}
+
+\end{document}
