@@ -19,6 +19,9 @@ Experiments:
       and action loss also backpropagates through the U-Net mask path.
   SEM-1: Each view's masks are merged into one soft semantic RGB map. ACT sees semantic maps plus
       the original RGB views through one shared image backbone; no pooled RGB latent is used.
+  ASEM-1: Same inputs and losses as SEM-1, but the ACT action L1 gradient also supervises the
+      segmentation network. The task gradient is warmed up, norm-limited relative to the supervised
+      segmentation gradient, and projected when it conflicts with segmentation.
   SEM-2: Same soft semantic maps as SEM-1, but ACT sees no original RGB images and no pooled latent.
   3:  ACT sees only the pooled RGB encoder latent. U-Net mask decoder is kept as an auxiliary task.
 """
@@ -74,7 +77,8 @@ CANONICAL_SEMANTIC_MASK_KEYS = [
     "observation.images.right_arm",
 ]
 DEFAULT_MASK_KEYS = CANONICAL_SEMANTIC_MASK_KEYS
-SEMANTIC_EXPERIMENTS = {"SEM-1", "SEM-2"}
+SEMANTIC_EXPERIMENTS = {"SEM-1", "ASEM-1", "SEM-2"}
+ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS = {"ASEM-1"}
 SEMANTIC_CLASSES = ("occluder", "object", "region", "tool")
 SEMANTIC_PALETTE_BY_CLASS = {
     "background": (0.0, 0.0, 0.0),
@@ -130,6 +134,10 @@ class MaskActRunConfig:
     no_gripper: bool
     dice_loss_weight: float
     semantic_temperature: float
+    action_to_seg_grad_ratio: float
+    action_to_seg_warmup_steps: int
+    action_to_seg_ramp_steps: int
+    action_to_seg_conflict_projection: bool
 
 
 class DoubleConv(nn.Module):
@@ -336,6 +344,10 @@ class MaskACTPolicy(nn.Module):
         metric_loss_weight: float,
         metric_eps: float,
         semantic_temperature: float,
+        action_to_seg_grad_ratio: float,
+        action_to_seg_warmup_steps: int,
+        action_to_seg_ramp_steps: int,
+        action_to_seg_conflict_projection: bool,
         pretrained_backbone_weights: str | None,
     ):
         super().__init__()
@@ -354,6 +366,12 @@ class MaskACTPolicy(nn.Module):
         self.metric_loss_weight = metric_loss_weight
         self.metric_eps = metric_eps
         self.semantic_temperature = semantic_temperature
+        self.action_to_seg_grad_ratio = action_to_seg_grad_ratio
+        self.action_to_seg_warmup_steps = action_to_seg_warmup_steps
+        self.action_to_seg_ramp_steps = action_to_seg_ramp_steps
+        self.action_to_seg_conflict_projection = action_to_seg_conflict_projection
+        self._training_step = 0
+        self._asem_backward_losses: tuple[Tensor, Tensor, float] | None = None
         self.bce = nn.BCEWithLogitsLoss()
         self._latest_inference_mask_preview: dict[str, Tensor] = {}
 
@@ -376,6 +394,16 @@ class MaskACTPolicy(nn.Module):
             )
         if self.semantic_temperature <= 0:
             raise ValueError(f"semantic_temperature must be positive, got {self.semantic_temperature}.")
+        if not 0.0 <= self.action_to_seg_grad_ratio <= 1.0:
+            raise ValueError(
+                "action_to_seg_grad_ratio must be between 0 and 1, "
+                f"got {self.action_to_seg_grad_ratio}."
+            )
+        if self.action_to_seg_warmup_steps < 0 or self.action_to_seg_ramp_steps < 0:
+            raise ValueError(
+                "action-to-seg warmup and ramp steps must be non-negative, got "
+                f"{self.action_to_seg_warmup_steps} and {self.action_to_seg_ramp_steps}."
+            )
         if self.uses_semantic_maps() and set(self.mask_suffixes) != set(SEMANTIC_CLASSES):
             raise ValueError(
                 f"{self.experiment} requires exactly these semantic mask suffixes: {list(SEMANTIC_CLASSES)}; "
@@ -417,6 +445,22 @@ class MaskACTPolicy(nn.Module):
     def reset(self) -> None:
         self.act_policy.reset()
         self._latest_inference_mask_preview = {}
+
+    def set_training_step(self, step: int) -> None:
+        self._training_step = step
+
+    def scheduled_action_to_seg_grad_ratio(self) -> float:
+        if self.experiment not in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
+            return 0.0
+        if self._training_step <= self.action_to_seg_warmup_steps:
+            return 0.0
+        if self.action_to_seg_ramp_steps == 0:
+            return self.action_to_seg_grad_ratio
+        ramp_progress = min(
+            (self._training_step - self.action_to_seg_warmup_steps) / self.action_to_seg_ramp_steps,
+            1.0,
+        )
+        return self.action_to_seg_grad_ratio * ramp_progress
 
     def latest_inference_mask_preview(self) -> dict[str, Tensor]:
         """Return the latest inference masks as CPU uint8 probability maps."""
@@ -545,7 +589,7 @@ class MaskACTPolicy(nn.Module):
         return self.experiment in SEMANTIC_EXPERIMENTS
 
     def act_uses_raw_rgb_images(self) -> bool:
-        return self.experiment in {"2C", "SEM-1"}
+        return self.experiment in {"2C", "SEM-1", "ASEM-1"}
 
     def normalize_visual_like(self, image: Tensor, key: str) -> Tensor:
         key_stats = self.stats[key]
@@ -827,16 +871,18 @@ class MaskACTPolicy(nn.Module):
                 semantic_targets,
             )
             probabilities_by_view = self.semantic_probabilities(logits_by_view)
-            semantic_maps = [
-                semantic_map.detach()
-                for semantic_map in self.semantic_rgb_maps(probabilities_by_view)
-            ]
+            semantic_maps = self.semantic_rgb_maps(probabilities_by_view)
+            action_to_seg_ratio = self.scheduled_action_to_seg_grad_ratio()
+            if self.experiment not in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS or action_to_seg_ratio <= 0.0:
+                semantic_maps = [semantic_map.detach() for semantic_map in semantic_maps]
             act_batch = dict(batch)
             for rgb_key, semantic_map in zip(self.rgb_keys, semantic_maps, strict=True):
                 act_batch[semantic_image_key(rgb_key)] = self.normalize_semantic_map(semantic_map)
 
             action_loss, action_logs = self.act_policy(act_batch)
             loss = self.action_loss_weight * action_loss + self.seg_loss_weight * seg_loss
+            if self.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
+                self._asem_backward_losses = (action_loss, seg_loss, action_to_seg_ratio)
             logs = {
                 "loss": float(loss.detach().cpu()),
                 "action_loss": float(action_loss.detach().cpu()),
@@ -845,6 +891,8 @@ class MaskACTPolicy(nn.Module):
                 "seg_dice_loss": float(dice_loss.detach().cpu()),
                 **dice_logs,
             }
+            if self.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
+                logs["action_to_seg_target_grad_ratio"] = action_to_seg_ratio
             logs.update({key: float(value) for key, value in action_logs.items() if isinstance(value, (int, float))})
             return loss, logs
 
@@ -907,6 +955,120 @@ class MaskACTPolicy(nn.Module):
         logs.update({key: float(value) for key, value in action_logs.items() if isinstance(value, (int, float))})
         return loss, logs
 
+    def backward_training_loss(self, loss: Tensor, logs: dict[str, float]) -> None:
+        """Backpropagate, with guarded multi-task gradients for ASEM-1."""
+
+        if self.experiment not in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
+            loss.backward()
+            return
+        if self._asem_backward_losses is None:
+            raise RuntimeError("ASEM-1 backward state is missing. Call forward before backward_training_loss.")
+
+        action_loss, seg_loss, target_ratio = self._asem_backward_losses
+        self._asem_backward_losses = None
+        seg_parameters = [parameter for parameter in self.seg_net.parameters() if parameter.requires_grad]
+
+        weighted_action_loss = self.action_loss_weight * action_loss
+        weighted_action_loss.backward(retain_graph=target_ratio > 0.0)
+        action_grads = [
+            None if parameter.grad is None else parameter.grad.detach().clone()
+            for parameter in seg_parameters
+        ]
+        for parameter in seg_parameters:
+            parameter.grad = None
+
+        weighted_seg_loss = self.seg_loss_weight * seg_loss
+        weighted_seg_loss.backward()
+        seg_grads = [
+            None if parameter.grad is None else parameter.grad.detach().clone()
+            for parameter in seg_parameters
+        ]
+
+        device = action_loss.device
+        zero = torch.zeros((), device=device, dtype=torch.float32)
+        action_norm_sq = zero.clone()
+        seg_norm_sq = zero.clone()
+        dot = zero.clone()
+        for action_grad, seg_grad in zip(action_grads, seg_grads, strict=True):
+            if action_grad is not None:
+                action_norm_sq = action_norm_sq + action_grad.float().square().sum()
+            if seg_grad is not None:
+                seg_norm_sq = seg_norm_sq + seg_grad.float().square().sum()
+            if action_grad is not None and seg_grad is not None:
+                dot = dot + (action_grad.float() * seg_grad.float()).sum()
+
+        eps = 1e-12
+        action_norm = action_norm_sq.sqrt()
+        seg_norm = seg_norm_sq.sqrt()
+        denominator = (action_norm * seg_norm).clamp_min(eps)
+        cosine = torch.where(denominator > eps, dot / denominator, zero)
+        conflict = bool((dot < 0).item())
+
+        projection_coefficient = zero
+        apply_projection = (
+            self.action_to_seg_conflict_projection and conflict and float(seg_norm_sq.item()) > eps
+        )
+        if apply_projection:
+            projection_coefficient = dot / seg_norm_sq.clamp_min(eps)
+
+        projected_action_grads: list[Tensor | None] = []
+        projected_norm_sq = zero.clone()
+        projected_dot = zero.clone()
+        for action_grad, seg_grad in zip(action_grads, seg_grads, strict=True):
+            if action_grad is None:
+                projected_action_grads.append(None)
+                continue
+            projected = action_grad
+            if seg_grad is not None and apply_projection:
+                projected = action_grad - projection_coefficient.to(action_grad.dtype) * seg_grad
+            projected_action_grads.append(projected)
+            projected_norm_sq = projected_norm_sq + projected.float().square().sum()
+            if seg_grad is not None:
+                projected_dot = projected_dot + (projected.float() * seg_grad.float()).sum()
+
+        projected_norm = projected_norm_sq.sqrt()
+        projected_denominator = (projected_norm * seg_norm).clamp_min(eps)
+        projected_cosine = torch.where(
+            projected_denominator > eps,
+            projected_dot / projected_denominator,
+            zero,
+        )
+        applied_scale = zero
+        if target_ratio > 0.0 and float(projected_norm.item()) > eps and float(seg_norm.item()) > eps:
+            max_scale = target_ratio * seg_norm / projected_norm.clamp_min(eps)
+            applied_scale = torch.minimum(torch.ones_like(max_scale), max_scale)
+        applied_scale_value = float(applied_scale.item())
+
+        for parameter, seg_grad, action_grad in zip(
+            seg_parameters,
+            seg_grads,
+            projected_action_grads,
+            strict=True,
+        ):
+            if seg_grad is None:
+                parameter.grad = None
+                continue
+            parameter.grad = seg_grad
+            if action_grad is not None and applied_scale_value > 0.0:
+                parameter.grad.add_(action_grad, alpha=applied_scale_value)
+
+        applied_action_norm = projected_norm * applied_scale
+        logs.update(
+            {
+                "seg_supervised_grad_norm": float(seg_norm.cpu()),
+                "action_to_seg_raw_grad_norm": float(action_norm.cpu()),
+                "action_to_seg_raw_grad_ratio": float((action_norm / seg_norm.clamp_min(eps)).cpu()),
+                "action_to_seg_grad_cosine": float(cosine.cpu()),
+                "action_to_seg_projected_grad_cosine": float(projected_cosine.cpu()),
+                "action_to_seg_grad_conflict": float(conflict),
+                "action_to_seg_applied_scale": float(applied_scale.cpu()),
+                "action_to_seg_applied_grad_norm": float(applied_action_norm.cpu()),
+                "action_to_seg_applied_grad_ratio": float(
+                    (applied_action_norm / seg_norm.clamp_min(eps)).cpu()
+                ),
+            }
+        )
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -925,6 +1087,7 @@ def parse_args() -> argparse.Namespace:
             "4C",
             "5",
             "SEM-1",
+            "ASEM-1",
             "SEM-2",
         ],
         required=True,
@@ -977,6 +1140,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--action-loss-weight", type=float, default=1.0)
     parser.add_argument("--dice-loss-weight", type=float, default=1.0)
     parser.add_argument("--semantic-temperature", type=float, default=1.0)
+    parser.add_argument(
+        "--action-to-seg-grad-ratio",
+        type=float,
+        default=0.1,
+        help="Maximum ASEM-1 action-gradient norm as a fraction of the supervised segmentation-gradient norm.",
+    )
+    parser.add_argument(
+        "--action-to-seg-warmup-steps",
+        type=int,
+        default=20_000,
+        help="ASEM-1 steps trained like SEM-1 before action gradients reach the segmentation network.",
+    )
+    parser.add_argument(
+        "--action-to-seg-ramp-steps",
+        type=int,
+        default=20_000,
+        help="ASEM-1 linear ramp duration from zero to --action-to-seg-grad-ratio.",
+    )
+    parser.add_argument(
+        "--no-action-to-seg-conflict-projection",
+        action="store_false",
+        dest="action_to_seg_conflict_projection",
+        help="Disable removal of action-gradient components that oppose supervised segmentation.",
+    )
+    parser.set_defaults(action_to_seg_conflict_projection=True)
     parser.add_argument("--semantic-loss-weight", type=float, default=1.0)
     parser.add_argument("--metric-loss-weight", type=float, default=1.0)
     parser.add_argument("--metric-eps", type=float, default=1e-6)
@@ -1109,7 +1297,7 @@ def reshape_visual_stats_for_channel_first(
 def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     experiment = args.experiment.upper()
     semantic_keys = [semantic_image_key(rgb_key) for rgb_key in args.rgb_keys]
-    if experiment == "SEM-1":
+    if experiment in {"SEM-1", "ASEM-1"}:
         return [*semantic_keys, *args.rgb_keys]
     if experiment == "SEM-2":
         return semantic_keys
@@ -1221,6 +1409,10 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         metric_loss_weight=args.metric_loss_weight,
         metric_eps=args.metric_eps,
         semantic_temperature=getattr(args, "semantic_temperature", 1.0),
+        action_to_seg_grad_ratio=getattr(args, "action_to_seg_grad_ratio", 0.1),
+        action_to_seg_warmup_steps=getattr(args, "action_to_seg_warmup_steps", 20_000),
+        action_to_seg_ramp_steps=getattr(args, "action_to_seg_ramp_steps", 20_000),
+        action_to_seg_conflict_projection=getattr(args, "action_to_seg_conflict_projection", True),
         pretrained_backbone_weights=args.pretrained_backbone_weights,
     )
 
@@ -1249,6 +1441,10 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         metric_loss_weight=args.metric_loss_weight,
         metric_eps=args.metric_eps,
         semantic_temperature=args.semantic_temperature,
+        action_to_seg_grad_ratio=args.action_to_seg_grad_ratio,
+        action_to_seg_warmup_steps=args.action_to_seg_warmup_steps,
+        action_to_seg_ramp_steps=args.action_to_seg_ramp_steps,
+        action_to_seg_conflict_projection=args.action_to_seg_conflict_projection,
         chunk_size=args.chunk_size,
         n_action_steps=args.n_action_steps,
         pretrained_backbone_weights=args.pretrained_backbone_weights,
@@ -1267,7 +1463,9 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
                 name: [round(channel * 255) for channel in color]
                 for name, color in SEMANTIC_PALETTE_BY_CLASS.items()
             }
-            payload["semantic_map_action_gradient"] = False
+            payload["semantic_map_action_gradient"] = args.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS
+            if args.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
+                payload["action_supervision_design"] = "mycode/ASEM_1_DESIGN.md"
         json.dump(payload, f, indent=4)
         f.write("\n")
 
@@ -1599,10 +1797,20 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     print(f"Training image size: {args.image_size or 'dataset native resolution'}")
     if args.experiment in SEMANTIC_EXPERIMENTS:
         print(f"Semantic classes: {['background', *build_mask_layout(args.rgb_keys, args.mask_target_keys)[0]]}")
-        print(
+        semantic_description = (
             "Semantic loss: weighted multiclass CE + "
-            f"{args.dice_loss_weight:g} * foreground Dice; action gradient to semantic map: disabled."
+            f"{args.dice_loss_weight:g} * foreground Dice"
         )
+        if args.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
+            print(
+                f"{semantic_description}; action gradient to semantic map: enabled with "
+                f"{args.action_to_seg_warmup_steps} warmup steps, "
+                f"{args.action_to_seg_ramp_steps} ramp steps, and at most "
+                f"{args.action_to_seg_grad_ratio:g}x supervised segmentation gradient norm; "
+                f"conflict projection: {args.action_to_seg_conflict_projection}."
+            )
+        else:
+            print(f"{semantic_description}; action gradient to semantic map: disabled.")
     if args.no_gripper:
         print("No gripper: dropped gripper dimensions when present in action and selected state features.")
     print(f"Output dir: {args.output_dir}")
@@ -1640,8 +1848,9 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             batch = preprocessor(raw_batch)
 
             optimizer.zero_grad(set_to_none=True)
+            model.set_training_step(step)
             loss, logs = model(batch, raw_batch)
-            loss.backward()
+            model.backward_training_loss(loss, logs)
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_norm)
             optimizer.step()
 
