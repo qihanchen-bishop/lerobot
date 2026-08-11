@@ -1,4 +1,4 @@
-# LaTeX 理论初稿
+# 中文核心方法草稿
 
 主文件：`main.tex`
 
@@ -19,4 +19,10 @@ xelatex main.tex
 latexmk -xelatex -interaction=nonstopmode main.tex
 ```
 
-正文当前是一份理论与方法初稿，实验结果、作者信息、机构信息和最终超参数尚未填写。
+正文聚焦自动语义标注、标签质量评估、自动阶段学习、可变视角语义预测 ACT 和图像空间视觉伺服。实验结果、作者信息、机构信息和最终超参数尚未填写。
+
+没有本地 TeX Live 时，也可以使用 Tectonic：
+
+```bash
+tectonic -X compile main.tex
+```
