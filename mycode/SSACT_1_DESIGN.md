@@ -1,7 +1,8 @@
 # SSACT-1 Training Design
 
-`SSACT-1` is the first trainable version of the semantic-servo draft. It is a
-controlled extension of `PSEM-1`, not a deployed visual-servo controller.
+`SSACT-1` is the first trainable version of the semantic-servo draft. It combines
+SEM-1 visual inputs with semantic dynamics and phase history; it is not yet a
+deployed visual-servo controller.
 
 ## Offline phase supervision
 
@@ -23,9 +24,10 @@ features, and it does not weaken supervised segmentation loss.
 
 ## Trainable modules
 
-- the same RGB-to-soft-semantic U-Net as `PSEM-1`;
-- the same ACT inputs: one RGB and one soft semantic image per view;
-- the same expert-action-conditioned semantic dynamics at offsets 1, 8, 24, 60;
+- the RGB-to-soft-semantic U-Net and ACT inputs from SEM-1;
+- one RGB and one soft semantic image per view;
+- expert-action-conditioned semantic dynamics at offsets 1, 8, 24, 60, trained
+  against offline cached semantic targets rather than future video decoding;
 - a GRU over 16 semantic samples spaced four frames apart (about two seconds at
   30 Hz), trained with confidence-weighted soft phase cross entropy;
 - a five-value phase probability vector supplied to ACT as environment state.

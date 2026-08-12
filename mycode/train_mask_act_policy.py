@@ -22,10 +22,9 @@ Experiments:
   ASEM-1: Same inputs and losses as SEM-1, but the ACT action L1 gradient also supervises the
       segmentation network. The task gradient is warmed up, norm-limited relative to the supervised
       segmentation gradient, and projected when it conflicts with segmentation.
-  PSEM-1: Same ACT and segmentation paths as SEM-1, plus an expert-action-conditioned probabilistic
-      model that predicts structured semantic states at configurable future offsets.
-  SSACT-1: PSEM-1 plus an automatically pseudo-labeled five-phase history model. The predicted phase
-      probabilities condition ACT; phase supervision remains detached from the segmentation network.
+  SSACT-1: SEM-1 plus an expert-action-conditioned probabilistic semantic dynamics model and an
+      automatically pseudo-labeled five-phase history model. Future semantic targets are loaded from
+      an offline cache; predicted phase probabilities condition ACT.
   SEM-2: Same soft semantic maps as SEM-1, but ACT sees no original RGB images and no pooled latent.
   3:  ACT sees only the pooled RGB encoder latent. U-Net mask decoder is kept as an auxiliary task.
 """
@@ -89,11 +88,27 @@ CANONICAL_SEMANTIC_MASK_KEYS = [
     "observation.images.right_arm",
 ]
 DEFAULT_MASK_KEYS = CANONICAL_SEMANTIC_MASK_KEYS
-SEMANTIC_EXPERIMENTS = {"SEM-1", "ASEM-1", "PSEM-1", "SSACT-1", "SEM-2"}
+SEMANTIC_EXPERIMENTS = {"SEM-1", "ASEM-1", "SSACT-1", "SEM-2"}
 ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS = {"ASEM-1"}
-PREDICTIVE_SEMANTIC_EXPERIMENTS = {"PSEM-1", "SSACT-1"}
+PREDICTIVE_SEMANTIC_EXPERIMENTS = {"SSACT-1"}
 PHASE_CONDITIONED_EXPERIMENTS = {"SSACT-1"}
 SEMANTIC_CLASSES = ("occluder", "object", "region", "tool")
+SEMANTIC_STATE_FEATURES_PER_VIEW = (
+    "area_occluder",
+    "area_object",
+    "area_region",
+    "area_tool",
+    "x_object",
+    "y_object",
+    "x_region",
+    "y_region",
+    "x_tool",
+    "y_tool",
+    "contact_object_region",
+    "contact_object_occluder",
+    "distance_object_region",
+    "distance_tool_object",
+)
 SEMANTIC_PALETTE_BY_CLASS = {
     "background": (0.0, 0.0, 0.0),
     "occluder": (50 / 255, 160 / 255, 1.0),
@@ -173,7 +188,6 @@ class MaskQualityStore:
         mask_key_map: dict[str, tuple[int, int]],
         num_views: int,
         num_classes: int,
-        prediction_offsets: tuple[int, ...],
     ) -> dict[str, Any]:
         indices = raw_batch["index"].detach().cpu().numpy().astype(np.int64)
         current_valid = np.zeros((indices.shape[0], num_views, num_classes), dtype=bool)
@@ -186,20 +200,129 @@ class MaskQualityStore:
         enriched = dict(raw_batch)
         enriched["mask_quality_current_valid"] = torch.from_numpy(current_valid)
         enriched["mask_quality_current_score"] = torch.from_numpy(current_scores)
-        if prediction_offsets:
-            future_valid = np.ones((indices.shape[0], len(prediction_offsets)), dtype=bool)
-            future_scores = np.ones((indices.shape[0], len(prediction_offsets)), dtype=np.float32)
-            total_frames = next(iter(self.valid_by_key.values())).shape[0]
-            for offset_idx, offset in enumerate(prediction_offsets):
-                future_indices = np.clip(indices + offset, 0, total_frames - 1)
-                for key in mask_keys:
-                    future_valid[:, offset_idx] &= self.valid_by_key[key][future_indices]
-                    future_scores[:, offset_idx] = np.minimum(
-                        future_scores[:, offset_idx],
-                        self.score_by_key[key][future_indices],
-                    )
-            enriched["mask_quality_future_valid"] = torch.from_numpy(future_valid)
-            enriched["mask_quality_future_score"] = torch.from_numpy(future_scores)
+        return enriched
+
+
+class SemanticStateStore:
+    """Offline future semantic targets and label-quality gates for SSACT-1."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        total_frames: int,
+        rgb_keys: list[str],
+        minimum_quality_score: float,
+    ) -> None:
+        if not 0.0 <= minimum_quality_score <= 1.0:
+            raise ValueError("minimum_quality_score must be in [0, 1].")
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Offline semantic states are missing: {path}. "
+                "Run mycode/precompute_semantic_states.py before SSACT-1 training."
+            )
+        with np.load(path) as archive:
+            required = {
+                "semantic_states",
+                "quality_score",
+                "uncertain",
+                "episode_end_index",
+                "processed",
+                "rgb_keys",
+                "class_names",
+                "feature_names",
+            }
+            missing = sorted(required.difference(archive.files))
+            if missing:
+                raise KeyError(f"Semantic-state file '{path}' is missing {missing}.")
+            self.semantic_states = archive["semantic_states"].astype(np.float32, copy=True)
+            self.quality_score = archive["quality_score"].astype(np.float32, copy=True)
+            self.uncertain = archive["uncertain"].astype(bool, copy=True)
+            self.episode_end_index = archive["episode_end_index"].astype(np.int64, copy=True)
+            processed = archive["processed"].astype(bool, copy=True)
+            stored_rgb_keys = archive["rgb_keys"].astype(str).tolist()
+            stored_class_names = archive["class_names"].astype(str).tolist()
+            self.feature_names = archive["feature_names"].astype(str).tolist()
+
+        expected_state_shape = (total_frames, len(rgb_keys), len(SEMANTIC_STATE_FEATURES_PER_VIEW))
+        expected_quality_shape = (total_frames, len(rgb_keys), len(SEMANTIC_CLASSES))
+        if self.semantic_states.shape != expected_state_shape:
+            raise ValueError(
+                f"Semantic states have shape {self.semantic_states.shape}; expected {expected_state_shape}."
+            )
+        if self.quality_score.shape != expected_quality_shape or self.uncertain.shape != expected_quality_shape:
+            raise ValueError(
+                "Semantic-state quality arrays must have shape "
+                f"{expected_quality_shape}; got {self.quality_score.shape} and {self.uncertain.shape}."
+            )
+        if self.episode_end_index.shape != (total_frames,) or processed.shape != (total_frames,):
+            raise ValueError("Semantic-state episode and processed arrays must cover every dataset frame.")
+        if stored_rgb_keys != rgb_keys:
+            raise ValueError(
+                f"Semantic-state views are {stored_rgb_keys}; training requested {rgb_keys}. "
+                "Regenerate the cache for the exact ordered view list."
+            )
+        if stored_class_names != list(SEMANTIC_CLASSES):
+            raise ValueError(
+                f"Semantic-state classes are {stored_class_names}; expected {list(SEMANTIC_CLASSES)}."
+            )
+        if self.feature_names != list(SEMANTIC_STATE_FEATURES_PER_VIEW):
+            raise ValueError(
+                f"Semantic-state features are {self.feature_names}; expected "
+                f"{list(SEMANTIC_STATE_FEATURES_PER_VIEW)}."
+            )
+        if not processed.all():
+            raise ValueError(f"Semantic-state file '{path}' does not cover {(~processed).sum()} frames.")
+        if not np.isfinite(self.semantic_states).all() or not np.isfinite(self.quality_score).all():
+            raise ValueError(f"Semantic-state file '{path}' contains non-finite values.")
+        if np.any((self.semantic_states < 0.0) | (self.semantic_states > 1.0)):
+            raise ValueError(f"Semantic-state file '{path}' contains values outside [0, 1].")
+        frame_indices = np.arange(total_frames, dtype=np.int64)
+        if np.any((self.episode_end_index <= frame_indices) | (self.episode_end_index > total_frames)):
+            raise ValueError(f"Semantic-state file '{path}' contains invalid episode end indices.")
+
+        self.path = path
+        self.minimum_quality_score = minimum_quality_score
+
+    def add_batch_semantics(
+        self,
+        raw_batch: dict[str, Any],
+        *,
+        prediction_offsets: tuple[int, ...],
+    ) -> dict[str, Any]:
+        indices = raw_batch["index"].detach().cpu().numpy().astype(np.int64)
+        if np.any((indices < 0) | (indices >= self.semantic_states.shape[0])):
+            raise IndexError("Batch contains frame indices outside the semantic-state cache.")
+
+        current_scores = self.quality_score[indices]
+        current_valid = (
+            (current_scores >= self.minimum_quality_score)
+            & ~self.uncertain[indices]
+        )
+
+        offsets = np.asarray(prediction_offsets, dtype=np.int64)
+        future_indices = indices[:, None] + offsets[None, :]
+        within_episode = future_indices < self.episode_end_index[indices, None]
+        clipped_indices = np.clip(future_indices, 0, self.semantic_states.shape[0] - 1)
+        future_scores_by_class = self.quality_score[clipped_indices]
+        future_uncertain = self.uncertain[clipped_indices]
+        future_valid = (
+            within_episode
+            & (future_scores_by_class >= self.minimum_quality_score).all(axis=(2, 3))
+            & ~future_uncertain.any(axis=(2, 3))
+        )
+
+        enriched = dict(raw_batch)
+        enriched["mask_quality_current_valid"] = torch.from_numpy(current_valid)
+        enriched["mask_quality_current_score"] = torch.from_numpy(current_scores)
+        enriched["future_semantic_states"] = torch.from_numpy(
+            self.semantic_states[clipped_indices].reshape(indices.shape[0], len(offsets), -1)
+        )
+        enriched["future_semantic_valid"] = torch.from_numpy(future_valid)
+        enriched["mask_quality_future_valid"] = torch.from_numpy(future_valid)
+        enriched["mask_quality_future_score"] = torch.from_numpy(
+            future_scores_by_class.min(axis=(2, 3))
+        )
         return enriched
 
 
@@ -324,6 +447,7 @@ class MaskActRunConfig:
     semantic_prediction_offsets: list[int]
     semantic_dynamics_hidden_dim: int
     semantic_dynamics_loss_weight: float
+    semantic_states: str | None
     mask_quality_dir: str | None
     mask_quality_min_score: float
     phase_labels: str | None
@@ -629,7 +753,7 @@ class MaskACTPolicy(nn.Module):
                 or self.semantic_prediction_offsets[-1] > self.config.chunk_size
             ):
                 raise ValueError(
-                    "PSEM-1 semantic prediction offsets must be unique, increasing, positive, and no larger "
+                    "SSACT-1 semantic prediction offsets must be unique, increasing, positive, and no larger "
                     f"than chunk_size={self.config.chunk_size}; got {self.semantic_prediction_offsets}."
                 )
             if self.semantic_dynamics_loss_weight < 0:
@@ -760,7 +884,7 @@ class MaskACTPolicy(nn.Module):
         return dict(self._latest_inference_mask_preview)
 
     def latest_semantic_rollout(self) -> dict[str, Tensor]:
-        """Return the latest PSEM-1 rollout as detached CPU tensors."""
+        """Return the latest SSACT-1 rollout as detached CPU tensors."""
         return dict(self._latest_semantic_rollout)
 
     @staticmethod
@@ -893,7 +1017,7 @@ class MaskACTPolicy(nn.Module):
         actions = self.act_policy.predict_action_chunk(act_batch)
         if self.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
             if self.semantic_dynamics is None or self._latest_semantic_state is None:
-                raise RuntimeError("PSEM-1 semantic dynamics state was not prepared for inference.")
+                raise RuntimeError("SSACT-1 semantic dynamics state was not prepared for inference.")
             means, log_stds = self.semantic_dynamics(
                 self._latest_semantic_state,
                 act_batch[OBS_STATE],
@@ -933,7 +1057,7 @@ class MaskACTPolicy(nn.Module):
         return self.experiment in SEMANTIC_EXPERIMENTS
 
     def act_uses_raw_rgb_images(self) -> bool:
-        return self.experiment in {"2C", "SEM-1", "ASEM-1", "PSEM-1", "SSACT-1"}
+        return self.experiment in {"2C", "SEM-1", "ASEM-1", "SSACT-1"}
 
     def normalize_visual_like(self, image: Tensor, key: str) -> Tensor:
         key_stats = self.stats[key]
@@ -992,6 +1116,10 @@ class MaskACTPolicy(nn.Module):
         if self.semantic_state_extractor is None:
             raise RuntimeError("Structured semantic states are only enabled for predictive semantic experiments.")
         state = self.semantic_state_extractor(self.semantic_control_probabilities(probabilities_by_view))
+        return self.apply_semantic_state_reliability(state)
+
+    def apply_semantic_state_reliability(self, state: Tensor) -> Tensor:
+        """Apply the same fixed view/class gates to predicted and cached states."""
         if self.phase_feature_extractor is None:
             return state
         reliability = self.phase_feature_extractor.reliability
@@ -1017,7 +1145,7 @@ class MaskACTPolicy(nn.Module):
                 ]
             )
         gate_tensor = torch.stack(state_gates).to(device=state.device, dtype=state.dtype)
-        return state * gate_tensor.unsqueeze(0)
+        return state * gate_tensor
 
     def semantic_control_probabilities(self, probabilities_by_view: list[Tensor]) -> Tensor:
         control_order = ("occluder", "object", "region", "tool")
@@ -1044,51 +1172,29 @@ class MaskACTPolicy(nn.Module):
         raw_batch: dict[str, Tensor],
         device: torch.device,
     ) -> tuple[Tensor, Tensor]:
-        """Build PSEM-1 targets from future hard semantic mask annotations."""
+        """Load cached future hard-label semantic targets for SSACT-1."""
         if self.semantic_state_extractor is None:
-            raise RuntimeError("Future semantic states are only available for PSEM-1.")
-        expected_times = len(self.semantic_prediction_offsets) + 1
-        probabilities_by_time = []
-        for time_idx in range(1, expected_times):
-            view_probabilities = []
-            for view_idx in range(len(self.rgb_keys)):
-                masks = []
-                for suffix_idx in range(len(self.mask_suffixes)):
-                    key = next(
-                        key
-                        for key, mapped_position in self.mask_key_map.items()
-                        if mapped_position == (view_idx, suffix_idx)
-                    )
-                    sequence = raw_batch[key]
-                    if sequence.ndim != 5 or sequence.shape[1] != expected_times:
-                        raise ValueError(
-                            f"PSEM-1 expected '{key}' as BTCHW with {expected_times} sampled times, "
-                            f"got {tuple(sequence.shape)}."
-                        )
-                    mask = sequence[:, time_idx].to(device=device, dtype=torch.float32)
-                    mask = mask.mean(dim=1) if mask.shape[1] == 3 else mask[:, 0]
-                    masks.append(mask >= 0.5)
-                foreground = torch.stack(masks, dim=1)
-                overlap = foreground.sum(dim=1) > 1
-                if overlap.any():
-                    raise ValueError(
-                        f"PSEM-1 future labels overlap in view '{self.rgb_keys[view_idx]}' at "
-                        f"prediction offset {self.semantic_prediction_offsets[time_idx - 1]}."
-                    )
-                target = foreground.to(dtype=torch.int64).argmax(dim=1) + 1
-                target = torch.where(foreground.any(dim=1), target, torch.zeros_like(target))
-                one_hot = F.one_hot(target, num_classes=len(self.mask_suffixes) + 1).permute(0, 3, 1, 2)
-                view_probabilities.append(one_hot.to(dtype=torch.float32))
-            probabilities_by_time.append(self.semantic_states_from_probabilities(view_probabilities))
-
-        targets = torch.stack(probabilities_by_time, dim=1)
-        padding_key = f"{self.mask_keys[0]}_is_pad"
-        if padding_key not in raw_batch:
-            raise KeyError(f"PSEM-1 future mask padding metadata is missing: '{padding_key}'.")
-        padding = raw_batch[padding_key].to(device=device)
-        if padding.shape[1] != expected_times:
-            raise ValueError(f"Expected {padding_key} shape (B, {expected_times}), got {tuple(padding.shape)}.")
-        return targets, ~padding[:, 1:]
+            raise RuntimeError("Future semantic states are only available for SSACT-1.")
+        required = ("future_semantic_states", "future_semantic_valid")
+        missing = [key for key in required if key not in raw_batch]
+        if missing:
+            raise KeyError(f"SSACT-1 batch is missing offline semantic targets: {missing}.")
+        targets = raw_batch["future_semantic_states"].to(device=device, dtype=torch.float32)
+        valid = raw_batch["future_semantic_valid"].to(device=device, dtype=torch.bool)
+        expected_shape = (
+            targets.shape[0],
+            len(self.semantic_prediction_offsets),
+            len(self.semantic_state_names),
+        )
+        if targets.shape != expected_shape:
+            raise ValueError(
+                f"Offline semantic targets have shape {tuple(targets.shape)}; expected {expected_shape}."
+            )
+        if valid.shape != expected_shape[:2]:
+            raise ValueError(
+                f"Offline semantic validity has shape {tuple(valid.shape)}; expected {expected_shape[:2]}."
+            )
+        return self.apply_semantic_state_reliability(targets), valid
 
     def semantic_probabilities(self, logits_by_view: list[Tensor]) -> list[Tensor]:
         return [
@@ -1451,7 +1557,7 @@ class MaskACTPolicy(nn.Module):
             dynamics_logs = {}
             if self.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
                 if self.semantic_dynamics is None:
-                    raise RuntimeError("PSEM-1 semantic dynamics module is missing.")
+                    raise RuntimeError("SSACT-1 semantic dynamics module is missing.")
                 current_semantic_state = self.semantic_states_from_probabilities(probabilities_by_view).detach()
                 future_semantic_states, valid_future_steps = self.build_future_semantic_states(
                     raw_batch,
@@ -1699,7 +1805,6 @@ def parse_args() -> argparse.Namespace:
             "5",
             "SEM-1",
             "ASEM-1",
-            "PSEM-1",
             "SSACT-1",
             "SEM-2",
         ],
@@ -1787,14 +1892,20 @@ def parse_args() -> argparse.Namespace:
         type=int,
         nargs="+",
         default=[1, 8, 24, 60],
-        help="PSEM-1 future frame/action offsets used by the semantic dynamics loss.",
+        help="SSACT-1 future frame/action offsets used by the semantic dynamics loss.",
     )
     parser.add_argument("--semantic-dynamics-hidden-dim", type=int, default=256)
     parser.add_argument(
         "--semantic-dynamics-loss-weight",
         type=float,
         default=0.1,
-        help="PSEM-1 Gaussian semantic rollout NLL weight.",
+        help="SSACT-1 Gaussian semantic rollout NLL weight.",
+    )
+    parser.add_argument(
+        "--semantic-states",
+        type=Path,
+        default=None,
+        help="Offline SSACT-1 semantic targets generated by mycode/precompute_semantic_states.py.",
     )
     parser.add_argument(
         "--mask-quality-dir",
@@ -1956,7 +2067,7 @@ def reshape_visual_stats_for_channel_first(
 def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     experiment = args.experiment.upper()
     semantic_keys = [semantic_image_key(rgb_key) for rgb_key in args.rgb_keys]
-    if experiment in {"SEM-1", "ASEM-1", "PSEM-1", "SSACT-1"}:
+    if experiment in {"SEM-1", "ASEM-1", "SSACT-1"}:
         return [*semantic_keys, *args.rgb_keys]
     if experiment == "SEM-2":
         return semantic_keys
@@ -2122,6 +2233,7 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         semantic_prediction_offsets=list(args.semantic_prediction_offsets),
         semantic_dynamics_hidden_dim=args.semantic_dynamics_hidden_dim,
         semantic_dynamics_loss_weight=args.semantic_dynamics_loss_weight,
+        semantic_states=str(args.semantic_states) if args.semantic_states is not None else None,
         mask_quality_dir=str(args.mask_quality_dir) if args.mask_quality_dir is not None else None,
         mask_quality_min_score=args.mask_quality_min_score,
         phase_labels=str(args.phase_labels) if args.phase_labels is not None else None,
@@ -2168,6 +2280,13 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
                         [key.rsplit(".", 1)[-1] for key in args.rgb_keys]
                     )
                 )
+                semantic_state_summary_path = args.semantic_states.with_suffix(".json")
+                if not semantic_state_summary_path.is_file():
+                    raise FileNotFoundError(
+                        f"Semantic-state summary is missing: {semantic_state_summary_path}"
+                    )
+                with open(semantic_state_summary_path) as semantic_state_summary_file:
+                    payload["semantic_state_summary"] = json.load(semantic_state_summary_file)
             if args.experiment in PHASE_CONDITIONED_EXPERIMENTS:
                 payload["phase_design"] = "mycode/SSACT_1_DESIGN.md"
                 payload["phase_names"] = ["uncover", "expose", "transport", "restore", "done"]
@@ -2444,15 +2563,23 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         torch.cuda.manual_seed_all(args.seed)
     source_root = args.root.resolve()
     normalize_dataset_keys(args, source_root)
-
-    if args.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS and args.mask_quality_dir is None:
+    mask_suffixes, _ = build_mask_layout(list(args.rgb_keys), list(args.mask_target_keys))
+    if args.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS and mask_suffixes != list(SEMANTIC_CLASSES):
         raise ValueError(
-            f"{args.experiment} requires --mask-quality-dir so SAM2 label uncertainty is applied to segmentation "
-            "and semantic dynamics losses. Run mycode/sam2_mask_quality.py first."
+            f"SSACT-1 mask order must be {list(SEMANTIC_CLASSES)} so the offline state cache aligns; "
+            f"got {mask_suffixes}."
         )
+
+    if args.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS and args.semantic_states is None:
+        raise ValueError(
+            f"{args.experiment} requires --semantic-states from "
+            "mycode/precompute_semantic_states.py."
+        )
+    if args.semantic_states is not None and args.experiment not in PREDICTIVE_SEMANTIC_EXPERIMENTS:
+        raise ValueError("--semantic-states is currently only used by SSACT-1.")
     if args.mask_quality_dir is not None and args.experiment not in SEMANTIC_EXPERIMENTS:
         raise ValueError(
-            "--mask-quality-dir currently supports SEM-1, ASEM-1, PSEM-1, SSACT-1, and SEM-2. "
+            "--mask-quality-dir currently supports SEM-1, ASEM-1, SSACT-1, and SEM-2. "
             "The legacy independent-BCE mask experiments require a separate classwise BCE masking path."
         )
     if args.experiment in PHASE_CONDITIONED_EXPERIMENTS and args.phase_labels is None:
@@ -2469,6 +2596,14 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         shutil.rmtree(args.output_dir)
 
     source_meta = LeRobotDatasetMetadata(args.repo_id, root=source_root)
+    semantic_state_store = None
+    if args.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
+        semantic_state_store = SemanticStateStore(
+            args.semantic_states.expanduser().resolve(),
+            total_frames=source_meta.total_frames,
+            rgb_keys=list(args.rgb_keys),
+            minimum_quality_score=args.mask_quality_min_score,
+        )
     phase_store = None
     if args.experiment in PHASE_CONDITIONED_EXPERIMENTS:
         phase_store = SemanticPhaseStore(
@@ -2501,14 +2636,6 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             f"Filtered dataset has {meta.total_frames} frames but phase labels cover {source_meta.total_frames}."
         )
     delta_timestamps = {"action": [i / meta.fps for i in range(args.chunk_size)]}
-    if args.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
-        semantic_times = [0, *args.semantic_prediction_offsets]
-        delta_timestamps.update(
-            {
-                key: [offset / meta.fps for offset in semantic_times]
-                for key in args.mask_target_keys
-            }
-        )
     dataset = LeRobotDataset(
         args.repo_id,
         root=filtered_root,
@@ -2518,7 +2645,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     )
 
     mask_quality_store = None
-    if args.mask_quality_dir is not None:
+    if args.mask_quality_dir is not None and semantic_state_store is None:
         quality_dir = args.mask_quality_dir.expanduser().resolve()
         mask_quality_store = MaskQualityStore(
             quality_dir,
@@ -2580,6 +2707,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             f"Semantic phases: {phase_store.path}; history={phase_store.history_length}x"
             f"{phase_store.history_stride} frames; minimum confidence={phase_store.minimum_confidence:g}."
         )
+    if semantic_state_store is not None:
+        print(
+            f"Offline semantic states: {semantic_state_store.path}; future mask video decoding disabled; "
+            f"minimum embedded quality score={semantic_state_store.minimum_quality_score:g}."
+        )
     if args.experiment in SEMANTIC_EXPERIMENTS:
         print(f"Semantic classes: {['background', *build_mask_layout(args.rgb_keys, args.mask_target_keys)[0]]}")
         semantic_description = (
@@ -2640,6 +2772,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     try:
         for step in progress:
             raw_batch = next(dl_iter)
+            if semantic_state_store is not None:
+                raw_batch = semantic_state_store.add_batch_semantics(
+                    raw_batch,
+                    prediction_offsets=tuple(args.semantic_prediction_offsets),
+                )
             if mask_quality_store is not None:
                 raw_batch = mask_quality_store.add_batch_quality(
                     raw_batch,
@@ -2647,11 +2784,6 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                     mask_key_map=model.mask_key_map,
                     num_views=len(args.rgb_keys),
                     num_classes=len(model.mask_suffixes),
-                    prediction_offsets=(
-                        tuple(args.semantic_prediction_offsets)
-                        if args.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS
-                        else ()
-                    ),
                 )
             if phase_store is not None:
                 raw_batch = phase_store.add_batch_phase(raw_batch)

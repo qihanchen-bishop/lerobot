@@ -10,7 +10,7 @@ itself establish any CLF or safety guarantee.
 | --- | --- | --- |
 | One/multi-view soft semantic state | View-specific metrics implemented for a configured view list | Set aggregation, per-class confidence gates, and view dropout for one checkpoint to accept a changing view count |
 | Offline SAM2 label quality | Implemented | Per-class threshold calibration on a manually reviewed subset |
-| Action-conditioned semantic dynamics | Implemented as `PSEM-1` | Held-out residual calibration and intervention/recovery coverage |
+| Action-conditioned semantic dynamics | Implemented in `SSACT-1` | Held-out residual calibration and intervention/recovery coverage |
 | Five-phase history model | `SSACT-1` trains ordered offline soft labels and a semantic-history GRU | Review low-confidence/stratified trajectories and calibrate phase confidence |
 | Structured residual servo | Not connected to the robot | Kinematic choice, residual action semantics, and recovery demonstrations |
 | Robust CLF-QP | Box-constrained solver implemented but disabled in policy inference | Valid local dynamics model, independent error bounds, CLF domain/feasibility tests, robot limits |
@@ -50,9 +50,9 @@ dilation before computing object-goal/object-cloth contact. This is a proxy,
 not the physical overlap in the draft. A true occupancy ratio requires an
 independent amodal goal/cloth mask or a calibrated table-plane goal polygon.
 
-## PSEM-1 training contract
+## SSACT-1 semantic dynamics contract
 
-`PSEM-1` preserves the SEM-1 inputs and losses for the view list selected by
+`SSACT-1` preserves the SEM-1 inputs and losses for the view list selected by
 `--rgb-keys`:
 
 - each selected view's RGB and soft semantic map enter the same ACT ResNet;
@@ -60,14 +60,18 @@ independent amodal goal/cloth mask or a calibrated table-plane goal polygon.
 - ACT action gradients do not update the segmentation network;
 - the dynamics head sees the predicted current semantic state, normalized robot
   state, and expert action chunk;
-- hard SAM2 masks at configured future offsets provide semantic-state targets;
-- padded future frames are excluded from the Gaussian rollout NLL.
+- hard SAM2 masks are converted offline into semantic-state targets at all
+  frames; training indexes configured future offsets from this cache;
+- future offsets crossing an episode boundary are excluded from Gaussian
+  rollout NLL without decoding future mask videos.
 
-Run `mycode/sam2_mask_quality.py` before training and pass its output through
-`--mask-quality-dir`. Current low-quality classes are masked from weighted CE
-and Dice. A future prediction offset is removed from dynamics NLL when any
-required view/class label at that offset is unreliable. Reports must cover all
-dataset frames; smoke reports generated with `--max-episodes` are rejected.
+Run `mycode/sam2_mask_quality.py`, then
+`mycode/precompute_semantic_states.py`, before training. Pass the resulting
+cache through `--semantic-states`; it embeds the classwise quality scores and
+uncertainty flags. Current low-quality classes are masked from weighted CE and
+Dice. A future prediction offset is removed from dynamics NLL when any required
+view/class label at that offset is unreliable. Reports and the cache must cover
+all dataset frames; smoke outputs generated with `--max-episodes` are rejected.
 
 The report stores temporal IoU, area log change, normalized centroid jump, and
 connected-component count. Individual anomaly flags remain visible for review,
@@ -79,10 +83,9 @@ discarding every side-view feature. This also avoids treating every genuine
 fast tool movement as a label error.
 
 The default offsets `1 8 24 60` correspond to approximately 0.03, 0.27, 0.8,
-and 2.0 seconds at 30 Hz. Future mask decoding adds substantial training I/O,
-so the reference command uses batch size 4. The action, segmentation, image
-resolution, backbone, and 60-step ACT chunk remain aligned with SEM-1 for the
-main comparison.
+and 2.0 seconds at 30 Hz. Offline caching removes future mask decoding from the
+training data path. The action, segmentation, image resolution, backbone, and
+60-step ACT chunk remain aligned with SEM-1 for the main comparison.
 
 ## Phase labels
 
