@@ -667,6 +667,7 @@ class EvalPolicyApp:
         self.preview_queue: queue.Queue[
             tuple[dict[str, Any], dict[str, Any], float, str, dict[str, Any]]
         ] = queue.Queue(maxsize=1)
+        self.ssact_status_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
         self.checkpoint_options: list[CheckpointOption] = []
         self.robot: Any | None = None
         self.robot_lock = threading.RLock()
@@ -735,6 +736,14 @@ class EvalPolicyApp:
             "segmentation_device": tk.StringVar(value="auto"),
             "fusion_steps": tk.StringVar(value="0"),
             "fusion_history_weight": tk.StringVar(value="0"),
+            "ssact_servo_mode": tk.StringVar(value="off"),
+            "ssact_min_execution_steps": tk.StringVar(value="1"),
+            "ssact_max_execution_steps": tk.StringVar(value="4"),
+            "ssact_max_action_residual": tk.StringVar(value="0.015"),
+            "ssact_phase": tk.StringVar(value="SSACT inactive"),
+            "ssact_phase_probabilities": tk.StringVar(value="U -- | E -- | T -- | R -- | D --"),
+            "ssact_control_status": tk.StringVar(value="No semantic control report."),
+            "ssact_validation_status": tk.StringVar(value="phase OFF | dynamics OFF | hazard OFF | CLF OFF"),
             "grid_rows": tk.StringVar(value="3"),
             "grid_cols": tk.StringVar(value="4"),
             "grid_cell": tk.StringVar(value="(0,0)"),
@@ -760,6 +769,7 @@ class EvalPolicyApp:
         self.save_video = tk.BooleanVar(value=True)
         self.use_amp = tk.BooleanVar(value=True)
         self.enable_segmentation_preview = tk.BooleanVar(value=True)
+        self.enable_ssact_adaptive_horizon = tk.BooleanVar(value=False)
         self.camera_options: dict[str, tuple[str, str]] = {}
 
         self._build_ui()
@@ -1295,6 +1305,39 @@ class EvalPolicyApp:
         )
 
         row += 1
+        ttk.Label(top, text="SSACT semantic servo").grid(
+            row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
+        )
+        ttk.Combobox(
+            top,
+            textvariable=self.vars["ssact_servo_mode"],
+            values=("off", "shadow", "active"),
+            state="readonly",
+            width=12,
+        ).grid(row=row, column=1, sticky=tk.W)
+        ttk.Checkbutton(
+            top,
+            text="Adaptive execution length",
+            variable=self.enable_ssact_adaptive_horizon,
+        ).grid(row=row, column=2, columnspan=2, sticky=tk.W, padx=(16, 0))
+
+        row += 1
+        ttk.Label(top, text="SSACT min / max steps").grid(
+            row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
+        )
+        ssact_steps = ttk.Frame(top)
+        ssact_steps.grid(row=row, column=1, sticky=tk.W)
+        ttk.Entry(ssact_steps, textvariable=self.vars["ssact_min_execution_steps"], width=5).pack(side=tk.LEFT)
+        ttk.Label(ssact_steps, text="/").pack(side=tk.LEFT, padx=4)
+        ttk.Entry(ssact_steps, textvariable=self.vars["ssact_max_execution_steps"], width=5).pack(side=tk.LEFT)
+        ttk.Label(top, text="Max normalized action correction").grid(
+            row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5
+        )
+        ttk.Entry(top, textvariable=self.vars["ssact_max_action_residual"], width=12).grid(
+            row=row, column=3, sticky=tk.W
+        )
+
+        row += 1
         ttk.Checkbutton(top, text="Auto reset after run", variable=self.auto_reset_after_policy).grid(
             row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
         )
@@ -1417,6 +1460,24 @@ class EvalPolicyApp:
 
         right_log = ttk.Frame(log_frame)
         right_log.grid(row=0, column=1, sticky=tk.NS)
+        ssact_runtime = ttk.LabelFrame(right_log, text="SSACT Runtime", padding=8)
+        ssact_runtime.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(ssact_runtime, textvariable=self.vars["ssact_phase"]).pack(anchor=tk.W)
+        ttk.Label(
+            ssact_runtime,
+            textvariable=self.vars["ssact_phase_probabilities"],
+            wraplength=360,
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            ssact_runtime,
+            textvariable=self.vars["ssact_control_status"],
+            wraplength=360,
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            ssact_runtime,
+            textvariable=self.vars["ssact_validation_status"],
+            wraplength=360,
+        ).pack(anchor=tk.W)
         ttk.Label(right_log, text="Log / Action").pack(anchor=tk.W)
         self.log_text = tk.Text(right_log, wrap=tk.WORD, width=24, height=14)
         scrollbar = ttk.Scrollbar(right_log, orient=tk.VERTICAL, command=self.log_text.yview)
@@ -1896,6 +1957,10 @@ class EvalPolicyApp:
             "noise_scheduler_type",
             "fusion_steps",
             "fusion_history_weight",
+            "ssact_servo_mode",
+            "ssact_min_execution_steps",
+            "ssact_max_execution_steps",
+            "ssact_max_action_residual",
             "segmentation_model_path",
             "segmentation_device",
             "reset_time_s",
@@ -1916,6 +1981,7 @@ class EvalPolicyApp:
             "lock_grippers": self.lock_grippers,
             "save_video": self.save_video,
             "enable_realsense": self.enable_realsense,
+            "enable_ssact_adaptive_horizon": self.enable_ssact_adaptive_horizon,
         }
         for key, var in bool_targets.items():
             if key in config:
@@ -3200,6 +3266,13 @@ class EvalPolicyApp:
             "locked_gripper_observation_baseline": self.lock_grippers.get(),
             "fusion_steps": int(self.vars["fusion_steps"].get()),
             "fusion_history_weight": float(self.vars["fusion_history_weight"].get()),
+            "ssact_servo_mode": self.vars["ssact_servo_mode"].get(),
+            "ssact_adaptive_horizon": self.enable_ssact_adaptive_horizon.get(),
+            "ssact_min_execution_steps": int(self.vars["ssact_min_execution_steps"].get()),
+            "ssact_max_execution_steps": int(self.vars["ssact_max_execution_steps"].get()),
+            "ssact_max_action_residual": float(self.vars["ssact_max_action_residual"].get()),
+            "ssact_clf_certified": False,
+            "ssact_learned_hazard": False,
             "observation_warmup_frames": (
                 DEFAULT_DIFFUSION_OBSERVATION_WARMUP_FRAMES
                 if self.vars["policy_type"].get().strip() == "diffusion"
@@ -3342,10 +3415,59 @@ class EvalPolicyApp:
                 f"experiment={details['experiment']} rgb={details['rgb_key']} "
                 f"metadata={details['metadata_root']}"
             )
+            if details["experiment"].upper() == "SSACT-1":
+                ssact_runtime_config = {
+                    "mode": self.vars["ssact_servo_mode"].get(),
+                    "adaptive_horizon": self.enable_ssact_adaptive_horizon.get(),
+                    "minimum_execution_steps": int(self.vars["ssact_min_execution_steps"].get()),
+                    "maximum_execution_steps": int(self.vars["ssact_max_execution_steps"].get()),
+                    "maximum_action_residual": float(self.vars["ssact_max_action_residual"].get()),
+                }
+                policy.configure_ssact_runtime(ssact_runtime_config)
+                self.log_queue.put(
+                    "[SSACT] Runtime enabled: "
+                    f"servo={ssact_runtime_config['mode']}, "
+                    f"adaptive_horizon={ssact_runtime_config['adaptive_horizon']}, "
+                    f"steps={ssact_runtime_config['minimum_execution_steps']}.."
+                    f"{ssact_runtime_config['maximum_execution_steps']}, "
+                    f"max_residual={ssact_runtime_config['maximum_action_residual']:.4f}. "
+                    "Phase and dynamics are learned; hazard is not trained; CLF margins are uncalibrated."
+                )
         else:
             policy_cfg = PreTrainedConfig.from_pretrained(checkpoint)
             policy_cfg.pretrained_path = checkpoint
         self._apply_action_step_override(policy_cfg)
+        if mask_act_checkpoint and details["experiment"].upper() == "SSACT-1":
+            policy_device = next(policy.parameters()).device
+            warmup_batch = {
+                OBS_STATE: torch.zeros(
+                    (1, *policy.config.input_features[OBS_STATE].shape),
+                    device=policy_device,
+                ),
+                **{
+                    key: torch.zeros(
+                        (1, *policy.config.input_features[key].shape),
+                        device=policy_device,
+                    )
+                    for key in details["rgb_keys"]
+                },
+            }
+            warmup_started = time.perf_counter()
+            policy.set_inference_control_step(0)
+            with (
+                torch.no_grad(),
+                torch.autocast(device_type=policy_device.type)
+                if policy_device.type == "cuda" and policy.config.use_amp
+                else nullcontext(),
+            ):
+                policy.predict_action_chunk(warmup_batch)
+            if policy_device.type == "cuda":
+                torch.cuda.synchronize(policy_device)
+            policy.reset()
+            self.log_queue.put(
+                f"[SSACT] CUDA/model warmup completed in "
+                f"{(time.perf_counter() - warmup_started) * 1000.0:.1f} ms; runtime state reset."
+            )
         _teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
         dataset_features = combine_feature_dicts(
@@ -3556,11 +3678,20 @@ class EvalPolicyApp:
                 def predict_chunk_async(observations: list[dict[str, Any]]) -> tuple[torch.Tensor, float]:
                     if not callable(predict_chunk):
                         raise RuntimeError(f"{type(policy).__name__} does not expose predict_action_chunk().")
+                    set_control_step = getattr(policy, "set_inference_control_step", None)
+                    if callable(set_control_step):
+                        set_control_step(control_step)
                     if policy_device.type == "cuda":
                         torch.cuda.synchronize(policy_device)
                     pipeline_started = time.perf_counter()
+                    runtime_requires_grad = getattr(policy, "ssact_runtime_requires_grad", None)
+                    inference_context = (
+                        torch.no_grad()
+                        if callable(runtime_requires_grad) and runtime_requires_grad()
+                        else torch.inference_mode()
+                    )
                     with (
-                        torch.inference_mode(),
+                        inference_context,
                         torch.autocast(device_type=policy_device.type)
                         if policy_device.type == "cuda" and policy.config.use_amp
                         else nullcontext(),
@@ -3600,6 +3731,36 @@ class EvalPolicyApp:
                     if policy_device.type == "cuda":
                         torch.cuda.synchronize(policy_device)
                     return predicted_chunk, time.perf_counter() - pipeline_started
+
+                def publish_ssact_runtime_report(pipeline_s: float) -> dict[str, Any]:
+                    latest_report = getattr(policy, "latest_ssact_control_report", None)
+                    report = latest_report() if callable(latest_report) else {}
+                    if not report:
+                        return {}
+                    report = {
+                        **report,
+                        "control_step": control_step,
+                        "elapsed_s": max(time.perf_counter() - start_t, 0.0),
+                        "pipeline_ms": pipeline_s * 1000.0,
+                    }
+                    if self.enable_ssact_adaptive_horizon.get() and planner is not None:
+                        planner.set_replan_steps(int(report["execution_steps"]))
+                    self._put_ssact_status(report)
+                    with (run_dataset_root / "ssact_runtime.jsonl").open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps(report, ensure_ascii=False) + "\n")
+                    self.log_queue.put(
+                        "[SSACT] "
+                        f"horizon_reasons={','.join(report['horizon_reasons'])}; "
+                        f"phase={report['phase']}@{report['phase_confidence']:.3f}, "
+                        f"V={report['clf_value']:.4f}->{report['predicted_clf']:.4f}, "
+                        f"K={report['execution_steps']}, uncertainty={report['dynamics_uncertainty']:.4f}, "
+                        f"innovation={report['normalized_innovation']:.3f}, "
+                        f"servo={report['servo_mode']}, semantic_delta={report['semantic_delta_l2']:.5f}, "
+                        f"action_correction_max={report['correction_max']:.5f}, "
+                        f"QP={'applied' if report['qp_active'] else ('pass' if report['qp_evaluated'] else 'gated')}, "
+                        f"servo_applied={report['servo_applied']}; CLF=UNCALIBRATED."
+                    )
+                    return report
 
                 def install_pending_replan(wait: bool = False) -> bool:
                     nonlocal pending_replan
@@ -3659,6 +3820,7 @@ class EvalPolicyApp:
                     elif execution_mode == "synchronous":
                         if planner.needs_replan:
                             new_chunk, pipeline_s = predict_chunk_async(observation_snapshot())
+                            publish_ssact_runtime_report(pipeline_s)
                             fused_steps = planner.update(new_chunk)
                             self.log_queue.put(
                                 f"[REPLAN] synchronous_pipeline={pipeline_s * 1000:.1f} ms, "
@@ -3793,6 +3955,23 @@ class EvalPolicyApp:
         fusion_history_weight = float(self.vars["fusion_history_weight"].get())
         if not 0.0 <= fusion_history_weight <= 1.0:
             raise ValueError("Initial history weight must be between 0 and 1.")
+        ssact_mode = self.vars["ssact_servo_mode"].get()
+        if ssact_mode not in {"off", "shadow", "active"}:
+            raise ValueError("SSACT semantic servo mode must be off, shadow, or active.")
+        ssact_min_steps = int(self.vars["ssact_min_execution_steps"].get())
+        ssact_max_steps = int(self.vars["ssact_max_execution_steps"].get())
+        if ssact_min_steps < 1 or ssact_max_steps < ssact_min_steps:
+            raise ValueError("SSACT execution steps require 1 <= min <= max.")
+        if ssact_max_steps > int(self.vars["prediction_steps"].get() or action_steps_text):
+            raise ValueError("SSACT maximum execution steps cannot exceed prediction steps.")
+        if float(self.vars["ssact_max_action_residual"].get()) < 0:
+            raise ValueError("SSACT maximum action residual must be non-negative.")
+        variant = self._selected_policy_variant()
+        ssact_requested = ssact_mode != "off" or self.enable_ssact_adaptive_horizon.get()
+        if ssact_requested and variant != "SSACT-1":
+            raise ValueError("SSACT runtime control can only be enabled with an SSACT-1 checkpoint.")
+        if ssact_requested and self.vars["execution_mode"].get() != "synchronous":
+            raise ValueError("SSACT runtime control currently requires synchronous execution.")
         reset_time_s = float(self.vars["reset_time_s"].get())
         if reset_time_s <= 0:
             raise ValueError("Reset sec must be greater than zero.")
@@ -4379,6 +4558,16 @@ class EvalPolicyApp:
             except queue.Empty:
                 pass
             self.preview_queue.put_nowait(item)
+
+    def _put_ssact_status(self, report: dict[str, Any]) -> None:
+        try:
+            self.ssact_status_queue.put_nowait(dict(report))
+        except queue.Full:
+            try:
+                self.ssact_status_queue.get_nowait()
+            except queue.Empty:
+                pass
+            self.ssact_status_queue.put_nowait(dict(report))
 
     def capture_reset_pose(self) -> None:
         if not self.connected or self.robot is None:
@@ -5087,6 +5276,40 @@ class EvalPolicyApp:
             except queue.Empty:
                 break
             self._update_preview(images, action, fps_hz, input_keys, model_masks)
+
+        while True:
+            try:
+                report = self.ssact_status_queue.get_nowait()
+            except queue.Empty:
+                break
+            probabilities = report.get("phase_probabilities", [0.0] * 5)
+            probability_text = " | ".join(
+                f"{label} {100.0 * float(value):.1f}%"
+                for label, value in zip(("U", "E", "T", "R", "D"), probabilities, strict=False)
+            )
+            self.vars["ssact_phase"].set(
+                f"Phase: {str(report.get('phase', 'unknown')).upper()} "
+                f"({100.0 * float(report.get('phase_confidence', 0.0)):.1f}%)"
+            )
+            self.vars["ssact_phase_probabilities"].set(probability_text)
+            self.vars["ssact_control_status"].set(
+                f"K={report.get('execution_steps', '?')} | "
+                f"V={float(report.get('clf_value', 0.0)):.4f} -> "
+                f"{float(report.get('predicted_clf', 0.0)):.4f} | "
+                f"unc={float(report.get('dynamics_uncertainty', 0.0)):.3f} | "
+                f"innovation={float(report.get('normalized_innovation', 0.0)):.2f} | "
+                f"QP={'applied' if report.get('qp_active') else ('pass' if report.get('qp_evaluated') else 'gated')} | "
+                f"servo_applied={'YES' if report.get('servo_applied') else 'NO'} | "
+                f"semantic_delta={float(report.get('semantic_delta_l2', 0.0)):.4f} | "
+                f"action_correction={float(report.get('correction_max', 0.0)):.4f} | "
+                f"reason={','.join(report.get('horizon_reasons', []))}"
+            )
+            self.vars["ssact_validation_status"].set(
+                f"phase RUNNING (learned) | dynamics RUNNING (learned delta_s) | "
+                f"horizon {'ACTIVE' if report.get('adaptive_horizon_applied') else 'FIXED'} (runtime rule) | "
+                f"hazard NOT TRAINED | servo {str(report.get('servo_mode', 'off')).upper()} | "
+                f"CLF-QP UNCALIBRATED"
+            )
 
         if self.started_at is not None and (self.eval_running or self.process is not None):
             elapsed = int(time.monotonic() - self.started_at)

@@ -76,6 +76,12 @@ class ActionChunkFusionPlanner:
             return 0
         return max(self._chunk.shape[0] - self._cursor, 0)
 
+    def set_replan_steps(self, replan_steps: int) -> None:
+        """Change the next chunk prefix length selected by an adaptive scheduler."""
+        if replan_steps <= 0:
+            raise ValueError("replan_steps must be greater than zero.")
+        self.replan_steps = int(replan_steps)
+
     def update(self, new_chunk: Tensor) -> int:
         """Install a new chunk and return the number of aligned steps that were fused."""
         if new_chunk.ndim == 3:
@@ -110,4 +116,3 @@ class ActionChunkFusionPlanner:
         action = self._chunk[self._cursor]
         self._cursor += 1
         return action
-

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Sequence
+from typing import Any, Sequence
 
 import torch
 from torch import Tensor, nn
@@ -547,3 +547,311 @@ class SemanticEventTrigger:
         if clf_value > certified_clf_upper_bound + self.clf_tolerance:
             reasons.append("clf_progress_violation")
         return EventTriggerDecision(bool(reasons), tuple(reasons))
+
+
+SSACT_PHASE_NAMES = ("uncover", "expose", "transport", "restore", "done")
+
+
+def phase_semantic_clf(semantic_state: Tensor, phase_index: int) -> Tensor:
+    """Return an interpretable phase objective from the 14 metrics per view.
+
+    The thresholds are conservative runtime defaults expressed in normalized
+    image coordinates. They are not a substitute for held-out calibration.
+    """
+    if semantic_state.ndim != 2 or semantic_state.shape[-1] % 14:
+        raise ValueError(
+            "semantic_state must have shape (batch, views * 14), got "
+            f"{tuple(semantic_state.shape)}."
+        )
+    if not 0 <= phase_index < len(SSACT_PHASE_NAMES):
+        raise ValueError(f"phase_index must be in [0, 4], got {phase_index}.")
+
+    per_view = semantic_state.reshape(semantic_state.shape[0], -1, 14)
+    cloth = per_view[..., 0]
+    object_area = per_view[..., 1]
+    object_goal_contact = per_view[..., 10]
+    object_cloth_contact = per_view[..., 11]
+    object_goal_distance = per_view[..., 12]
+    actuator_object_distance = per_view[..., 13]
+
+    # The front view is the primary task view. Side remains useful for object
+    # and goal geometry but is downweighted because its tool mask is less stable.
+    view_weights = semantic_state.new_ones(per_view.shape[1])
+    if per_view.shape[1] > 1:
+        view_weights[1:] = 0.65
+    view_weights = view_weights / view_weights.sum()
+
+    def weighted(values: Tensor) -> Tensor:
+        return (values * view_weights.unsqueeze(0)).sum(dim=1)
+
+    object_visible_error = torch.relu(0.002 - object_area) / 0.002
+    if phase_index == 0:  # uncover: reduce cloth and make the object observable
+        per_view_value = torch.relu(cloth - 0.48).square() + 0.25 * object_visible_error.square()
+    elif phase_index == 1:  # expose: enlarge object visibility and separate it from cloth
+        per_view_value = (
+            object_visible_error.square()
+            + 0.50 * object_cloth_contact.square()
+            + 0.15 * actuator_object_distance.square()
+        )
+    elif phase_index == 2:  # transport: move object to the goal
+        per_view_value = object_goal_distance.square() + 0.20 * (1.0 - object_goal_contact).square()
+    elif phase_index == 3:  # restore: preserve placement while restoring cloth coverage
+        per_view_value = torch.relu(0.55 - cloth).square() + 0.35 * object_goal_distance.square()
+    else:  # done: absorbing target set monitor
+        per_view_value = torch.relu(0.55 - cloth).square() + 0.50 * object_goal_distance.square()
+    return weighted(per_view_value)
+
+
+@dataclass(frozen=True)
+class SSACTRuntimeConfig:
+    mode: str = "active"
+    adaptive_horizon: bool = True
+    minimum_execution_steps: int = 1
+    maximum_execution_steps: int = 4
+    maximum_action_residual: float = 0.015
+    clf_decay_rate: float = 0.03
+    phase_confidence_threshold: float = 0.55
+    uncertainty_threshold: float = 0.12
+    innovation_threshold: float = 3.0
+    slack_penalty: float = 10_000.0
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"off", "shadow", "active"}:
+            raise ValueError("SSACT runtime mode must be off, shadow, or active.")
+        if self.minimum_execution_steps < 1:
+            raise ValueError("minimum_execution_steps must be positive.")
+        if self.maximum_execution_steps < self.minimum_execution_steps:
+            raise ValueError("maximum_execution_steps must not be smaller than the minimum.")
+        if self.maximum_action_residual < 0:
+            raise ValueError("maximum_action_residual must be non-negative.")
+        if not 0 <= self.phase_confidence_threshold <= 1:
+            raise ValueError("phase_confidence_threshold must be in [0, 1].")
+
+
+class SSACTRuntimeController:
+    """Runtime semantic servo and adaptive scheduler for an SSACT-1 checkpoint.
+
+    The phase classifier and semantic dynamics are learned. The horizon rule and
+    CLF targets are runtime control logic. Until independent residual bounds are
+    supplied, the QP is an uncalibrated stability filter and must not be reported
+    as a certified CLF controller.
+    """
+
+    def __init__(self, config: SSACTRuntimeConfig) -> None:
+        self.config = config
+        self.projector = BoxConstrainedCLFProjector(slack_penalty=config.slack_penalty)
+        self.reset()
+
+    def reset(self) -> None:
+        self.previous_phase: int | None = None
+        self.expected_state: Tensor | None = None
+        self.expected_std: Tensor | None = None
+        self.expected_clf: float | None = None
+        self.latest_report: dict[str, Any] = {}
+
+    @staticmethod
+    def _phase_default_steps(phase_index: int) -> int:
+        return (8, 4, 4, 8, 1)[phase_index]
+
+    @staticmethod
+    def _rollout_at_step(
+        values: Tensor,
+        prediction_offsets: Sequence[int],
+        execution_steps: int,
+    ) -> Tensor:
+        """Interpolate a predicted semantic quantity at an execution boundary."""
+        offsets = tuple(int(offset) for offset in prediction_offsets)
+        if values.ndim != 3 or values.shape[1] != len(offsets):
+            raise ValueError("Rollout values and prediction offsets do not match.")
+        if execution_steps <= offsets[0]:
+            return values[:, 0]
+        if execution_steps >= offsets[-1]:
+            return values[:, -1]
+        for upper_index, upper_step in enumerate(offsets[1:], start=1):
+            if execution_steps <= upper_step:
+                lower_index = upper_index - 1
+                lower_step = offsets[lower_index]
+                weight = (execution_steps - lower_step) / (upper_step - lower_step)
+                return torch.lerp(values[:, lower_index], values[:, upper_index], weight)
+        raise RuntimeError("Unable to interpolate semantic rollout.")
+
+    def _adaptive_steps(
+        self,
+        *,
+        phase_index: int,
+        phase_confidence: float,
+        uncertainty: float,
+        innovation: float,
+        phase_changed: bool,
+        nominal_progress: float,
+    ) -> tuple[int, list[str]]:
+        cfg = self.config
+        steps = min(max(self._phase_default_steps(phase_index), cfg.minimum_execution_steps), cfg.maximum_execution_steps)
+        reasons = [f"phase_default:{SSACT_PHASE_NAMES[phase_index]}"]
+        if not cfg.adaptive_horizon:
+            return cfg.maximum_execution_steps, ["adaptive_disabled"]
+        if phase_changed:
+            steps = cfg.minimum_execution_steps
+            reasons.append("phase_changed")
+        if phase_confidence < cfg.phase_confidence_threshold:
+            steps = cfg.minimum_execution_steps
+            reasons.append("low_phase_confidence")
+        if innovation > cfg.innovation_threshold:
+            steps = cfg.minimum_execution_steps
+            reasons.append("semantic_prediction_outlier")
+        if uncertainty > cfg.uncertainty_threshold:
+            steps = min(steps, max(cfg.minimum_execution_steps, 2))
+            reasons.append("high_dynamics_uncertainty")
+        if nominal_progress >= 0:
+            steps = min(steps, max(cfg.minimum_execution_steps, 2))
+            reasons.append("nominal_clf_not_decreasing")
+        return steps, reasons
+
+    def apply(
+        self,
+        *,
+        semantic_dynamics: nn.Module,
+        semantic_state: Tensor,
+        robot_state: Tensor,
+        nominal_actions: Tensor,
+        phase_probabilities: Tensor,
+        prediction_offsets: Sequence[int],
+    ) -> tuple[Tensor, dict[str, Any]]:
+        if nominal_actions.ndim != 3 or nominal_actions.shape[0] != 1:
+            raise ValueError("SSACT runtime currently requires one action chunk with batch size 1.")
+        phase_probs = phase_probabilities.detach().float()
+        phase_index = int(phase_probs[0].argmax())
+        phase_confidence = float(phase_probs[0, phase_index])
+        current_state = semantic_state.detach().float()
+        current_clf_t = phase_semantic_clf(current_state, phase_index)
+        current_clf = float(current_clf_t[0])
+
+        innovation = 0.0
+        if self.expected_state is not None and self.expected_std is not None:
+            expected_state = self.expected_state.to(current_state)
+            expected_std = self.expected_std.to(current_state).clamp_min(0.02)
+            innovation = float(((current_state - expected_state).abs() / expected_std).mean())
+
+        phase_changed = self.previous_phase is not None and phase_index != self.previous_phase
+        device_type = nominal_actions.device.type
+        with (
+            torch.enable_grad(),
+            torch.autocast(device_type=device_type, enabled=False),
+            torch.backends.cudnn.flags(enabled=False),
+        ):
+            differentiable_actions = nominal_actions.detach().float().requires_grad_(True)
+            predicted_means, predicted_log_stds = semantic_dynamics(
+                current_state,
+                robot_state.detach().float(),
+                differentiable_actions,
+            )
+            predicted_stds = predicted_log_stds.exp()
+
+            base_steps = min(
+                max(self._phase_default_steps(phase_index), self.config.minimum_execution_steps),
+                self.config.maximum_execution_steps,
+            )
+            base_mean = self._rollout_at_step(predicted_means, prediction_offsets, base_steps)
+            base_std = self._rollout_at_step(predicted_stds, prediction_offsets, base_steps)
+            predicted_clf_t = phase_semantic_clf(base_mean, phase_index)
+            predicted_clf = float(predicted_clf_t.detach()[0])
+            uncertainty = float(base_std.detach().mean())
+            nominal_progress = predicted_clf - current_clf
+
+            execution_steps, horizon_reasons = self._adaptive_steps(
+                phase_index=phase_index,
+                phase_confidence=phase_confidence,
+                uncertainty=uncertainty,
+                innovation=innovation,
+                phase_changed=phase_changed,
+                nominal_progress=nominal_progress,
+            )
+            execution_steps = min(execution_steps, nominal_actions.shape[1])
+            selected_mean = self._rollout_at_step(predicted_means, prediction_offsets, execution_steps)
+            selected_std = self._rollout_at_step(predicted_stds, prediction_offsets, execution_steps)
+            predicted_clf_t = phase_semantic_clf(selected_mean, phase_index)
+            predicted_clf = float(predicted_clf_t.detach()[0])
+            uncertainty = float(selected_std.detach().mean())
+            nominal_progress = predicted_clf - current_clf
+
+            gradient = torch.autograd.grad(
+                predicted_clf_t.sum(),
+                differentiable_actions,
+                retain_graph=False,
+                create_graph=False,
+            )[0][0, :execution_steps].reshape(-1)
+
+        correction = torch.zeros_like(gradient)
+        qp_active = False
+        qp_slack = 0.0
+        constraint_before = 0.0
+        constraint_after = 0.0
+        can_correct = (
+            self.config.mode != "off"
+            and phase_index != 4
+            and phase_confidence >= self.config.phase_confidence_threshold
+            and torch.isfinite(gradient).all()
+            and float(gradient.norm()) > 1e-8
+        )
+        if can_correct:
+            limit = self.config.maximum_action_residual
+            result = self.projector.project(
+                torch.zeros_like(gradient),
+                lie_f=predicted_clf - current_clf,
+                lie_g=gradient,
+                clf_value=current_clf,
+                decay_rate=self.config.clf_decay_rate,
+                lower=torch.full_like(gradient, -limit),
+                upper=torch.full_like(gradient, limit),
+            )
+            correction = result.action
+            qp_active = result.active
+            qp_slack = result.slack
+            constraint_before = result.constraint_before
+            constraint_after = result.constraint_after
+
+        controlled = nominal_actions.clone()
+        if self.config.mode == "active" and correction.numel():
+            controlled[:, :execution_steps] += correction.reshape(1, execution_steps, -1).to(controlled)
+
+        selected_mean = selected_mean.detach()
+        selected_std = selected_std.detach()
+        semantic_delta = selected_mean - current_state
+        self.previous_phase = phase_index
+        self.expected_state = selected_mean.cpu()
+        self.expected_std = selected_std.cpu()
+        self.expected_clf = predicted_clf
+        report = {
+            "phase_index": phase_index,
+            "phase": SSACT_PHASE_NAMES[phase_index],
+            "phase_confidence": phase_confidence,
+            "phase_probabilities": [float(value) for value in phase_probs[0]],
+            "phase_changed": phase_changed,
+            "clf_value": current_clf,
+            "predicted_clf": predicted_clf,
+            "nominal_clf_progress": nominal_progress,
+            "dynamics_uncertainty": uncertainty,
+            "semantic_delta_l2": float(semantic_delta.norm()),
+            "semantic_delta_max": float(semantic_delta.abs().max()),
+            "normalized_innovation": innovation,
+            "execution_steps": execution_steps,
+            "horizon_reasons": horizon_reasons,
+            "servo_mode": self.config.mode,
+            "servo_applied": self.config.mode == "active" and bool(correction.abs().max() > 0),
+            "qp_evaluated": can_correct,
+            "correction_l2": float(correction.norm()),
+            "correction_max": float(correction.abs().max()) if correction.numel() else 0.0,
+            "qp_active": qp_active,
+            "qp_slack": qp_slack,
+            "qp_constraint_before": constraint_before,
+            "qp_constraint_after": constraint_after,
+            "clf_certified": False,
+            "calibration_status": "uncalibrated",
+            "learned_phase": True,
+            "learned_semantic_dynamics": True,
+            "learned_hazard": False,
+            "adaptive_horizon_applied": self.config.adaptive_horizon,
+            "adaptive_horizon_source": "phase+dynamics runtime rule",
+        }
+        self.latest_report = report
+        return controlled, dict(report)

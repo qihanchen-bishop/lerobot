@@ -1,12 +1,15 @@
 import math
 
 import torch
+from torch import nn
 
 from mycode.semantic_servo import (
     ActionConditionedSemanticDynamics,
     BoxConstrainedCLFProjector,
     PhaseSemanticFeatureExtractor,
     SemanticEventTrigger,
+    SSACTRuntimeConfig,
+    SSACTRuntimeController,
     SoftSemanticStateExtractor,
     hazard_nll,
 )
@@ -71,6 +74,62 @@ def test_action_conditioned_dynamics_shapes_and_padding_loss():
     valid = torch.tensor([[True, True], [True, False], [False, False], [True, True]])
     loss = model.gaussian_nll(mean, log_std, targets, valid)
     assert torch.isfinite(loss)
+
+
+def test_action_conditioned_dynamics_delta_head_is_a_semantic_state_delta():
+    model = ActionConditionedSemanticDynamics(
+        semantic_dim=3,
+        robot_state_dim=2,
+        action_dim=1,
+        prediction_offsets=[1],
+    )
+    with torch.no_grad():
+        model.delta_head.weight.zero_()
+        model.delta_head.bias.copy_(torch.tensor([0.1, -0.2, 0.3]))
+    current = torch.tensor([[0.4, 0.5, 0.6]])
+    mean, _ = model(current, torch.zeros(1, 2), torch.zeros(1, 1, 1))
+
+    assert torch.allclose(mean[:, 0], current + torch.tensor([[0.1, -0.2, 0.3]]))
+
+
+def test_ssact_runtime_separates_predicted_semantic_delta_from_qp_action_correction():
+    class DeltaSemanticDynamics(nn.Module):
+        def forward(self, semantic_state, robot_state, actions):
+            predictions = []
+            for offset in (1, 8):
+                semantic_delta = torch.zeros_like(semantic_state)
+                semantic_delta[:, 0] = 0.4 * actions[:, :offset, 0].mean(dim=1)
+                predictions.append(semantic_state + semantic_delta)
+            means = torch.stack(predictions, dim=1)
+            return means, torch.full_like(means, -3.0)
+
+    semantic_state = torch.zeros(1, 28)
+    semantic_state[:, [0, 14]] = 0.8
+    nominal_actions = torch.zeros(1, 8, 10)
+    controller = SSACTRuntimeController(
+        SSACTRuntimeConfig(
+            mode="active",
+            adaptive_horizon=True,
+            minimum_execution_steps=1,
+            maximum_execution_steps=4,
+            maximum_action_residual=0.015,
+        )
+    )
+
+    controlled, report = controller.apply(
+        semantic_dynamics=DeltaSemanticDynamics(),
+        semantic_state=semantic_state,
+        robot_state=torch.zeros(1, 10),
+        nominal_actions=nominal_actions,
+        phase_probabilities=torch.tensor([[0.9, 0.025, 0.025, 0.025, 0.025]]),
+        prediction_offsets=(1, 8),
+    )
+
+    assert report["semantic_delta_l2"] == 0.0
+    assert report["qp_active"]
+    assert report["correction_max"] > 0.0
+    assert not torch.equal(controlled[:, : report["execution_steps"]], nominal_actions[:, : report["execution_steps"]])
+    assert torch.equal(controlled[:, report["execution_steps"] :], nominal_actions[:, report["execution_steps"] :])
 
 
 def test_hazard_nll_prefers_correct_event_logits():

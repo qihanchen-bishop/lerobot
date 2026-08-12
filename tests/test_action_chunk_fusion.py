@@ -46,3 +46,12 @@ def test_planner_preserves_new_chunk_when_fusion_is_disabled():
     assert planner.pop_action().item() == 1.0
     planner.update(torch.tensor([[[3.0], [4.0]]]))
     assert planner.pop_action().item() == 3.0
+
+
+def test_planner_accepts_a_runtime_execution_length_update():
+    planner = ActionChunkFusionPlanner(replan_steps=4)
+    planner.update(torch.arange(6, dtype=torch.float32).unsqueeze(-1))
+    planner.set_replan_steps(1)
+
+    assert planner.pop_action().item() == 0.0
+    assert planner.needs_replan

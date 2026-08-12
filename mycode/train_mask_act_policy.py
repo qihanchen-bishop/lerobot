@@ -680,6 +680,7 @@ class MaskACTPolicy(nn.Module):
         phase_teacher_forcing_steps: int,
         phase_teacher_forcing_ramp_steps: int,
         pretrained_backbone_weights: str | None,
+        phase_history_stride: int = 1,
     ):
         super().__init__()
         self.act_policy = act_policy
@@ -704,6 +705,7 @@ class MaskACTPolicy(nn.Module):
         self.semantic_prediction_offsets = tuple(semantic_prediction_offsets)
         self.semantic_dynamics_loss_weight = semantic_dynamics_loss_weight
         self.phase_history_length = phase_history_length
+        self.phase_history_stride = phase_history_stride
         self.phase_loss_weight = phase_loss_weight
         self.phase_teacher_forcing_steps = phase_teacher_forcing_steps
         self.phase_teacher_forcing_ramp_steps = phase_teacher_forcing_ramp_steps
@@ -715,6 +717,10 @@ class MaskACTPolicy(nn.Module):
         self._latest_semantic_rollout: dict[str, Tensor] = {}
         self._phase_inference_history: Tensor | None = None
         self._latest_phase_probabilities: Tensor | None = None
+        self._inference_control_step: int | None = None
+        self._last_phase_history_step: int | None = None
+        self._ssact_runtime_controller: Any | None = None
+        self._latest_ssact_control_report: dict[str, Any] = {}
 
         valid_experiments = {
             "1A",
@@ -763,6 +769,8 @@ class MaskACTPolicy(nn.Module):
                 raise ValueError("SSACT-1 requires phase feature reliability from --phase-labels.")
             if self.phase_history_length <= 0 or phase_hidden_dim <= 0:
                 raise ValueError("SSACT-1 phase history length and hidden dimension must be positive.")
+            if self.phase_history_stride <= 0:
+                raise ValueError("SSACT-1 phase history stride must be positive.")
             if self.phase_loss_weight < 0:
                 raise ValueError("phase_loss_weight must be non-negative.")
             if self.phase_teacher_forcing_steps < 0 or self.phase_teacher_forcing_ramp_steps < 0:
@@ -848,6 +856,35 @@ class MaskACTPolicy(nn.Module):
         self._latest_semantic_rollout = {}
         self._phase_inference_history = None
         self._latest_phase_probabilities = None
+        self._inference_control_step = None
+        self._last_phase_history_step = None
+        self._latest_ssact_control_report = {}
+        if self._ssact_runtime_controller is not None:
+            self._ssact_runtime_controller.reset()
+
+    def configure_ssact_runtime(self, config: dict[str, Any] | None) -> None:
+        """Enable runtime semantic control without altering checkpoint weights."""
+        if config is None:
+            self._ssact_runtime_controller = None
+            self._latest_ssact_control_report = {}
+            return
+        if self.experiment not in PHASE_CONDITIONED_EXPERIMENTS:
+            raise ValueError("SSACT runtime control requires a phase-conditioned checkpoint.")
+        from semantic_servo import SSACTRuntimeConfig, SSACTRuntimeController
+
+        self._ssact_runtime_controller = SSACTRuntimeController(SSACTRuntimeConfig(**config))
+        self._latest_ssact_control_report = {}
+
+    def set_inference_control_step(self, control_step: int) -> None:
+        if control_step < 0:
+            raise ValueError("control_step must be non-negative.")
+        self._inference_control_step = int(control_step)
+
+    def latest_ssact_control_report(self) -> dict[str, Any]:
+        return dict(self._latest_ssact_control_report)
+
+    def ssact_runtime_requires_grad(self) -> bool:
+        return self._ssact_runtime_controller is not None
 
     def set_training_step(self, step: int) -> None:
         self._training_step = step
@@ -961,11 +998,17 @@ class MaskACTPolicy(nn.Module):
                     self._phase_inference_history = current_phase_features.unsqueeze(1).expand(
                         -1, self.phase_history_length, -1
                     ).clone()
-                else:
+                    self._last_phase_history_step = self._inference_control_step
+                elif (
+                    self._inference_control_step is None
+                    or self._last_phase_history_step is None
+                    or self._inference_control_step - self._last_phase_history_step >= self.phase_history_stride
+                ):
                     self._phase_inference_history = torch.cat(
                         [self._phase_inference_history[:, 1:], current_phase_features.unsqueeze(1)],
                         dim=1,
                     )
+                    self._last_phase_history_step = self._inference_control_step
                 _, phase_probabilities = self.predict_phase_from_history(self._phase_inference_history)
                 self._latest_phase_probabilities = phase_probabilities
                 act_batch[OBS_ENV_STATE] = phase_probabilities
@@ -1010,19 +1053,32 @@ class MaskACTPolicy(nn.Module):
         """Run RGB-only Mask-ACT inference and return one action from the ACT action queue."""
         return self.act_policy.select_action(self._prepare_inference_batch(batch))
 
-    @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
         """Run RGB-only Mask-ACT inference and return the complete predicted action chunk."""
-        act_batch = self._prepare_inference_batch(batch)
-        actions = self.act_policy.predict_action_chunk(act_batch)
+        with torch.no_grad():
+            act_batch = self._prepare_inference_batch(batch)
+            actions = self.act_policy.predict_action_chunk(act_batch)
         if self.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
             if self.semantic_dynamics is None or self._latest_semantic_state is None:
                 raise RuntimeError("SSACT-1 semantic dynamics state was not prepared for inference.")
-            means, log_stds = self.semantic_dynamics(
-                self._latest_semantic_state,
-                act_batch[OBS_STATE],
-                actions,
-            )
+            if self._ssact_runtime_controller is not None:
+                if self._latest_phase_probabilities is None:
+                    raise RuntimeError("SSACT phase probabilities were not prepared for runtime control.")
+                actions, report = self._ssact_runtime_controller.apply(
+                    semantic_dynamics=self.semantic_dynamics,
+                    semantic_state=self._latest_semantic_state,
+                    robot_state=act_batch[OBS_STATE],
+                    nominal_actions=actions,
+                    phase_probabilities=self._latest_phase_probabilities,
+                    prediction_offsets=self.semantic_prediction_offsets,
+                )
+                self._latest_ssact_control_report = report
+            with torch.no_grad():
+                means, log_stds = self.semantic_dynamics(
+                    self._latest_semantic_state,
+                    act_batch[OBS_STATE],
+                    actions,
+                )
             self._latest_semantic_rollout = {
                 "mean": means.detach().cpu(),
                 "std": log_stds.exp().detach().cpu(),
@@ -2199,6 +2255,7 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         phase_teacher_forcing_steps=getattr(args, "phase_teacher_forcing_steps", 10_000),
         phase_teacher_forcing_ramp_steps=getattr(args, "phase_teacher_forcing_ramp_steps", 20_000),
         pretrained_backbone_weights=args.pretrained_backbone_weights,
+        phase_history_stride=getattr(args, "phase_history_stride", 1),
     )
 
 
