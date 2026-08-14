@@ -70,11 +70,14 @@ LOW_CAMERA_HEIGHT = 360
 PREVIEW_SIZE = (1280, 720)
 SIDE_PREVIEW_SIZE = (640, 360)
 DEFAULT_CALIBRATION_PATH = Path(__file__).resolve().parents[1] / "calibration"
-DEFAULT_DATASET_ROOT = Path(__file__).resolve().parents[1] / "datanew"
+DEFAULT_DATASET_ROOT = Path(__file__).resolve().parents[1] / "data" / "bettersetup"
 DEFAULT_LEFT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E122511-if00"
 DEFAULT_LEFT_LEADER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E118729-if00"
 DEFAULT_RIGHT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E119029-if00"
 DEFAULT_RIGHT_LEADER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E121504-if00"
+DEFAULT_FRONT_CAMERA_ID = "v4l2-serial://244523062711/rgb"
+DEFAULT_SIDE_CAMERA_ID = "v4l2-serial://202412231836/rgb"
+V4L2_SERIAL_PREFIX = "v4l2-serial://"
 TASK_CHOICES = ("cube", "screw", "paperball", "cube_r", "screw_r", "paperball_r")
 EPISODE_FILE_SIZE_MB = 1e-6
 
@@ -253,8 +256,14 @@ class LocalBimanualSOFollower:
 
     def get_observation(self) -> dict[str, Any]:
         futures: dict[concurrent.futures.Future, tuple[str, str]] = {}
-        futures[self._io_executor.submit(self._read_arm_motors, self.left_arm)] = ("left_motors", "")
-        futures[self._io_executor.submit(self._read_arm_motors, self.right_arm)] = ("right_motors", "")
+        futures[self._io_executor.submit(self._read_arm_motors, "left follower", self.left_arm)] = (
+            "left_motors",
+            "",
+        )
+        futures[self._io_executor.submit(self._read_arm_motors, "right follower", self.right_arm)] = (
+            "right_motors",
+            "",
+        )
 
         delayed_depth_views: dict[str, RealSenseDepthView] = {}
         for cam_key, cam in self.cameras.items():
@@ -289,8 +298,8 @@ class LocalBimanualSOFollower:
         right_action = {
             key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")
         }
-        left_future = self._io_executor.submit(self.left_arm.send_action, left_action)
-        right_future = self._io_executor.submit(self.right_arm.send_action, right_action)
+        left_future = self._io_executor.submit(self._send_arm_action, "left follower", self.left_arm, left_action)
+        right_future = self._io_executor.submit(self._send_arm_action, "right follower", self.right_arm, right_action)
         sent_left = left_future.result()
         sent_right = right_future.result()
         return {
@@ -299,9 +308,19 @@ class LocalBimanualSOFollower:
         }
 
     @staticmethod
-    def _read_arm_motors(arm: SO101Follower) -> dict[str, float]:
-        obs_dict = arm.bus.sync_read("Present_Position")
+    def _read_arm_motors(label: str, arm: SO101Follower) -> dict[str, float]:
+        try:
+            obs_dict = arm.bus.sync_read("Present_Position")
+        except Exception as exc:
+            raise RuntimeError(f"{label} failed to read Present_Position: {exc}") from exc
         return {f"{motor}.pos": val for motor, val in obs_dict.items()}
+
+    @staticmethod
+    def _send_arm_action(label: str, arm: SO101Follower, action: dict[str, float]) -> dict[str, float]:
+        try:
+            return arm.send_action(action)
+        except Exception as exc:
+            raise RuntimeError(f"{label} failed to send action: {exc}") from exc
 
     def disconnect(self) -> None:
         self._disconnect_arm_safely("left follower", self.left_arm)
@@ -365,14 +384,21 @@ class LocalBimanualSOLeader:
         self.right_arm.connect()
 
     def get_action(self) -> dict[str, float]:
-        left_future = self._io_executor.submit(self.left_arm.get_action)
-        right_future = self._io_executor.submit(self.right_arm.get_action)
+        left_future = self._io_executor.submit(self._get_arm_action, "left leader", self.left_arm)
+        right_future = self._io_executor.submit(self._get_arm_action, "right leader", self.right_arm)
         left_action = left_future.result()
         right_action = right_future.result()
         return {
             **{f"left_{key}": value for key, value in left_action.items()},
             **{f"right_{key}": value for key, value in right_action.items()},
         }
+
+    @staticmethod
+    def _get_arm_action(label: str, arm: SO101Leader) -> dict[str, float]:
+        try:
+            return arm.get_action()
+        except Exception as exc:
+            raise RuntimeError(f"{label} failed to read action: {exc}") from exc
 
     def disconnect(self) -> None:
         self._disconnect_arm_safely("left leader", self.left_arm)
@@ -782,6 +808,7 @@ class BimanualRecorder:
         self.ready = False
         self.failed = False
         self.saving_episode = False
+        self.pending_save_confirmation = False
         self.save_thread: threading.Thread | None = None
         self.episode_count = 0
         self.current_episode_task = settings.task
@@ -789,6 +816,10 @@ class BimanualRecorder:
         self.raw_depth_frames: list[np.ndarray] = []
         self.raw_depth_metadata: dict[str, np.ndarray] = {}
         self.sidecar_depth_camera: FlexibleRealSenseCamera | None = None
+        self.consecutive_control_io_errors = 0
+        self.last_control_io_error_status_t = 0.0
+        self.skipped_recording_frames = 0
+        self.control_io_warning_reasons: list[str] = []
 
     def start(self) -> None:
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -801,10 +832,16 @@ class BimanualRecorder:
         if self.saving_episode:
             self._put_status("Episode is still saving. Wait until save completes before recording again.")
             return
+        if self.pending_save_confirmation:
+            self._put_status("Episode is waiting for save/discard confirmation.")
+            return
         self.command_queue.put(("record", task))
 
     def request_end_episode(self) -> None:
         self.command_queue.put("end")
+
+    def request_confirm_save_episode(self) -> None:
+        self.command_queue.put("confirm_save")
 
     def request_discard_episode(self) -> None:
         self.command_queue.put("discard")
@@ -881,11 +918,32 @@ class BimanualRecorder:
                 self._process_commands()
                 start_loop_t = time.perf_counter()
 
-                obs = robot.get_observation()
+                try:
+                    obs = robot.get_observation()
+                except Exception as exc:
+                    self._handle_control_io_error(f"observation read failed: {exc}")
+                    time.sleep(1 / FPS)
+                    continue
                 obs_processed = robot_observation_processor(obs)
-                leader_action = teleop_action_processor((teleop.get_action(), obs))
+                try:
+                    raw_leader_action = teleop.get_action()
+                except Exception as exc:
+                    self._handle_control_io_error(f"leader action read failed: {exc}", obs_processed)
+                    time.sleep(1 / FPS)
+                    continue
+                leader_action = teleop_action_processor((raw_leader_action, obs))
                 action_to_send = robot_action_processor((leader_action, obs))
-                sent_action = robot.send_action(action_to_send)
+                try:
+                    sent_action = robot.send_action(action_to_send)
+                except Exception as exc:
+                    self._handle_control_io_error(f"follower action send failed: {exc}", obs_processed)
+                    time.sleep(1 / FPS)
+                    continue
+                if self.consecutive_control_io_errors:
+                    self._put_status(
+                        f"Control I/O recovered after {self.consecutive_control_io_errors} failed frame(s)."
+                    )
+                    self.consecutive_control_io_errors = 0
 
                 self._publish_preview(obs_processed)
                 self._publish_state(obs_processed, sent_action)
@@ -1295,7 +1353,8 @@ class BimanualRecorder:
             )
             self._put_status("Using RealSense RGB/depth as front because OpenCV front recording is disabled.")
 
-        front_path = self.settings.opencv_front.strip() if self.settings.record_opencv_front else ""
+        requested_front_path = self.settings.opencv_front.strip() if self.settings.record_opencv_front else ""
+        front_path = self._resolve_opencv_identifier(requested_front_path) if requested_front_path else ""
         if self.settings.opencv_front.strip() and not self.settings.record_opencv_front:
             self._put_status("OpenCV front path is set but not selected for recording; skipping front RGB.")
         front_is_realsense_video = bool(front_path and serial and self._is_realsense_video_path(front_path))
@@ -1313,12 +1372,14 @@ class BimanualRecorder:
             )
         elif front_path:
             cameras["front"] = OpenCVCameraConfig(
-                index_or_path=front_path,
+                index_or_path=self._opencv_value(front_path),
                 width=camera_width,
                 height=camera_height,
                 fps=FPS,
                 fourcc="MJPG",
             )
+            if requested_front_path != front_path:
+                self._put_status(f"OpenCV front {requested_front_path} resolved to {front_path}.")
             if serial:
                 self._put_status(f"Using OpenCV front RGB {front_path}; RealSense is reserved for depth.")
 
@@ -1334,7 +1395,7 @@ class BimanualRecorder:
             if side_description:
                 self._put_status(f"OpenCV side RGB {side_path} is {side_description}.")
             cameras["side"] = OpenCVCameraConfig(
-                index_or_path=side_path,
+                index_or_path=self._opencv_value(side_path),
                 width=camera_width,
                 height=camera_height,
                 fps=FPS,
@@ -1412,10 +1473,112 @@ class BimanualRecorder:
             return LOW_CAMERA_WIDTH, LOW_CAMERA_HEIGHT
         return CAMERA_WIDTH, CAMERA_HEIGHT
 
+    @staticmethod
+    def _resolve_opencv_identifier(identifier: str) -> str:
+        if not identifier.startswith(V4L2_SERIAL_PREFIX):
+            return identifier
+
+        selector = identifier.removeprefix(V4L2_SERIAL_PREFIX)
+        serial, separator, role = selector.partition("/")
+        if not serial or (separator and role != "rgb"):
+            raise ValueError(
+                f"Invalid V4L2 camera identifier '{identifier}'. "
+                f"Expected {V4L2_SERIAL_PREFIX}<serial>/rgb."
+            )
+
+        candidates: list[tuple[int, Path]] = []
+        serial_nodes: list[str] = []
+        format_scores = {"MJPG": 4, "YUYV": 3, "RGB3": 2, "BGR3": 2}
+        for path in sorted(Path("/dev").glob("video*")):
+            try:
+                properties_result = subprocess.run(
+                    ["udevadm", "info", "--query=property", f"--name={path}"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            properties = dict(
+                line.split("=", 1)
+                for line in properties_result.stdout.splitlines()
+                if "=" in line
+            )
+            device_serials = (
+                properties.get("ID_SERIAL_SHORT", ""),
+                properties.get("ID_SERIAL", ""),
+            )
+            if not any(serial == value or serial in value for value in device_serials if value):
+                continue
+            serial_nodes.append(str(path))
+
+            try:
+                formats_result = subprocess.run(
+                    ["v4l2-ctl", "-d", str(path), "--list-formats"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            formats = formats_result.stdout
+            score = max(
+                (
+                    preference
+                    for pixel_format, preference in format_scores.items()
+                    if f"'{pixel_format}'" in formats
+                ),
+                default=0,
+            )
+            if score:
+                candidates.append((score, path))
+
+        if not candidates:
+            matched = ", ".join(serial_nodes) if serial_nodes else "none"
+            raise ValueError(
+                f"Could not find an RGB V4L2 node for camera serial {serial}. "
+                f"Matching video nodes: {matched}."
+            )
+        candidates.sort(key=lambda item: (-item[0], item[1].name))
+        return str(candidates[0][1])
+
+    @staticmethod
+    def _stable_opencv_identifier(identifier: str) -> str:
+        if identifier.startswith(V4L2_SERIAL_PREFIX):
+            return identifier
+        path = Path(identifier)
+        if not path.name.startswith("video"):
+            return identifier
+        try:
+            properties_result = subprocess.run(
+                ["udevadm", "info", "--query=property", f"--name={path}"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return identifier
+        properties = dict(
+            line.split("=", 1)
+            for line in properties_result.stdout.splitlines()
+            if "=" in line
+        )
+        serial = properties.get("ID_SERIAL_SHORT", "")
+        if not serial:
+            serial_id = properties.get("ID_SERIAL", "")
+            serial = serial_id.rsplit("_", 1)[-1] if serial_id else ""
+        if not serial:
+            return identifier
+        return f"{V4L2_SERIAL_PREFIX}{serial}/rgb"
+
     def _resolve_opencv_side_path(self, requested_path: str) -> str:
         if not requested_path:
             self._put_status("OpenCV side RGB is blank; recording without side RGB.")
             return ""
+        requested_path = self._resolve_opencv_identifier(requested_path)
 
         realsense_active = self.settings.enable_realsense or self.settings.capture_depth_sidecar
         if realsense_active and self._is_realsense_video_path(requested_path):
@@ -1496,6 +1659,10 @@ class BimanualRecorder:
         except OSError:
             return ""
 
+    @staticmethod
+    def _opencv_value(index_or_path: str) -> int | Path:
+        return int(index_or_path) if index_or_path.isdigit() else Path(index_or_path)
+
     def _make_teleop(self) -> LocalBimanualSOLeader:
         _, teleop_calibration_dir = self._calibration_dirs()
         if teleop_calibration_dir is not None:
@@ -1568,17 +1735,24 @@ class BimanualRecorder:
             if command_name == "record":
                 if self.saving_episode:
                     self._put_status("Episode is still saving. Wait until save completes before recording again.")
+                elif self.pending_save_confirmation:
+                    self._put_status("Episode is waiting for save/discard confirmation.")
                 elif not self.recording:
                     requested_task = command[1] if isinstance(command, tuple) and len(command) > 1 else self.settings.task
                     self.current_episode_task = str(requested_task or self.settings.task)
+                    self._delete_temporary_episode_images(self.episode_count)
                     self.recording = True
                     self.raw_depth_frames = []
                     self.raw_depth_metadata = {}
+                    self.skipped_recording_frames = 0
+                    self.control_io_warning_reasons = []
                     self._put_episode(self.episode_count, recording=True)
                     self._put_progress(0, 100, f"Recording episode {self.episode_count}")
                     self._put_status(f"Recording episode {self.episode_count} with task '{self.current_episode_task}'...")
             elif command_name == "end":
                 self._end_episode_if_needed()
+            elif command_name == "confirm_save":
+                self._save_pending_episode_if_needed()
             elif command_name == "discard":
                 self._discard_episode_if_needed()
             elif command_name == "stop":
@@ -1589,24 +1763,64 @@ class BimanualRecorder:
         if not self.recording or self.dataset is None:
             if self.saving_episode:
                 self._put_status("Episode is already saving. Teleoperation can continue, but Record is disabled.")
+            elif self.pending_save_confirmation:
+                self._put_status("Episode is waiting for save/discard confirmation.")
             return
         self.recording = False
+        if self.skipped_recording_frames > 0:
+            self.pending_save_confirmation = True
+            frame_count = int(self.dataset.episode_buffer["size"]) if self.dataset.episode_buffer else 0
+            payload = {
+                "episode_index": self.episode_count,
+                "frame_count": frame_count,
+                "skipped_control_io_frames": self.skipped_recording_frames,
+                "warnings": list(self.control_io_warning_reasons),
+            }
+            self._put_episode(self.episode_count, recording=False)
+            self._put_progress(0, 100, f"Episode {self.episode_count} waiting for save confirmation.")
+            self.status_queue.put(f"CONFIRM_SAVE_SKIPPED|{json.dumps(payload, ensure_ascii=False)}")
+            return
+        self._begin_episode_save()
+
+    def _save_pending_episode_if_needed(self) -> None:
+        if not self.pending_save_confirmation:
+            self._put_status("No episode is waiting for save confirmation.")
+            return
+        self._begin_episode_save()
+
+    def _begin_episode_save(self) -> None:
+        if self.dataset is None:
+            self._put_status("No dataset is available for saving.")
+            return
+        self.pending_save_confirmation = False
         saved_episode_index = self.episode_count
         frame_count = int(self.dataset.episode_buffer["size"]) if self.dataset.episode_buffer else 0
         raw_depth_frames = self.raw_depth_frames
         raw_depth_metadata = self.raw_depth_metadata
+        skipped_recording_frames = self.skipped_recording_frames
+        warning_reasons = list(self.control_io_warning_reasons)
         self.raw_depth_frames = []
         self.raw_depth_metadata = {}
+        self.skipped_recording_frames = 0
+        self.control_io_warning_reasons = []
         self.saving_episode = True
         self._put_save_state(True)
         self._put_episode(saved_episode_index, recording=False)
         self._put_progress(5, 100, f"Saving episode {saved_episode_index} ({frame_count} frames)...")
         self._put_status(
-            f"Saving episode {saved_episode_index} ({frame_count} frames) in background. Teleoperation remains active."
+            f"Saving episode {saved_episode_index} ({frame_count} frames, "
+            f"{skipped_recording_frames} skipped bad frame(s)) in background. Teleoperation remains active."
         )
         self.save_thread = threading.Thread(
             target=self._save_episode_worker,
-            args=(saved_episode_index, frame_count, raw_depth_frames, raw_depth_metadata),
+            args=(
+                saved_episode_index,
+                frame_count,
+                raw_depth_frames,
+                raw_depth_metadata,
+                skipped_recording_frames,
+                warning_reasons,
+            ),
             daemon=True,
         )
         self.save_thread.start()
@@ -1617,6 +1831,8 @@ class BimanualRecorder:
         frame_count: int,
         raw_depth_frames: list[np.ndarray],
         raw_depth_metadata: dict[str, np.ndarray],
+        skipped_recording_frames: int,
+        warning_reasons: list[str],
     ) -> None:
         try:
             if self.dataset is None:
@@ -1626,9 +1842,16 @@ class BimanualRecorder:
                     f"raw depth frame count mismatch: depth={len(raw_depth_frames)}, dataset={frame_count}"
                 )
             self._put_progress(20, 100, "Writing parquet data and encoding videos...")
+            self._validate_temporary_video_frames(saved_episode_index, frame_count)
             self.dataset.save_episode()
             self._put_progress(85, 100, "Saving raw depth sidecar...")
             self._save_raw_depth_sidecar(saved_episode_index, raw_depth_frames, raw_depth_metadata)
+            self._append_record_warning_sidecar(
+                saved_episode_index,
+                frame_count,
+                skipped_recording_frames,
+                warning_reasons,
+            )
             self.episode_count = self.dataset.num_episodes
             if self.episode_count != saved_episode_index + 1:
                 raise RuntimeError(
@@ -1637,7 +1860,8 @@ class BimanualRecorder:
             self._put_episode(self.episode_count)
             self._put_progress(100, 100, f"Episode {saved_episode_index} saved successfully.")
             self._put_status(
-                f"Saved episode {saved_episode_index} successfully. Next episode is {self.episode_count}."
+                f"Saved episode {saved_episode_index} successfully "
+                f"({skipped_recording_frames} skipped bad frame(s)). Next episode is {self.episode_count}."
             )
         except Exception as exc:
             self.failed = True
@@ -1648,25 +1872,107 @@ class BimanualRecorder:
             self.saving_episode = False
             self._put_save_state(False)
 
+    def _append_record_warning_sidecar(
+        self,
+        episode_index: int,
+        frame_count: int,
+        skipped_control_io_frames: int,
+        warning_reasons: list[str],
+    ) -> None:
+        if skipped_control_io_frames <= 0 and not warning_reasons:
+            return
+        if self.dataset is None:
+            return
+        warnings_path = self.dataset.root / "meta" / "record_warnings.jsonl"
+        warnings_path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "episode_index": int(episode_index),
+            "frame_count": int(frame_count),
+            "skipped_control_io_frames": int(skipped_control_io_frames),
+            "warning_count": len(warning_reasons),
+            "warnings": warning_reasons,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        with warnings_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
     def _wait_for_save_if_needed(self) -> None:
         if self.save_thread is not None and self.save_thread.is_alive():
             self._put_status("Waiting for background episode save to finish...")
             self.save_thread.join()
 
     def _discard_episode_if_needed(self) -> None:
-        if not self.recording or self.dataset is None:
+        if (not self.recording and not self.pending_save_confirmation) or self.dataset is None:
             self._put_status("No active recording to discard.")
             return
         self.recording = False
-        self.dataset.clear_episode_buffer(delete_images=True)
+        self.pending_save_confirmation = False
+        self._delete_temporary_episode_images(self.episode_count)
+        self.dataset.clear_episode_buffer(delete_images=False)
         discarded_frames = len(self.raw_depth_frames)
         self.raw_depth_frames = []
         self.raw_depth_metadata = {}
+        self.skipped_recording_frames = 0
+        self.control_io_warning_reasons = []
         self._put_episode(self.episode_count)
         self._put_progress(0, 100, f"Episode {self.episode_count} discarded.")
         self._put_status(
             f"Discarded episode {self.episode_count} ({discarded_frames} raw depth frame(s) dropped). Click Record to retry."
         )
+
+    def _delete_temporary_episode_images(self, episode_index: int) -> None:
+        if self.dataset is None:
+            return
+        if self.dataset.image_writer is not None:
+            self.dataset._wait_image_writer()
+        camera_keys = dict.fromkeys([*self.dataset.meta.image_keys, *self.dataset.meta.video_keys])
+        for camera_key in camera_keys:
+            image_dir = self.dataset._get_image_file_dir(episode_index, camera_key)
+            if image_dir.is_dir():
+                shutil.rmtree(image_dir)
+
+    def _validate_temporary_video_frames(self, episode_index: int, frame_count: int) -> None:
+        if self.dataset is None:
+            raise RuntimeError("dataset is not available while validating temporary video frames")
+        if self.dataset.image_writer is not None:
+            self.dataset._wait_image_writer()
+        expected_names = {f"frame-{frame_index:06d}.png" for frame_index in range(frame_count)}
+        for video_key in self.dataset.meta.video_keys:
+            image_dir = self.dataset._get_image_file_dir(episode_index, video_key)
+            actual_names = {path.name for path in image_dir.glob("frame-*.png")}
+            if actual_names == expected_names:
+                continue
+            missing = sorted(expected_names - actual_names)[:5]
+            extra = sorted(actual_names - expected_names)[:5]
+            raise RuntimeError(
+                f"temporary video frame mismatch for {video_key}: expected={frame_count}, "
+                f"actual={len(actual_names)}, missing={missing}, extra={extra}"
+            )
+
+    def _handle_control_io_error(self, reason: str, preview_obs: dict[str, Any] | None = None) -> None:
+        self.consecutive_control_io_errors += 1
+        if self.recording:
+            self.skipped_recording_frames += 1
+            if len(self.control_io_warning_reasons) < 20:
+                self.control_io_warning_reasons.append(reason)
+        if preview_obs is not None:
+            self._publish_preview(preview_obs)
+
+        now = time.monotonic()
+        should_report = (
+            self.consecutive_control_io_errors == 1
+            or self.consecutive_control_io_errors in {5, 15, 30, 60}
+            or now - self.last_control_io_error_status_t >= 2.0
+        )
+        if should_report:
+            self.last_control_io_error_status_t = now
+            self._put_status(
+                f"CONTROL_IO_WARNING: {reason}. "
+                f"Keeping devices connected"
+                f"{'; skipping this recording frame' if self.recording else ''} "
+                f"(consecutive failed frames: {self.consecutive_control_io_errors}, "
+                f"episode skipped frames: {self.skipped_recording_frames})."
+            )
 
     def _store_raw_depth_frame(self, robot: LocalBimanualSOFollower) -> None:
         if not self.settings.capture_depth_sidecar:
@@ -1785,6 +2091,86 @@ class BimanualRecorder:
             q.put_nowait(item)
 
 
+class CameraOnlyPreview:
+    def __init__(
+        self,
+        settings: RecorderSettings,
+        status_queue: queue.Queue[str],
+        preview_queue: queue.Queue[dict[str, np.ndarray]],
+    ) -> None:
+        self.settings = settings
+        self.status_queue = status_queue
+        self.preview_queue = preview_queue
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=3)
+
+    def is_alive(self) -> bool:
+        return self.thread is not None and self.thread.is_alive()
+
+    def _put_status(self, message: str) -> None:
+        print(f"[GUI recorder] {message}", flush=True)
+        self.status_queue.put(message)
+
+    def _run(self) -> None:
+        captures: dict[str, cv2.VideoCapture] = {}
+        try:
+            camera_width = LOW_CAMERA_WIDTH if self.settings.low_resolution else CAMERA_WIDTH
+            camera_height = LOW_CAMERA_HEIGHT if self.settings.low_resolution else CAMERA_HEIGHT
+            candidates = {
+                "front": self.settings.opencv_front.strip() if self.settings.record_opencv_front else "",
+                "side": self.settings.opencv_side.strip() if self.settings.record_opencv_side else "",
+            }
+            for name, identifier in candidates.items():
+                if not identifier:
+                    continue
+                try:
+                    path = BimanualRecorder._resolve_opencv_identifier(identifier)
+                except ValueError as exc:
+                    self._put_status(f"Camera-only preview skipped {name}: {exc}")
+                    continue
+                cap = cv2.VideoCapture(path)
+                if not cap.isOpened():
+                    self._put_status(f"Camera-only preview failed to open {name}: {identifier} -> {path}")
+                    cap.release()
+                    continue
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
+                cap.set(cv2.CAP_PROP_FPS, FPS)
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                captures[name] = cap
+                self._put_status(f"Camera-only preview using {name}: {identifier} -> {path}")
+
+            if not captures:
+                self._put_status("Camera-only preview could not open any OpenCV camera.")
+                return
+
+            self._put_status("Camera-only preview running. Robot/teleop is not connected; recording is disabled.")
+            while not self.stop_event.is_set():
+                start_t = time.perf_counter()
+                frames: dict[str, np.ndarray] = {}
+                for name, cap in list(captures.items()):
+                    ok, frame_bgr = cap.read()
+                    if not ok:
+                        continue
+                    frames[name] = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                if frames:
+                    BimanualRecorder._put_latest(self.preview_queue, frames)
+                time.sleep(max(1 / FPS - (time.perf_counter() - start_t), 0.0))
+        finally:
+            for cap in captures.values():
+                cap.release()
+            self._put_status("Camera-only preview stopped.")
+
+
 class RecorderApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -1799,6 +2185,8 @@ class RecorderApp:
         self.preview_queue: queue.Queue[dict[str, np.ndarray]] = queue.Queue(maxsize=1)
         self.state_queue: queue.Queue[dict[str, float]] = queue.Queue(maxsize=1)
         self.recorder: BimanualRecorder | None = None
+        self.camera_preview: CameraOnlyPreview | None = None
+        self.last_connect_settings: RecorderSettings | None = None
         self.cleanup_running = False
         self.pending_cleanup_root: Path | None = None
         self.pending_cleanup_episodes: list[int] = []
@@ -1832,11 +2220,11 @@ class RecorderApp:
             "right_follower_id": tk.StringVar(value="my_awesome_follower_arm_r"),
             "left_leader_id": tk.StringVar(value="my_awesome_leader_arm"),
             "right_leader_id": tk.StringVar(value="my_awesome_leader_arm_r"),
-            "opencv_front": tk.StringVar(value="/dev/video8"),
-            "opencv_side": tk.StringVar(value="/dev/video10"),
+            "opencv_front": tk.StringVar(value=DEFAULT_FRONT_CAMERA_ID),
+            "opencv_side": tk.StringVar(value=DEFAULT_SIDE_CAMERA_ID),
             "realsense_serial": tk.StringVar(value=""),
             "repo_id": tk.StringVar(value=""),
-            "dataset_root": tk.StringVar(value=""),
+            "dataset_root": tk.StringVar(value=str(DEFAULT_DATASET_ROOT)),
             "calibration_dir": tk.StringVar(value=str(DEFAULT_CALIBRATION_PATH)),
             "calibration_match": tk.StringVar(value="Board serial"),
             "task": tk.StringVar(value=TASK_CHOICES[0]),
@@ -2162,7 +2550,7 @@ class RecorderApp:
             "last_frame_t": 0.0,
             "fps": 0.0,
         }
-        camera_var = tk.StringVar(value=self.vars["opencv_front"].get() or "/dev/video4")
+        camera_var = tk.StringVar(value=self.vars["opencv_front"].get() or DEFAULT_FRONT_CAMERA_ID)
         zoom_var = tk.DoubleVar(value=1.0)
         status_var = tk.StringVar(value="Scan cameras, select one, then preview or assign it.")
 
@@ -2187,7 +2575,7 @@ class RecorderApp:
             return f"{path}  ({description})" if description else path
 
         def scan() -> None:
-            candidates: list[str] = []
+            candidates: list[str] = [DEFAULT_FRONT_CAMERA_ID, DEFAULT_SIDE_CAMERA_ID]
             try:
                 cameras = OpenCVCamera.find_cameras()
                 candidates.extend(str(camera.get("id")) for camera in cameras if camera.get("id") is not None)
@@ -2195,6 +2583,7 @@ class RecorderApp:
                 status_var.set(f"OpenCV scan failed: {exc}. You can still type a path manually.")
             for path in sorted(Path("/dev").glob("video*")):
                 candidates.append(str(path))
+                candidates.append(BimanualRecorder._stable_opencv_identifier(str(path)))
             candidates = sorted(dict.fromkeys(candidates))
             camera_combo["values"] = candidates
             if candidates and camera_var.get() not in candidates:
@@ -2217,9 +2606,14 @@ class RecorderApp:
             if not path:
                 status_var.set("Choose or type a camera path first.")
                 return
-            cap = cv2.VideoCapture(path)
+            try:
+                resolved_path = BimanualRecorder._resolve_opencv_identifier(path)
+            except ValueError as exc:
+                status_var.set(str(exc))
+                return
+            cap = cv2.VideoCapture(resolved_path)
             if not cap.isOpened():
-                status_var.set(f"Failed to open {path}.")
+                status_var.set(f"Failed to open {path} ({resolved_path}).")
                 cap.release()
                 return
             camera_width, camera_height = self._selected_camera_size()
@@ -2231,12 +2625,13 @@ class RecorderApp:
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             fps = cap.get(cv2.CAP_PROP_FPS)
-            status_var.set(f"Previewing {describe(path)} | {width}x{height} | camera fps {fps:.1f}")
+            status_var.set(f"Previewing {path} -> {describe(resolved_path)} | {width}x{height} | camera fps {fps:.1f}")
 
         def assign_front() -> None:
             path = camera_var.get().strip()
             if not path:
                 return
+            path = BimanualRecorder._stable_opencv_identifier(path)
             self.vars["opencv_front"].set(path)
             self.record_opencv_front.set(True)
             status_var.set(f"Assigned {path} to OpenCV frontview.")
@@ -2245,6 +2640,7 @@ class RecorderApp:
             path = camera_var.get().strip()
             if not path:
                 return
+            path = BimanualRecorder._stable_opencv_identifier(path)
             self.vars["opencv_side"].set(path)
             self.record_opencv_side.set(True)
             status_var.set(f"Assigned {path} to OpenCV side RGB and enabled Record side RGB.")
@@ -2267,8 +2663,13 @@ class RecorderApp:
                     image.thumbnail(max_size, Image.Resampling.LANCZOS)
                     state["image"] = ImageTk.PhotoImage(image=image)
                     image_label.configure(image=state["image"])
+                    try:
+                        resolved_path = BimanualRecorder._resolve_opencv_identifier(camera_var.get().strip())
+                    except ValueError:
+                        resolved_path = camera_var.get().strip()
                     status_var.set(
-                        f"Previewing {describe(camera_var.get().strip())} | "
+                        f"Previewing {camera_var.get().strip()} -> "
+                        f"{describe(resolved_path)} | "
                         f"{frame_bgr.shape[1]}x{frame_bgr.shape[0]} | {float(state['fps']):.1f} fps | "
                         f"zoom {zoom_var.get():.2f}x"
                     )
@@ -3063,6 +3464,7 @@ class RecorderApp:
         if self.cleanup_running:
             self.status.set("Dataset cleanup is still running. Connect after the progress bar says complete.")
             return
+        self._stop_camera_preview()
         if self.recorder is not None:
             if self.recorder.ready:
                 self.status.set("Recorder is already connected and ready.")
@@ -3129,6 +3531,7 @@ class RecorderApp:
         self.video_mode = "live"
         self.video_title.set("Live preview starting...")
         self.recorder = BimanualRecorder(settings, self.status_queue, self.preview_queue, self.state_queue)
+        self.last_connect_settings = settings
         self.recorder.start()
 
     def record(self) -> None:
@@ -3162,23 +3565,38 @@ class RecorderApp:
         self.recorder.request_discard_episode()
 
     def stop_recorder(self) -> None:
+        self._stop_camera_preview()
         if self.recorder is not None:
             self.recorder.stop()
             self.recorder = None
-            self.episode_save_active = False
-            self._refresh_record_button_state()
-            self._set_active_dataset_root(None)
-            self.video_mode = "dataset"
-            self._load_episode_browser(Path(self.vars["dataset_root"].get()).expanduser())
+        self.episode_save_active = False
+        self._refresh_record_button_state()
+        self._set_active_dataset_root(None)
+        self.video_mode = "dataset"
+        self._load_episode_browser(Path(self.vars["dataset_root"].get()).expanduser())
 
     def disconnect_recorder(self) -> None:
-        if self.recorder is None:
+        if self.recorder is None and self.camera_preview is None:
             self.status.set("Recorder is not connected.")
             return
         self.status.set("Disconnecting robot, teleoperator, and cameras...")
         self.root.update_idletasks()
         self.stop_recorder()
-        self.status.set("Disconnected. Follower arm torque has been released.")
+        self.status.set("Disconnected.")
+
+    def _start_camera_preview_after_failure(self) -> None:
+        if self.camera_preview is not None and self.camera_preview.is_alive():
+            return
+        settings = self.last_connect_settings
+        if settings is None:
+            return
+        self.camera_preview = CameraOnlyPreview(settings, self.status_queue, self.preview_queue)
+        self.camera_preview.start()
+
+    def _stop_camera_preview(self) -> None:
+        if self.camera_preview is not None:
+            self.camera_preview.stop()
+            self.camera_preview = None
 
     def toggle_fullscreen(self) -> None:
         self.set_fullscreen(not bool(self.root.attributes("-fullscreen")))
@@ -3194,14 +3612,21 @@ class RecorderApp:
                 break
 
         if self.recorder is not None and not self.recorder.is_alive() and not self.recorder.ready:
-            if self.recorder.failed:
+            failed = self.recorder.failed
+            if failed:
                 self.status.set(f"{self.status.get()} You can fix the setting and click Connect again.")
             self.recorder = None
             self.episode_save_active = False
             self._refresh_record_button_state()
             self._set_active_dataset_root(None)
+            if failed:
+                self._start_camera_preview_after_failure()
 
-        if self.recorder is not None and self.recorder.is_alive():
+        live_source_active = (
+            (self.recorder is not None and self.recorder.is_alive())
+            or (self.camera_preview is not None and self.camera_preview.is_alive())
+        )
+        if live_source_active:
             try:
                 self.latest_frames = self.preview_queue.get_nowait()
                 now = time.monotonic()
@@ -3253,6 +3678,14 @@ class RecorderApp:
         self.root.after(30, self._poll_queues)
 
     def _handle_status_message(self, message: str) -> None:
+        if message.startswith("CONFIRM_SAVE_SKIPPED|"):
+            try:
+                payload = json.loads(message.split("|", 1)[1])
+            except (json.JSONDecodeError, IndexError) as exc:
+                self.status.set(f"ERROR: invalid save confirmation message: {exc}")
+                return
+            self._confirm_save_skipped_episode(payload)
+            return
         if message.startswith("PROGRESS|"):
             try:
                 _kind, current, total, detail = message.split("|", 3)
@@ -3315,6 +3748,40 @@ class RecorderApp:
             if raw_root:
                 self._set_active_dataset_root(Path(raw_root))
         self.status.set(message)
+
+    def _confirm_save_skipped_episode(self, payload: dict[str, Any]) -> None:
+        episode_index = int(payload.get("episode_index", -1))
+        frame_count = int(payload.get("frame_count", 0))
+        skipped = int(payload.get("skipped_control_io_frames", 0))
+        warnings = payload.get("warnings", [])
+        if not isinstance(warnings, list):
+            warnings = []
+        preview_warnings = "\n".join(f"- {str(item)}" for item in warnings[:3])
+        if len(warnings) > 3:
+            preview_warnings += f"\n- ... {len(warnings) - 3} more"
+        detail = (
+            f"Episode {episode_index} contains {skipped} skipped control I/O frame(s).\n\n"
+            f"Saved frame count if accepted: {frame_count}\n\n"
+            "The skipped frames were not written to images, state, action, or raw depth. "
+            "The remaining frames stay aligned, but the real-time trajectory has gap(s).\n\n"
+        )
+        if preview_warnings:
+            detail += f"Warnings:\n{preview_warnings}\n\n"
+        detail += "Save this episode?"
+        save_episode = messagebox.askyesno(
+            "Save episode with skipped frames?",
+            detail,
+            parent=self.root,
+        )
+        if self.recorder is None:
+            self.status.set("Recorder is no longer active; save confirmation ignored.")
+            return
+        if save_episode:
+            self.status.set(f"Saving episode {episode_index} with {skipped} skipped frame(s).")
+            self.recorder.request_confirm_save_episode()
+        else:
+            self.status.set(f"Discarding episode {episode_index} with {skipped} skipped frame(s).")
+            self.recorder.request_discard_episode()
 
     def _refresh_record_button_state(self) -> None:
         state = tk.DISABLED if self.episode_save_active else tk.NORMAL
