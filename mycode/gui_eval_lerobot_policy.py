@@ -53,7 +53,8 @@ RESULTS_FILENAME = "eval_results.jsonl"
 DEFAULT_TRIALS_PER_GRID = 10
 DEFAULT_LEFT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E122511-if00"
 DEFAULT_RIGHT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E119029-if00"
-DEFAULT_FRONT_CAMERA_ID = "v4l2-serial://244523062711/rgb"
+DEFAULT_REALSENSE_SERIAL = "239222303378"
+DEFAULT_FRONT_CAMERA_ID = f"v4l2-serial://{DEFAULT_REALSENSE_SERIAL}/rgb"
 DEFAULT_SIDE_CAMERA_ID = "v4l2-serial://202412231836/rgb"
 V4L2_SERIAL_PREFIX = "v4l2-serial://"
 
@@ -729,7 +730,7 @@ class EvalPolicyApp:
             "right_follower_id": tk.StringVar(value="my_awesome_follower_arm_r"),
             "calibration_dir": tk.StringVar(value=str(DEFAULT_CALIBRATION_DIR)),
             "calibration_match": tk.StringVar(value="Board serial"),
-            "realsense_serial": tk.StringVar(value=""),
+            "realsense_serial": tk.StringVar(value=DEFAULT_REALSENSE_SERIAL),
             "front_camera_type": tk.StringVar(value="opencv"),
             "front_camera_choice": tk.StringVar(value=""),
             "opencv_front": tk.StringVar(value=DEFAULT_FRONT_CAMERA_ID),
@@ -1444,7 +1445,7 @@ class EvalPolicyApp:
             header_row = view_index * 3
             image_row = header_row + 1
             summary_row = header_row + 2
-            headers = (key, f"{key} U-Net", f"{key} model masks")
+            headers = (key, f"{key} U-Net", f"{key} policy masks / semantics")
             for col, text in enumerate(headers):
                 ttk.Label(preview_frame, text=text).grid(
                     row=header_row,
@@ -3065,12 +3066,7 @@ class EvalPolicyApp:
         camera_width, camera_height = self._camera_size()
         front_path = self.vars["opencv_front"].get().strip()
         serial = self.vars["realsense_serial"].get().strip() or "<auto>"
-        front_is_realsense_video = bool(
-            self.enable_realsense.get()
-            and front_path
-            and self._is_realsense_video_path(front_path)
-        )
-        if self.enable_realsense.get() and (not front_path or front_is_realsense_video):
+        if self.enable_realsense.get():
             if serial != "<auto>":
                 cameras.append(
                     "front: {"
@@ -3103,10 +3099,8 @@ class EvalPolicyApp:
         )
 
     def _camera_config_for_command(self) -> str:
-        requested_front_path = self.vars["opencv_front"].get().strip()
-        front_path = self._resolve_opencv_identifier(requested_front_path)
         camera_width, camera_height = self._camera_size()
-        if self.enable_realsense.get() and (not front_path or self._is_realsense_video_path(front_path)):
+        if self.enable_realsense.get():
             serial = self._resolve_realsense_serial()
             entries = [
                 "front: {"
@@ -3116,6 +3110,8 @@ class EvalPolicyApp:
                 "}"
             ]
         else:
+            requested_front_path = self.vars["opencv_front"].get().strip()
+            front_path = self._resolve_opencv_identifier(requested_front_path)
             if not front_path:
                 raise ValueError("RealSense disabled: OpenCV front cannot be empty.")
             entries = [self._opencv_camera_entry("front", front_path)]
@@ -3375,9 +3371,6 @@ class EvalPolicyApp:
 
     def _patch_realsense_like_recorder(self, robot: Any) -> None:
         if not self.enable_realsense.get():
-            return
-        front_path = self.vars["opencv_front"].get().strip()
-        if front_path and not self._is_realsense_video_path(front_path):
             return
         serial = self._resolve_realsense_serial()
         camera_width, camera_height = self._camera_size()
@@ -3766,6 +3759,69 @@ class EvalPolicyApp:
                 def publish_ssact_runtime_report(pipeline_s: float) -> dict[str, Any]:
                     latest_report = getattr(policy, "latest_ssact_control_report", None)
                     report = latest_report() if callable(latest_report) else {}
+                    if (
+                        not report
+                        and mask_act_checkpoint
+                        and details["experiment"].upper() == "SSACT-3"
+                    ):
+                        latest_stage_outputs = getattr(policy, "latest_stage_outputs", None)
+                        stage_outputs = latest_stage_outputs() if callable(latest_stage_outputs) else {}
+                        phase_tensor = stage_outputs.get("phase_probabilities")
+                        if phase_tensor is None:
+                            return {}
+
+                        phase_probabilities = phase_tensor.reshape(-1, phase_tensor.shape[-1])[0].tolist()
+                        transition_tensor = stage_outputs.get("transition_probabilities")
+                        transition_probabilities = (
+                            transition_tensor.reshape(-1, transition_tensor.shape[-1])[0].tolist()
+                            if transition_tensor is not None
+                            else []
+                        )
+                        event_tensor = stage_outputs.get("event_probabilities")
+                        event_probabilities = (
+                            event_tensor.reshape(-1, event_tensor.shape[-1])[0].tolist()
+                            if event_tensor is not None
+                            else []
+                        )
+                        progress_tensor = stage_outputs.get("progress")
+                        progress_values = progress_tensor.reshape(-1).tolist() if progress_tensor is not None else []
+                        phase_names = ("expose", "separate", "transport", "restore", "done")
+                        transition_names = ("stay", "advance", "rollback", "uncertain")
+                        phase_index = max(range(len(phase_probabilities)), key=phase_probabilities.__getitem__)
+                        transition_index = (
+                            max(range(len(transition_probabilities)), key=transition_probabilities.__getitem__)
+                            if transition_probabilities
+                            else 0
+                        )
+                        report = {
+                            "stage_only": True,
+                            "phase": phase_names[phase_index],
+                            "phase_confidence": float(phase_probabilities[phase_index]),
+                            "phase_probabilities": [float(value) for value in phase_probabilities],
+                            "transition": transition_names[transition_index],
+                            "transition_probabilities": [float(value) for value in transition_probabilities],
+                            "event_probabilities": [float(value) for value in event_probabilities],
+                            "progress": [float(value) for value in progress_values],
+                            "execution_steps": replan_steps,
+                            "adaptive_horizon_applied": False,
+                            "servo_mode": "off",
+                            "control_step": control_step,
+                            "elapsed_s": max(time.perf_counter() - start_t, 0.0),
+                            "pipeline_ms": pipeline_s * 1000.0,
+                        }
+                        self._put_ssact_status(report)
+                        with (run_dataset_root / "ssact_stage_runtime.jsonl").open(
+                            "a", encoding="utf-8"
+                        ) as stream:
+                            stream.write(json.dumps(report, ensure_ascii=False) + "\n")
+                        self.log_queue.put(
+                            "[SSACT-3] "
+                            f"phase={report['phase']}@{report['phase_confidence']:.3f}, "
+                            f"transition={report['transition']}, K={replan_steps}, "
+                            f"pipeline={report['pipeline_ms']:.1f} ms; "
+                            "StageFiLM active, CLF/QP disabled."
+                        )
+                        return report
                     if not report:
                         return {}
                     report = {
@@ -4177,11 +4233,8 @@ class EvalPolicyApp:
 
         cameras: dict[str, Any] = {}
         camera_width, camera_height = self._camera_size()
-        serial = self._resolve_realsense_serial() if self.enable_realsense.get() else ""
-        requested_front_path = self.vars["opencv_front"].get().strip()
-        front_path = self._resolve_opencv_identifier(requested_front_path)
-        front_is_realsense_video = bool(front_path and serial and self._is_realsense_video_path(front_path))
-        if self.enable_realsense.get() and (not front_path or front_is_realsense_video):
+        if self.enable_realsense.get():
+            serial = self._resolve_realsense_serial()
             cameras["front"] = RealSenseCameraConfig(
                 serial_number_or_name=serial,
                 width=camera_width,
@@ -4190,11 +4243,10 @@ class EvalPolicyApp:
                 color_mode=ColorMode.RGB,
                 use_depth=True,
             )
-            if front_is_realsense_video:
-                self.log_queue.put(
-                    f"OpenCV front {front_path} is a RealSense RGB node; using the RealSense SDK like the recorder."
-                )
+            self.log_queue.put(f"RealSense front serial {serial} selected; Linux /dev/video numbering is ignored.")
         else:
+            requested_front_path = self.vars["opencv_front"].get().strip()
+            front_path = self._resolve_opencv_identifier(requested_front_path)
             if not front_path:
                 raise ValueError("RealSense disabled: OpenCV front cannot be empty.")
             cameras["front"] = OpenCVCameraConfig(
@@ -4206,8 +4258,6 @@ class EvalPolicyApp:
             )
             if requested_front_path != front_path:
                 self.log_queue.put(f"OpenCV front {requested_front_path} resolved to {front_path}.")
-            if serial:
-                self.log_queue.put(f"Using OpenCV front RGB {front_path}; RealSense is not used for front RGB.")
 
         side_path = (
             self._resolve_opencv_side_path(self.vars["opencv_side"].get().strip())
@@ -4241,7 +4291,7 @@ class EvalPolicyApp:
             )
 
         candidates: list[tuple[int, Path]] = []
-        serial_nodes: list[str] = []
+        serial_nodes: list[Path] = []
         format_scores = {"MJPG": 4, "YUYV": 3, "RGB3": 2, "BGR3": 2}
         for path in sorted(Path("/dev").glob("video*")):
             try:
@@ -4265,8 +4315,15 @@ class EvalPolicyApp:
             )
             if not any(serial == value or serial in value for value in device_serials if value):
                 continue
-            serial_nodes.append(str(path))
+            serial_nodes.append(path)
 
+        # RealSense exposes its hardware serial through librealsense, but many
+        # kernels do not copy that serial into the V4L2 udev properties. Map the
+        # SDK device's physical USB root back to all of its /dev/video* nodes.
+        if not serial_nodes:
+            serial_nodes.extend(EvalPolicyApp._realsense_v4l2_nodes(serial))
+
+        for path in serial_nodes:
             try:
                 formats_result = subprocess.run(
                     ["v4l2-ctl", "-d", str(path), "--list-formats"],
@@ -4290,13 +4347,42 @@ class EvalPolicyApp:
                 candidates.append((score, path))
 
         if not candidates:
-            matched = ", ".join(serial_nodes) if serial_nodes else "none"
+            matched = ", ".join(map(str, serial_nodes)) if serial_nodes else "none"
             raise ValueError(
                 f"Could not find an RGB V4L2 node for camera serial {serial}. "
                 f"Matching video nodes: {matched}."
             )
         candidates.sort(key=lambda item: (-item[0], item[1].name))
         return str(candidates[0][1])
+
+    @staticmethod
+    def _realsense_v4l2_nodes(serial: str) -> list[Path]:
+        try:
+            import pyrealsense2 as rs
+        except ImportError:
+            return []
+
+        try:
+            device = next(
+                device
+                for device in rs.context().query_devices()
+                if device.get_info(rs.camera_info.serial_number) == serial
+            )
+            physical_port = Path(device.get_info(rs.camera_info.physical_port)).resolve()
+            # .../<usb-device>/<usb-interface>/video4linux/videoN
+            usb_device_root = physical_port.parents[2]
+        except (OSError, RuntimeError, StopIteration, ValueError):
+            return []
+
+        nodes: list[Path] = []
+        for path in sorted(Path("/dev").glob("video*")):
+            try:
+                device_path = (Path("/sys/class/video4linux") / path.name / "device").resolve()
+            except OSError:
+                continue
+            if usb_device_root == device_path or usb_device_root in device_path.parents:
+                nodes.append(path)
+        return nodes
 
     def _resolve_opencv_side_path(self, requested_path: str) -> str:
         if not requested_path:
@@ -5315,9 +5401,14 @@ class EvalPolicyApp:
             except queue.Empty:
                 break
             probabilities = report.get("phase_probabilities", [0.0] * 5)
+            phase_labels = (
+                ("E", "S", "T", "R", "D")
+                if report.get("stage_only")
+                else ("U", "E", "T", "R", "D")
+            )
             probability_text = " | ".join(
                 f"{label} {100.0 * float(value):.1f}%"
-                for label, value in zip(("U", "E", "T", "R", "D"), probabilities, strict=False)
+                for label, value in zip(phase_labels, probabilities, strict=False)
             )
             self.vars["ssact_phase"].set(
                 f"Phase: {str(report.get('phase', 'unknown')).upper()} "
@@ -5325,22 +5416,38 @@ class EvalPolicyApp:
             )
             self.vars["ssact_phase_probabilities"].set(probability_text)
             self.vars["ssact_control_status"].set(
-                f"K={report.get('execution_steps', '?')} | "
-                f"V={float(report.get('clf_value', 0.0)):.4f} -> "
-                f"{float(report.get('predicted_clf', 0.0)):.4f} | "
-                f"unc={float(report.get('dynamics_uncertainty', 0.0)):.3f} | "
-                f"innovation={float(report.get('normalized_innovation', 0.0)):.2f} | "
-                f"QP={'applied' if report.get('qp_active') else ('pass' if report.get('qp_evaluated') else 'gated')} | "
-                f"servo_applied={'YES' if report.get('servo_applied') else 'NO'} | "
-                f"semantic_delta={float(report.get('semantic_delta_l2', 0.0)):.4f} | "
-                f"action_correction={float(report.get('correction_max', 0.0)):.4f} | "
-                f"reason={','.join(report.get('horizon_reasons', []))}"
+                (
+                    f"K={report.get('execution_steps', '?')} | "
+                    f"transition={str(report.get('transition', 'unknown')).upper()} | "
+                    f"progress={','.join(f'{float(value):.2f}' for value in report.get('progress', []))} | "
+                    f"StageFiLM=ACTIVE | CLF/QP=OFF"
+                )
+                if report.get("stage_only")
+                else (
+                    f"K={report.get('execution_steps', '?')} | "
+                    f"V={float(report.get('clf_value', 0.0)):.4f} -> "
+                    f"{float(report.get('predicted_clf', 0.0)):.4f} | "
+                    f"unc={float(report.get('dynamics_uncertainty', 0.0)):.3f} | "
+                    f"innovation={float(report.get('normalized_innovation', 0.0)):.2f} | "
+                    f"QP={'applied' if report.get('qp_active') else ('pass' if report.get('qp_evaluated') else 'gated')} | "
+                    f"servo_applied={'YES' if report.get('servo_applied') else 'NO'} | "
+                    f"semantic_delta={float(report.get('semantic_delta_l2', 0.0)):.4f} | "
+                    f"action_correction={float(report.get('correction_max', 0.0)):.4f} | "
+                    f"reason={','.join(report.get('horizon_reasons', []))}"
+                )
             )
             self.vars["ssact_validation_status"].set(
-                f"phase RUNNING (learned) | dynamics RUNNING (learned delta_s) | "
-                f"horizon {'ACTIVE' if report.get('adaptive_horizon_applied') else 'FIXED'} (runtime rule) | "
-                f"hazard NOT TRAINED | servo {str(report.get('servo_mode', 'off')).upper()} | "
-                f"CLF-QP UNCALIBRATED"
+                (
+                    "phase/events/progress RUNNING (learned) | StageFiLM ACTIVE | "
+                    "horizon FIXED 4 | servo OFF | CLF-QP NOT USED"
+                )
+                if report.get("stage_only")
+                else (
+                    f"phase RUNNING (learned) | dynamics RUNNING (learned delta_s) | "
+                    f"horizon {'ACTIVE' if report.get('adaptive_horizon_applied') else 'FIXED'} (runtime rule) | "
+                    f"hazard NOT TRAINED | servo {str(report.get('servo_mode', 'off')).upper()} | "
+                    f"CLF-QP UNCALIBRATED"
+                )
             )
 
         if self.started_at is not None and (self.eval_running or self.process is not None):
@@ -5371,10 +5478,10 @@ class EvalPolicyApp:
     ) -> tuple[dict[str, Any], dict[str, str]]:
         import numpy as np
 
-        semantic_order = ("occluder", "object", "region", "tool")
+        semantic_order = ("background", "occluder", "object", "region", "tool")
         semantic_colors = {
             semantic: SEGMENTATION_PALETTE[idx]
-            for idx, semantic in enumerate(semantic_order, start=1)
+            for idx, semantic in enumerate(semantic_order)
         }
         masks_by_view: dict[str, dict[str, Any]] = {"front": {}, "side": {}}
         for key, value in model_masks.items():
@@ -5398,6 +5505,24 @@ class EvalPolicyApp:
                 continue
             available = [semantic for semantic in semantic_order if semantic in semantic_masks]
             probabilities = np.stack([semantic_masks[semantic] for semantic in available], axis=0)
+            if "background" in semantic_masks:
+                # SEM-1/SEM-1-V2 use a mutually exclusive five-class softmax.
+                # Reconstruct the same soft semantic map seen by the policy instead
+                # of thresholding foreground channels as independent binary masks.
+                probabilities /= np.clip(probabilities.sum(axis=0, keepdims=True), 1e-6, None)
+                palette = np.asarray([semantic_colors[semantic] for semantic in available], dtype=np.float32)
+                overlay = np.einsum("khw,kc->hwc", probabilities, palette)
+                overlays[view] = np.ascontiguousarray(np.clip(overlay, 0, 255).astype(np.uint8))
+                winning_index = probabilities.argmax(axis=0)
+                confidence = probabilities.max(axis=0)
+                summaries[view] = "soft-5 | " + ", ".join(
+                    f"{semantic} {100.0 * float((winning_index == idx).mean()):.1f}%"
+                    for idx, semantic in enumerate(available)
+                    if semantic != "background"
+                ) + f" | confidence {100.0 * float(confidence.mean()):.1f}%"
+                continue
+
+            # Legacy Mask-ACT experiments predict independent foreground masks.
             winning_index = probabilities.argmax(axis=0)
             confidence = probabilities.max(axis=0)
             overlay = np.zeros((*confidence.shape, 3), dtype=np.uint8)

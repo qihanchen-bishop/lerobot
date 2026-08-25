@@ -1178,7 +1178,11 @@ class MaskACTPolicy(nn.Module):
         return 1.0 - progress
 
     def latest_inference_mask_preview(self) -> dict[str, Tensor]:
-        """Return the latest inference masks as CPU uint8 probability maps."""
+        """Return the latest inference masks as CPU uint8 probability maps.
+
+        Multiclass semantic experiments also expose each view's background
+        probability so consumers can reconstruct the exact five-class soft map.
+        """
         return dict(self._latest_inference_mask_preview)
 
     def latest_semantic_rollout(self) -> dict[str, Tensor]:
@@ -1318,6 +1322,16 @@ class MaskACTPolicy(nn.Module):
             self._latest_inference_mask_preview = {
                 key: preview[idx] for idx, key in enumerate(self.mask_keys)
             }
+            for view_idx, rgb_key in enumerate(self.rgb_keys):
+                background = (
+                    probabilities_by_view[view_idx][0, 0]
+                    .detach()
+                    .clamp(0.0, 1.0)
+                    .mul(255)
+                    .to(dtype=torch.uint8)
+                    .cpu()
+                )
+                self._latest_inference_mask_preview[f"{rgb_key}_background"] = background
             probabilities_for_act = self.semantic_probabilities_for_act(probabilities_by_view)
             if self.uses_semantic_feature_fusion():
                 act_batch[IMAGE_FEATURE_RESIDUALS] = self.semantic_feature_residuals(

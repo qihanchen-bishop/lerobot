@@ -75,7 +75,7 @@ DEFAULT_LEFT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E1
 DEFAULT_LEFT_LEADER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E118729-if00"
 DEFAULT_RIGHT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E119029-if00"
 DEFAULT_RIGHT_LEADER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E121504-if00"
-DEFAULT_FRONT_CAMERA_ID = "v4l2-serial://244523062711/rgb"
+DEFAULT_FRONT_CAMERA_ID = "v4l2-serial://239222303378/rgb"
 DEFAULT_SIDE_CAMERA_ID = "v4l2-serial://202412231836/rgb"
 V4L2_SERIAL_PREFIX = "v4l2-serial://"
 TASK_CHOICES = ("cube", "screw", "paperball", "cube_r", "screw_r", "paperball_r")
@@ -1487,7 +1487,7 @@ class BimanualRecorder:
             )
 
         candidates: list[tuple[int, Path]] = []
-        serial_nodes: list[str] = []
+        serial_nodes: list[Path] = []
         format_scores = {"MJPG": 4, "YUYV": 3, "RGB3": 2, "BGR3": 2}
         for path in sorted(Path("/dev").glob("video*")):
             try:
@@ -1511,8 +1511,12 @@ class BimanualRecorder:
             )
             if not any(serial == value or serial in value for value in device_serials if value):
                 continue
-            serial_nodes.append(str(path))
+            serial_nodes.append(path)
 
+        if not serial_nodes:
+            serial_nodes.extend(BimanualRecorder._realsense_v4l2_nodes(serial))
+
+        for path in serial_nodes:
             try:
                 formats_result = subprocess.run(
                     ["v4l2-ctl", "-d", str(path), "--list-formats"],
@@ -1536,13 +1540,41 @@ class BimanualRecorder:
                 candidates.append((score, path))
 
         if not candidates:
-            matched = ", ".join(serial_nodes) if serial_nodes else "none"
+            matched = ", ".join(map(str, serial_nodes)) if serial_nodes else "none"
             raise ValueError(
                 f"Could not find an RGB V4L2 node for camera serial {serial}. "
                 f"Matching video nodes: {matched}."
             )
         candidates.sort(key=lambda item: (-item[0], item[1].name))
         return str(candidates[0][1])
+
+    @staticmethod
+    def _realsense_v4l2_nodes(serial: str) -> list[Path]:
+        try:
+            import pyrealsense2 as rs
+        except ImportError:
+            return []
+
+        try:
+            device = next(
+                device
+                for device in rs.context().query_devices()
+                if device.get_info(rs.camera_info.serial_number) == serial
+            )
+            physical_port = Path(device.get_info(rs.camera_info.physical_port)).resolve()
+            usb_device_root = physical_port.parents[2]
+        except (OSError, RuntimeError, StopIteration, ValueError):
+            return []
+
+        nodes: list[Path] = []
+        for path in sorted(Path("/dev").glob("video*")):
+            try:
+                device_path = (Path("/sys/class/video4linux") / path.name / "device").resolve()
+            except OSError:
+                continue
+            if usb_device_root == device_path or usb_device_root in device_path.parents:
+                nodes.append(path)
+        return nodes
 
     @staticmethod
     def _stable_opencv_identifier(identifier: str) -> str:
