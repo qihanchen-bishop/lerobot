@@ -124,6 +124,8 @@ class ACTConfig(PreTrainedConfig):
     kl_weight: float = 10.0
     metric_mode: str | None = None
     metric_dim: int = 2
+    image_camera_ids: list[int] | None = None
+    image_modality_ids: list[int] | None = None
 
     # Training preset
     optimizer_lr: float = 1e-5
@@ -159,6 +161,19 @@ class ACTConfig(PreTrainedConfig):
             )
         if self.metric_dim <= 0:
             raise ValueError(f"`metric_dim` must be positive. Got {self.metric_dim}.")
+        image_count = len(self.image_features)
+        for name, ids in (
+            ("image_camera_ids", self.image_camera_ids),
+            ("image_modality_ids", self.image_modality_ids),
+        ):
+            if ids is None:
+                continue
+            if len(ids) != image_count:
+                raise ValueError(
+                    f"`{name}` must contain one id per image feature ({image_count}), got {ids}."
+                )
+            if any(identifier < 0 for identifier in ids):
+                raise ValueError(f"`{name}` values must be non-negative, got {ids}.")
 
     def get_optimizer_preset(self) -> AdamWConfig:
         return AdamWConfig(

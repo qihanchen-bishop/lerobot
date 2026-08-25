@@ -376,6 +376,16 @@ class ACT(nn.Module):
         self.encoder_1d_feature_pos_embed = nn.Embedding(n_1d_tokens, config.dim_model)
         if self.config.image_features:
             self.encoder_cam_feat_pos_embed = ACTSinusoidalPositionEmbedding2d(config.dim_model // 2)
+            self.image_camera_embed = (
+                nn.Embedding(max(config.image_camera_ids) + 1, config.dim_model)
+                if config.image_camera_ids is not None
+                else None
+            )
+            self.image_modality_embed = (
+                nn.Embedding(max(config.image_modality_ids) + 1, config.dim_model)
+                if config.image_modality_ids is not None
+                else None
+            )
 
         # Transformer decoder.
         # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
@@ -515,6 +525,12 @@ class ACT(nn.Module):
                     cam_features = cam_features + residual
                 cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
                 cam_features = self.encoder_img_feat_input_proj(cam_features)
+                if self.image_camera_embed is not None:
+                    camera_id = self.config.image_camera_ids[image_idx]
+                    cam_features = cam_features + self.image_camera_embed.weight[camera_id].view(1, -1, 1, 1)
+                if self.image_modality_embed is not None:
+                    modality_id = self.config.image_modality_ids[image_idx]
+                    cam_features = cam_features + self.image_modality_embed.weight[modality_id].view(1, -1, 1, 1)
 
                 # Rearrange features to (sequence, batch, dim).
                 cam_features = einops.rearrange(cam_features, "b c h w -> (h w) b c")

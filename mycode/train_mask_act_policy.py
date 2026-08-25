@@ -21,6 +21,9 @@ Experiments:
       the original RGB views through one shared image backbone; no pooled RGB latent is used.
   SEM-1-V2: Each view keeps all five soft class probabilities. A lightweight semantic adapter maps
       them to a residual for the corresponding RGB ResNet feature map, so ACT receives no extra image tokens.
+  ViewFus-v1: A shared two-view U-Net predicts semantics, then a homography-aligned fusion adapter
+      distills the label-derived side-assisted front map. ACT sees front RGB, side RGB, and the fused
+      front semantic map through one shared ResNet. Teacher forcing protects ACT while segmentation learns.
   ASEM-1: Same inputs and losses as SEM-1, but the ACT action L1 gradient also supervises the
       segmentation network. The task gradient is warmed up, norm-limited relative to the supervised
       segmentation gradient, and projected when it conflicts with segmentation.
@@ -105,6 +108,8 @@ CANONICAL_SEMANTIC_MASK_KEYS = [
 ]
 DEFAULT_MASK_KEYS = CANONICAL_SEMANTIC_MASK_KEYS
 STAGE_AWARE_EXPERIMENTS = {"SSACT-3"}
+VIEW_FUSION_EXPERIMENTS = {"VIEWFUS-V1"}
+VIEWFUS_FUSED_FRONT_KEY = "observation.images.front_fused_semantic"
 SEMANTIC_FEATURE_FUSION_EXPERIMENTS = {"SEM-1-V2", *STAGE_AWARE_EXPERIMENTS}
 SEMANTIC_EXPERIMENTS = {
     "SEM-1",
@@ -113,6 +118,7 @@ SEMANTIC_EXPERIMENTS = {
     "SSACT-1",
     "SSACT-3",
     "SEM-2",
+    "VIEWFUS-V1",
 }
 ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS = {"ASEM-1"}
 PREDICTIVE_SEMANTIC_EXPERIMENTS = {"SSACT-1"}
@@ -483,6 +489,12 @@ class MaskActRunConfig:
     semantic_adapter_base_channels: int
     semantic_fusion_warmup_steps: int
     semantic_fusion_ramp_steps: int
+    viewfusion_homography_json: str
+    viewfusion_homography: list[list[float]] | None
+    viewfusion_adapter_base_channels: int
+    viewfusion_loss_weight: float
+    viewfusion_teacher_forcing_steps: int
+    viewfusion_teacher_forcing_ramp_steps: int
     action_to_seg_grad_ratio: float
     action_to_seg_warmup_steps: int
     action_to_seg_ramp_steps: int
@@ -588,6 +600,84 @@ class UNetSegNet(nn.Module):
         x = self.up2(x, x2)
         x = self.up3(x, x1)
         return self.out_conv(x), latent
+
+
+class HomographyViewFusionAdapter(nn.Module):
+    """Fuse soft semantics using a calibrated side-object right-bottom position prior."""
+
+    def __init__(self, num_classes: int, homography: list[list[float]], base_channels: int = 16):
+        super().__init__()
+        if base_channels <= 0:
+            raise ValueError(f"View-fusion base channels must be positive, got {base_channels}.")
+        matrix = torch.as_tensor(homography, dtype=torch.float32)
+        if matrix.shape != (3, 3) or not torch.isfinite(matrix).all():
+            raise ValueError(f"Expected a finite 3x3 side-to-front homography, got {matrix}.")
+        self.register_buffer("side_to_front_homography", matrix)
+        self.object_class_index = 2  # background, occluder, object, region, tool
+        c1, c2, c3 = base_channels, base_channels * 2, base_channels * 4
+        self.inc = DoubleConv(2 * num_classes + 1, c1)
+        self.down1 = Down(c1, c2)
+        self.down2 = Down(c2, c3)
+        self.up1 = Up(c3, c2, c2)
+        self.up2 = Up(c2, c1, c1)
+        self.output = nn.Conv2d(c1, 3, kernel_size=1)
+
+    def projected_object_prior(self, side_probabilities: Tensor) -> Tensor:
+        batch_size, num_classes, height, width = side_probabilities.shape
+        if self.object_class_index >= num_classes:
+            raise ValueError(
+                f"Object class index {self.object_class_index} is invalid for {num_classes} classes."
+            )
+        yy, xx = torch.meshgrid(
+            torch.arange(height, device=side_probabilities.device, dtype=side_probabilities.dtype),
+            torch.arange(width, device=side_probabilities.device, dtype=side_probabilities.dtype),
+            indexing="ij",
+        )
+        x_normalized = xx / max(width - 1, 1)
+        y_normalized = yy / max(height - 1, 1)
+        corner_bias = torch.exp(8.0 * (x_normalized + y_normalized - 2.0))
+        object_probability = side_probabilities[:, self.object_class_index]
+        anchor_weights = object_probability.pow(4) * corner_bias
+        weight_sum = anchor_weights.sum(dim=(-2, -1)).clamp_min(1e-6)
+        side_x = (anchor_weights * xx).sum(dim=(-2, -1)) / weight_sum
+        side_y = (anchor_weights * yy).sum(dim=(-2, -1)) / weight_sum
+        side_points = torch.stack([side_x, side_y, torch.ones_like(side_x)], dim=-1)
+        front_points = side_points @ self.side_to_front_homography.to(side_probabilities).transpose(0, 1)
+        denominator = front_points[:, 2]
+        denominator = torch.where(
+            denominator.abs() < 1e-6,
+            torch.where(
+                denominator < 0,
+                -torch.ones_like(denominator),
+                torch.ones_like(denominator),
+            )
+            * 1e-6,
+            denominator,
+        )
+        front_x = front_points[:, 0] / denominator
+        front_y = front_points[:, 1] / denominator
+        sigma = max(height, width) * 0.025
+        distance_squared = (
+            (xx.unsqueeze(0) - front_x[:, None, None]).square()
+            + (yy.unsqueeze(0) - front_y[:, None, None]).square()
+        )
+        visibility = (
+            object_probability.sum(dim=(-2, -1)) / max(height * width * 0.0008, 1.0)
+        ).clamp(0.0, 1.0)
+        return (
+            torch.exp(-0.5 * distance_squared / max(sigma * sigma, 1e-6))
+            * visibility[:, None, None]
+        ).unsqueeze(1)
+
+    def forward(self, front_probabilities: Tensor, side_probabilities: Tensor) -> Tensor:
+        object_prior = self.projected_object_prior(side_probabilities)
+        side_context = side_probabilities.mean(dim=(-2, -1), keepdim=True).expand_as(side_probabilities)
+        x1 = self.inc(torch.cat([front_probabilities, side_context, object_prior], dim=1))
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        fused = self.up1(x3, x2)
+        fused = self.up2(fused, x1)
+        return torch.sigmoid(self.output(fused))
 
 
 class SemanticAdapterDownsample(nn.Module):
@@ -780,6 +870,11 @@ class MaskACTPolicy(nn.Module):
         semantic_adapter_base_channels: int,
         semantic_fusion_warmup_steps: int,
         semantic_fusion_ramp_steps: int,
+        viewfusion_homography: list[list[float]] | None,
+        viewfusion_adapter_base_channels: int,
+        viewfusion_loss_weight: float,
+        viewfusion_teacher_forcing_steps: int,
+        viewfusion_teacher_forcing_ramp_steps: int,
         action_to_seg_grad_ratio: float,
         action_to_seg_warmup_steps: int,
         action_to_seg_ramp_steps: int,
@@ -828,6 +923,9 @@ class MaskACTPolicy(nn.Module):
         self.semantic_adapter_base_channels = semantic_adapter_base_channels
         self.semantic_fusion_warmup_steps = semantic_fusion_warmup_steps
         self.semantic_fusion_ramp_steps = semantic_fusion_ramp_steps
+        self.viewfusion_loss_weight = viewfusion_loss_weight
+        self.viewfusion_teacher_forcing_steps = viewfusion_teacher_forcing_steps
+        self.viewfusion_teacher_forcing_ramp_steps = viewfusion_teacher_forcing_ramp_steps
         self.action_to_seg_grad_ratio = action_to_seg_grad_ratio
         self.action_to_seg_warmup_steps = action_to_seg_warmup_steps
         self.action_to_seg_ramp_steps = action_to_seg_ramp_steps
@@ -878,6 +976,7 @@ class MaskACTPolicy(nn.Module):
             "4C",
             "5",
             *SEMANTIC_EXPERIMENTS,
+            *VIEW_FUSION_EXPERIMENTS,
         }
         if self.experiment not in valid_experiments:
             raise ValueError(
@@ -890,6 +989,13 @@ class MaskACTPolicy(nn.Module):
                 "semantic fusion warmup and ramp steps must be non-negative, got "
                 f"{self.semantic_fusion_warmup_steps} and {self.semantic_fusion_ramp_steps}."
             )
+        if self.experiment in VIEW_FUSION_EXPERIMENTS:
+            if viewfusion_homography is None:
+                raise ValueError("ViewFus-v1 requires a side-to-front homography.")
+            if self.viewfusion_loss_weight < 0:
+                raise ValueError("View-fusion loss weight must be non-negative.")
+            if self.viewfusion_teacher_forcing_steps < 0 or self.viewfusion_teacher_forcing_ramp_steps < 0:
+                raise ValueError("View-fusion teacher-forcing step counts must be non-negative.")
         if not 0.0 <= self.action_to_seg_grad_ratio <= 1.0:
             raise ValueError(
                 "action_to_seg_grad_ratio must be between 0 and 1, "
@@ -975,6 +1081,15 @@ class MaskACTPolicy(nn.Module):
                     output_channels=backbone_channels,
                     base_channels=self.semantic_adapter_base_channels,
                 )
+        self.viewfusion_adapter = (
+            HomographyViewFusionAdapter(
+                num_classes=semantic_output_channels,
+                homography=viewfusion_homography,
+                base_channels=viewfusion_adapter_base_channels,
+            )
+            if self.experiment in VIEW_FUSION_EXPERIMENTS
+            else None
+        )
         if self.uses_semantic_maps():
             palette = [SEMANTIC_PALETTE_BY_CLASS["background"]]
             palette.extend(SEMANTIC_PALETTE_BY_CLASS[suffix] for suffix in self.mask_suffixes)
@@ -1177,6 +1292,20 @@ class MaskACTPolicy(nn.Module):
         )
         return 1.0 - progress
 
+    def scheduled_viewfusion_teacher_forcing_ratio(self) -> float:
+        if self.experiment not in VIEW_FUSION_EXPERIMENTS:
+            return 0.0
+        if self._training_step <= self.viewfusion_teacher_forcing_steps:
+            return 1.0
+        if self.viewfusion_teacher_forcing_ramp_steps == 0:
+            return 0.0
+        progress = min(
+            (self._training_step - self.viewfusion_teacher_forcing_steps)
+            / self.viewfusion_teacher_forcing_ramp_steps,
+            1.0,
+        )
+        return 1.0 - progress
+
     def latest_inference_mask_preview(self) -> dict[str, Tensor]:
         """Return the latest inference masks as CPU uint8 probability maps.
 
@@ -1333,7 +1462,18 @@ class MaskACTPolicy(nn.Module):
                 )
                 self._latest_inference_mask_preview[f"{rgb_key}_background"] = background
             probabilities_for_act = self.semantic_probabilities_for_act(probabilities_by_view)
-            if self.uses_semantic_feature_fusion():
+            if self.experiment in VIEW_FUSION_EXPERIMENTS:
+                if self.viewfusion_adapter is None:
+                    raise RuntimeError("ViewFus-v1 fusion adapter is missing.")
+                if len(probabilities_for_act) != 2:
+                    raise RuntimeError("ViewFus-v1 inference requires front and side probabilities.")
+                fused_front = self.viewfusion_adapter(
+                    probabilities_for_act[0], probabilities_for_act[1]
+                )
+                act_batch[VIEWFUS_FUSED_FRONT_KEY] = self.normalize_visual_like(
+                    fused_front, VIEWFUS_FUSED_FRONT_KEY
+                )
+            elif self.uses_semantic_feature_fusion():
                 act_batch[IMAGE_FEATURE_RESIDUALS] = self.semantic_feature_residuals(
                     probabilities_for_act,
                     scale=1.0,
@@ -1451,6 +1591,7 @@ class MaskACTPolicy(nn.Module):
             "ASEM-1",
             "SSACT-1",
             "SSACT-3",
+            "VIEWFUS-V1",
         }
 
     def normalize_visual_like(self, image: Tensor, key: str) -> Tensor:
@@ -1876,6 +2017,7 @@ class MaskACTPolicy(nn.Module):
             quality_validity = raw_batch.get("mask_quality_current_valid")
             quality_scores = raw_batch.get("mask_quality_current_score")
             class_quality_by_view = None
+            fusion_sample_quality = None
             quality_logs = {}
             if self.mask_quality_weighting == "soft" and quality_scores is not None:
                 quality_scores = quality_scores.to(device=device, dtype=torch.float32)
@@ -1887,6 +2029,7 @@ class MaskACTPolicy(nn.Module):
                 class_quality_by_view = [
                     quality_weights[:, view_idx] for view_idx in range(len(self.rgb_keys))
                 ]
+                fusion_sample_quality = quality_weights.mean(dim=(1, 2))
                 quality_logs = {
                     "mask_quality_current_score": float(quality_scores.mean().cpu()),
                     "mask_quality_current_weight": float(quality_weights.mean().cpu()),
@@ -1900,6 +2043,7 @@ class MaskACTPolicy(nn.Module):
                     quality_validity[:, view_idx].to(dtype=torch.float32)
                     for view_idx in range(len(self.rgb_keys))
                 ]
+                fusion_sample_quality = quality_validity.to(dtype=torch.float32).mean(dim=(1, 2))
                 quality_logs = {
                     "mask_quality_current_valid_ratio": float(quality_validity.float().mean().cpu()),
                     "mask_quality_current_score": float(raw_batch["mask_quality_current_score"].float().mean()),
@@ -2003,7 +2147,52 @@ class MaskACTPolicy(nn.Module):
                 }
             semantic_fusion_logs = {}
             probabilities_for_act = self.semantic_probabilities_for_act(probabilities_by_view)
-            if self.uses_semantic_feature_fusion():
+            viewfusion_loss = None
+            if self.experiment in VIEW_FUSION_EXPERIMENTS:
+                if self.viewfusion_adapter is None or len(probabilities_for_act) != 2:
+                    raise RuntimeError("ViewFus-v1 requires a two-view fusion adapter.")
+                teacher_ratio = self.scheduled_viewfusion_teacher_forcing_ratio()
+                teacher_probabilities = [
+                    F.one_hot(target, num_classes=len(self.mask_suffixes) + 1)
+                    .permute(0, 3, 1, 2)
+                    .to(dtype=torch.float32)
+                    for target in semantic_targets
+                ]
+                fusion_inputs = [
+                    teacher_ratio * teacher + (1.0 - teacher_ratio) * predicted.detach()
+                    for teacher, predicted in zip(
+                        teacher_probabilities, probabilities_for_act, strict=True
+                    )
+                ]
+                predicted_fused_front = self.viewfusion_adapter(*fusion_inputs)
+                fused_front_target = self._current_visual_frame(
+                    raw_batch[VIEWFUS_FUSED_FRONT_KEY]
+                ).to(device=device, dtype=torch.float32).clamp(0.0, 1.0)
+                fusion_error = F.smooth_l1_loss(
+                    predicted_fused_front, fused_front_target, reduction="none"
+                ).mean(dim=1)
+                foreground_weight = 1.0 + 4.0 * fused_front_target.amax(dim=1).gt(0.02)
+                fusion_error = (fusion_error * foreground_weight).mean(dim=(-2, -1))
+                if fusion_sample_quality is None:
+                    viewfusion_loss = fusion_error.mean()
+                else:
+                    viewfusion_loss = (
+                        fusion_error * fusion_sample_quality
+                    ).sum() / fusion_sample_quality.sum().clamp_min(1e-6)
+
+                normalized_prediction = self.normalize_visual_like(
+                    predicted_fused_front.detach(), VIEWFUS_FUSED_FRONT_KEY
+                )
+                act_batch[VIEWFUS_FUSED_FRONT_KEY] = (
+                    teacher_ratio * batch[VIEWFUS_FUSED_FRONT_KEY]
+                    + (1.0 - teacher_ratio) * normalized_prediction
+                )
+                semantic_fusion_logs = {
+                    "viewfusion_loss": float(viewfusion_loss.detach().cpu()),
+                    "viewfusion_teacher_forcing_ratio": teacher_ratio,
+                    "viewfusion_predicted_input_ratio": 1.0 - teacher_ratio,
+                }
+            elif self.uses_semantic_feature_fusion():
                 semantic_fusion_scale = self.scheduled_semantic_fusion_scale()
                 semantic_residuals = self.semantic_feature_residuals(
                     probabilities_for_act,
@@ -2078,6 +2267,8 @@ class MaskACTPolicy(nn.Module):
 
             action_loss, action_logs = self.act_policy(act_batch)
             loss = self.action_loss_weight * action_loss + self.seg_loss_weight * seg_loss
+            if viewfusion_loss is not None:
+                loss = loss + self.viewfusion_loss_weight * viewfusion_loss
             if phase_loss is not None:
                 loss = loss + self.phase_loss_weight * phase_loss
             if stage_total_loss is not None:
@@ -2339,6 +2530,7 @@ def parse_args() -> argparse.Namespace:
             "SSACT-1",
             "SSACT-3",
             "SEM-2",
+            "VIEWFUS-V1",
         ],
         required=True,
     )
@@ -2408,6 +2600,26 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=10_000,
         help="SEM-1-V2 steps used to linearly ramp semantic residual fusion from zero to full strength.",
+    )
+    parser.add_argument(
+        "--viewfusion-homography-json",
+        type=Path,
+        default=Path("outputs/side_to_front_homography/homography_side_to_front.json"),
+        help="Quality-filtered side-right-bottom to front-right-bottom homography for ViewFus-v1.",
+    )
+    parser.add_argument("--viewfusion-adapter-base-channels", type=int, default=16)
+    parser.add_argument("--viewfusion-loss-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--viewfusion-teacher-forcing-steps",
+        type=int,
+        default=20_000,
+        help="Steps for which ACT and the fusion adapter use only dataset semantic labels.",
+    )
+    parser.add_argument(
+        "--viewfusion-teacher-forcing-ramp-steps",
+        type=int,
+        default=20_000,
+        help="Steps used to switch ACT/fusion inputs from labels to model predictions.",
     )
     parser.add_argument(
         "--action-to-seg-grad-ratio",
@@ -2538,6 +2750,22 @@ def validate_image_size(image_size: list[int] | tuple[int, int] | None) -> tuple
     return height, width
 
 
+def load_viewfusion_homography(args: argparse.Namespace) -> None:
+    if args.experiment.upper() not in VIEW_FUSION_EXPERIMENTS:
+        args.viewfusion_homography = None
+        return
+    path = args.viewfusion_homography_json.expanduser().resolve()
+    payload = json.loads(path.read_text())
+    anchor = payload.get("calibration", {}).get("anchor")
+    if anchor != "side_right_bottom_to_front_right_bottom":
+        raise ValueError(f"ViewFus-v1 requires the right-bottom homography, got {anchor!r} from {path}.")
+    matrix = np.asarray(payload["homography_side_to_front"], dtype=np.float64)
+    if matrix.shape != (3, 3) or not np.isfinite(matrix).all():
+        raise ValueError(f"Invalid homography in {path}: {matrix}.")
+    args.viewfusion_homography_json = path
+    args.viewfusion_homography = matrix.tolist()
+
+
 def resize_training_visuals(
     raw_batch: dict[str, Any],
     rgb_keys: list[str],
@@ -2600,6 +2828,12 @@ def normalize_dataset_keys(args: argparse.Namespace, source_root: Path) -> None:
     args.rgb_keys = normalized_rgb_keys
     args.rgb_key = args.rgb_keys[0]
 
+    if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS and VIEWFUS_FUSED_FRONT_KEY not in available_keys:
+        raise KeyError(
+            f"{args.experiment} requires derived feature '{VIEWFUS_FUSED_FRONT_KEY}'. Run "
+            "mycode/precompute_viewfus_front_semantic.py first."
+        )
+
     missing_mask_keys = [key for key in args.mask_target_keys if key not in available_keys]
     if missing_mask_keys:
         image_keys = sorted(key for key in available_keys if key.startswith("observation.images."))
@@ -2659,6 +2893,10 @@ def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
         return [*semantic_keys, *args.rgb_keys]
     if experiment in {"SEM-1-V2", "SSACT-3"}:
         return list(args.rgb_keys)
+    if experiment in VIEW_FUSION_EXPERIMENTS:
+        if len(args.rgb_keys) != 2:
+            raise ValueError(f"{experiment} requires exactly front and side RGB keys, got {args.rgb_keys}.")
+        return [args.rgb_keys[0], args.rgb_keys[1], VIEWFUS_FUSED_FRONT_KEY]
     if experiment == "SEM-2":
         return semantic_keys
     if experiment in {"1A", "1B"}:
@@ -2747,6 +2985,18 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
     if act_uses_phase_env_state(args.experiment):
         input_features[OBS_ENV_STATE] = PolicyFeature(type=FeatureType.ENV, shape=(5,))
 
+    viewfusion_homography = getattr(args, "viewfusion_homography", None)
+    if viewfusion_homography is not None and args.image_size is not None:
+        original_shape = features[args.rgb_keys[0]].shape
+        original_height, original_width = original_shape[-2:]
+        resized_height, resized_width = args.image_size
+        scale = np.diag(
+            [resized_width / original_width, resized_height / original_height, 1.0]
+        )
+        viewfusion_homography = (
+            scale @ np.asarray(viewfusion_homography, dtype=np.float64) @ np.linalg.inv(scale)
+        ).tolist()
+
     policy_cfg = make_policy_config(
         "act",
         input_features=input_features,
@@ -2758,6 +3008,8 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         pretrained_backbone_weights=args.pretrained_backbone_weights,
         metric_mode=act_metric_mode(args.experiment),
         metric_dim=2,
+        image_camera_ids=[0, 1, 0] if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS else None,
+        image_modality_ids=[0, 0, 1] if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS else None,
     )
     act_policy = ACTPolicy(policy_cfg)
     return MaskACTPolicy(
@@ -2778,6 +3030,13 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         semantic_adapter_base_channels=getattr(args, "semantic_adapter_base_channels", 32),
         semantic_fusion_warmup_steps=getattr(args, "semantic_fusion_warmup_steps", 20_000),
         semantic_fusion_ramp_steps=getattr(args, "semantic_fusion_ramp_steps", 10_000),
+        viewfusion_homography=viewfusion_homography,
+        viewfusion_adapter_base_channels=getattr(args, "viewfusion_adapter_base_channels", 16),
+        viewfusion_loss_weight=getattr(args, "viewfusion_loss_weight", 1.0),
+        viewfusion_teacher_forcing_steps=getattr(args, "viewfusion_teacher_forcing_steps", 20_000),
+        viewfusion_teacher_forcing_ramp_steps=getattr(
+            args, "viewfusion_teacher_forcing_ramp_steps", 20_000
+        ),
         action_to_seg_grad_ratio=getattr(args, "action_to_seg_grad_ratio", 0.1),
         action_to_seg_warmup_steps=getattr(args, "action_to_seg_warmup_steps", 20_000),
         action_to_seg_ramp_steps=getattr(args, "action_to_seg_ramp_steps", 20_000),
@@ -2840,6 +3099,12 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         semantic_adapter_base_channels=args.semantic_adapter_base_channels,
         semantic_fusion_warmup_steps=args.semantic_fusion_warmup_steps,
         semantic_fusion_ramp_steps=args.semantic_fusion_ramp_steps,
+        viewfusion_homography_json=str(args.viewfusion_homography_json),
+        viewfusion_homography=args.viewfusion_homography,
+        viewfusion_adapter_base_channels=args.viewfusion_adapter_base_channels,
+        viewfusion_loss_weight=args.viewfusion_loss_weight,
+        viewfusion_teacher_forcing_steps=args.viewfusion_teacher_forcing_steps,
+        viewfusion_teacher_forcing_ramp_steps=args.viewfusion_teacher_forcing_ramp_steps,
         action_to_seg_grad_ratio=args.action_to_seg_grad_ratio,
         action_to_seg_warmup_steps=args.action_to_seg_warmup_steps,
         action_to_seg_ramp_steps=args.action_to_seg_ramp_steps,
@@ -2887,6 +3152,21 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         payload = asdict(run_cfg)
         payload["dataset_view_image_keys"] = image_keys_in_view
         payload["act_image_keys"] = act_image_keys_for_experiment(args)
+        if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS:
+            payload["view_fusion"] = {
+                "version": "ViewFus-v1",
+                "fused_front_key": VIEWFUS_FUSED_FRONT_KEY,
+                "semantic_source": "teacher_labels_then_model_predictions",
+                "segmentation_module": "shared_two_view_unet",
+                "fusion_module": "homography_aligned_fusion_adapter",
+                "teacher_forcing_steps": args.viewfusion_teacher_forcing_steps,
+                "teacher_forcing_ramp_steps": args.viewfusion_teacher_forcing_ramp_steps,
+                "shared_visual_backbone": True,
+                "image_camera_ids": [0, 1, 0],
+                "image_modality_ids": [0, 0, 1],
+                "camera_id_meanings": {"0": "front", "1": "side"},
+                "modality_id_meanings": {"0": "rgb", "1": "semantic_rgb"},
+            }
         if args.mask_quality_dir is not None:
             quality_summary_path = args.mask_quality_dir.expanduser().resolve() / "summary.json"
             if not quality_summary_path.is_file():
@@ -3224,6 +3504,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         torch.cuda.manual_seed_all(args.seed)
     source_root = args.root.resolve()
     normalize_dataset_keys(args, source_root)
+    load_viewfusion_homography(args)
     mask_suffixes, _ = build_mask_layout(list(args.rgb_keys), list(args.mask_target_keys))
     if (
         args.experiment in (PREDICTIVE_SEMANTIC_EXPERIMENTS | STAGE_AWARE_EXPERIMENTS)
@@ -3254,6 +3535,12 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         raise ValueError(
             "--semantic-fusion-warmup-steps and --semantic-fusion-ramp-steps must be non-negative."
         )
+    if args.viewfusion_adapter_base_channels <= 0:
+        raise ValueError("--viewfusion-adapter-base-channels must be positive.")
+    if args.viewfusion_loss_weight < 0:
+        raise ValueError("--viewfusion-loss-weight must be non-negative.")
+    if args.viewfusion_teacher_forcing_steps < 0 or args.viewfusion_teacher_forcing_ramp_steps < 0:
+        raise ValueError("ViewFus-v1 teacher-forcing step counts must be non-negative.")
     if not 0.0 < args.mask_quality_full_score <= 1.0:
         raise ValueError(
             f"--mask-quality-full-score must be in (0, 1], got {args.mask_quality_full_score}."
@@ -3326,7 +3613,17 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     else:
         args.stage_feature_dim = None
 
-    image_keys_in_view = sorted({*args.rgb_keys, *args.mask_target_keys})
+    image_keys_in_view = sorted(
+        {
+            *args.rgb_keys,
+            *args.mask_target_keys,
+            *(
+                [VIEWFUS_FUSED_FRONT_KEY]
+                if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS
+                else []
+            ),
+        }
+    )
     view_root = args.view_root or (args.output_dir.parent / "dataset_views" / args.output_dir.name)
     filtered_root = make_filtered_dataset_view(
         source_root=source_root,
@@ -3448,6 +3745,14 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             )
         else:
             print(f"{semantic_description}; action gradient to semantic map: disabled.")
+        if args.experiment in VIEW_FUSION_EXPERIMENTS:
+            print(
+                "View fusion: shared two-view U-Net -> fixed-homography fusion adapter -> fused front SEG; "
+                f"fusion_loss_weight={args.viewfusion_loss_weight:g}; label teacher forcing="
+                f"{args.viewfusion_teacher_forcing_steps} + "
+                f"{args.viewfusion_teacher_forcing_ramp_steps} ramp steps; camera IDs=[0, 1, 0], "
+                "modality IDs=[0, 0, 1]."
+            )
         if args.experiment in SEMANTIC_FEATURE_FUSION_EXPERIMENTS:
             print(
                 "Semantic fusion: five soft class probabilities -> shared lightweight adapter -> "
@@ -3525,10 +3830,18 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 raw_batch = phase_store.add_batch_phase(raw_batch)
             if stage_store is not None:
                 raw_batch = stage_store.add_batch(raw_batch)
+            resize_mask_keys = [
+                *args.mask_target_keys,
+                *(
+                    [VIEWFUS_FUSED_FRONT_KEY]
+                    if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS
+                    else []
+                ),
+            ]
             raw_batch = resize_training_visuals(
                 raw_batch,
                 rgb_keys=args.rgb_keys,
-                mask_keys=args.mask_target_keys,
+                mask_keys=resize_mask_keys,
                 image_size=args.image_size,
             )
             batch = preprocessor(raw_batch)
