@@ -16,6 +16,7 @@ from lerobot.policies.factory import make_pre_post_processors
 
 from train_mask_act_policy import (
     MaskACTPolicy,
+    SEMANTIC_EXPERIMENTS,
     act_image_keys_for_experiment,
     make_policy,
     reshape_visual_stats_for_channel_first,
@@ -74,8 +75,11 @@ def _find_metadata_root(run_cfg: dict[str, Any], project_root: Path) -> Path:
         "action",
         *rgb_keys,
         *run_cfg["state_keys"],
-        *run_cfg["mask_target_keys"],
     }
+    # SEM policies predict their masks from RGB at inference. Their ACT
+    # pre/post-processors only require the source RGB/state/action statistics.
+    if str(run_cfg.get("experiment", "")).upper() not in SEMANTIC_EXPERIMENTS:
+        required.update(run_cfg["mask_target_keys"])
     configured = Path(run_cfg["root"]).expanduser()
     direct_candidates = [
         configured,

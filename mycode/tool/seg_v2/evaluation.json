@@ -1,0 +1,45 @@
+{
+  "best_checkpoint": "/home/qihan/data/sam2/segdata/temp/bettersetup/semantic_seg_light_v2/best.pt",
+  "best_epoch": 21,
+  "split_unit": "episode",
+  "overall": {
+    "loss": 0.020717131368071642,
+    "miou": 0.9464462405355573,
+    "pixel_acc": 0.9935259885204082,
+    "per_class_iou": {
+      "background": 0.9899968303741976,
+      "occluder": 0.9843943577712997,
+      "object": 0.8320433167423114,
+      "region": 0.9921850093421257,
+      "tool": 0.9336116884478516
+    }
+  },
+  "views": {
+    "observation.images.front": {
+      "samples": 1855,
+      "loss": 0.02198434475397646,
+      "miou": 0.9499883478962966,
+      "pixel_acc": 0.9929297506738545,
+      "per_class_iou": {
+        "background": 0.9875465621660038,
+        "occluder": 0.9846455947335893,
+        "object": 0.8508494438537528,
+        "region": 0.9943403680751648,
+        "tool": 0.932559770652972
+      }
+    },
+    "observation.images.side": {
+      "samples": 1869,
+      "loss": 0.019459413706363362,
+      "miou": 0.9427337180168407,
+      "pixel_acc": 0.9941177601658641,
+      "per_class_iou": {
+        "background": 0.9919220510891903,
+        "occluder": 0.9840680780781232,
+        "object": 0.8191762742479285,
+        "region": 0.9836054993802472,
+        "tool": 0.9348966872887139
+      }
+    }
+  }
+}

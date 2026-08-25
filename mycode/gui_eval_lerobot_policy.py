@@ -41,7 +41,9 @@ DEFAULT_DIFFUSION_FUSION_HISTORY_WEIGHT = 0.0
 DEFAULT_DIFFUSION_OBSERVATION_WARMUP_FRAMES = 1
 DEFAULT_DIFFUSION_EXECUTION_MODE = "asynchronous"
 DEFAULT_CAMERA_READ_MODE = "wait_new_frame"
-DEFAULT_SEGMENTATION_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "best.pt"
+SEGMENTATION_V1_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "seg_v1" / "best.pt"
+SEGMENTATION_V2_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "seg_v2" / "best.pt"
+DEFAULT_SEGMENTATION_MODEL_PATH = SEGMENTATION_V1_MODEL_PATH
 SEGMENTATION_OBJECT_PRESENT_MIN_RATIO = 0.001
 SEGMENTATION_SCREW_OBJECT_PRESENT_MIN_RATIO = 0.0008
 SEGMENTATION_OCCLUDER_COMPLETE_RATIO = 0.50
@@ -54,6 +56,19 @@ DEFAULT_RIGHT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E
 DEFAULT_FRONT_CAMERA_ID = "v4l2-serial://244523062711/rgb"
 DEFAULT_SIDE_CAMERA_ID = "v4l2-serial://202412231836/rgb"
 V4L2_SERIAL_PREFIX = "v4l2-serial://"
+
+
+def segmentation_model_path_for_policy(checkpoint_path: str | Path) -> Path:
+    """Select the scene-matched segmentation model from the policy run name."""
+    path = Path(checkpoint_path).expanduser()
+    try:
+        relative_path = path.resolve().relative_to(DEFAULT_OUTPUT_ROOT.resolve())
+    except (OSError, ValueError):
+        relative_path = path
+    strategy_name = relative_path.parts[0] if relative_path.parts else ""
+    if strategy_name.lower().startswith("newsetup"):
+        return SEGMENTATION_V2_MODEL_PATH
+    return SEGMENTATION_V1_MODEL_PATH
 
 POLICY_TYPES = (
     "mask_act",
@@ -778,6 +793,7 @@ class EvalPolicyApp:
             self.vars[key].trace_add("write", lambda *_args: self._refresh_camera_config_preview())
         for key in ("segmentation_model_path", "segmentation_device"):
             self.vars[key].trace_add("write", self._reset_segmentation_preview_model)
+        self.vars["checkpoint_path"].trace_add("write", self._on_checkpoint_path_changed)
         self.vars["front_camera_type"].trace_add("write", self._on_front_camera_type_changed)
         self.enable_realsense.trace_add("write", lambda *_args: self._refresh_camera_config_preview())
         self.include_side_camera.trace_add("write", lambda *_args: self._refresh_camera_config_preview())
@@ -1490,6 +1506,20 @@ class EvalPolicyApp:
         self.segmentation_loaded_logged = False
         self.segmentation_error_logged = False
 
+    def _on_checkpoint_path_changed(self, *_args: Any) -> None:
+        self._sync_segmentation_model_for_checkpoint()
+
+    def _sync_segmentation_model_for_checkpoint(self) -> Path:
+        selected_path = segmentation_model_path_for_policy(self.vars["checkpoint_path"].get())
+        current_path = Path(self.vars["segmentation_model_path"].get()).expanduser()
+        if current_path != selected_path:
+            self.vars["segmentation_model_path"].set(str(selected_path))
+            self._append_log(
+                f"[SEG] Auto-selected {selected_path.parent.name}/best.pt for "
+                f"{self.vars['checkpoint_path'].get()}"
+            )
+        return selected_path
+
     def _segmentation_base_task(self) -> str:
         if not hasattr(self, "vars"):
             return ""
@@ -1987,6 +2017,7 @@ class EvalPolicyApp:
             if key in config:
                 var.set(bool(config[key]))
 
+        self._sync_segmentation_model_for_checkpoint()
         self._select_checkpoint_combo_for_path(Path(self.vars["checkpoint_path"].get()).expanduser())
         self._refresh_camera_config_preview()
         self._refresh_grid_cells()
@@ -3909,6 +3940,7 @@ class EvalPolicyApp:
                 dataset.finalize()
 
     def _validate_eval_settings(self) -> None:
+        self._sync_segmentation_model_for_checkpoint()
         checkpoint = self.vars["checkpoint_path"].get().strip()
         if not checkpoint:
             raise ValueError("Select a pretrained_model or Mask-ACT checkpoint directory.")

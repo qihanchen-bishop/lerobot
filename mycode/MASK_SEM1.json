@@ -22,7 +22,7 @@
   "include_side_camera": true,
   "low_resolution": true,
   "enable_segmentation_preview": true,
-  "segmentation_model_path": "/home/romilab/Projects/IsaacLab/source/lerobot/mycode/tool/best.pt",
+  "segmentation_model_path": "/home/romilab/Projects/IsaacLab/source/lerobot/mycode/tool/seg_v1/best.pt",
   "segmentation_device": "auto",
   "execution_mode": "synchronous",
   "camera_read_mode": "wait_new_frame",
