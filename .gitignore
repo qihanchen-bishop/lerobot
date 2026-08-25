@@ -171,7 +171,8 @@ wandb/
 /eval_runs/
 /eval_new/
 /eval/
-/result/
+/result/*
+!/result/EXPERIMENT_SUMMARY.md
 /sample/
 /datanew/
 /calibration/
