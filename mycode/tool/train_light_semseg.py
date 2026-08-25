@@ -37,6 +37,8 @@ class Sample:
     chunk_index: int
     file_index: int
     frame_index: int
+    episode_index: int
+    dataset_index: int
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,8 @@ class ImageSample:
     chunk_index: int
     file_index: int
     frame_index: int
+    episode_index: int
+    dataset_index: int
 
 
 def require_runtime_deps() -> tuple[Any, Any, Any, Any, Any]:
@@ -267,13 +271,79 @@ def default_image_cache_root(dataset_root: Path) -> Path:
     return dataset_root.parent / "temp" / dataset_root.name / "semantic_seg_light_cache"
 
 
-def video_frame_count(path: Path) -> int:
-    cap = cv2.VideoCapture(str(path))
-    if not cap.isOpened():
-        raise RuntimeError(f"Could not open video: {path}")
-    frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    cap.release()
-    return frames
+def episode_records(dataset_root: Path) -> list[dict[str, Any]]:
+    import pandas as pd
+
+    paths = sorted((dataset_root / "meta" / "episodes").glob("**/*.parquet"))
+    if not paths:
+        raise FileNotFoundError(f"No episode metadata under {dataset_root / 'meta' / 'episodes'}")
+    records = []
+    for path in paths:
+        records.extend(pd.read_parquet(path).to_dict(orient="records"))
+    records.sort(key=lambda item: int(item["episode_index"]))
+    return records
+
+
+def load_quality_validity(
+    quality_dir: Path,
+    labels: list[str],
+    image_keys: list[str],
+    total_frames: int,
+    minimum_score: float,
+) -> dict[str, np.ndarray]:
+    if not 0.0 <= minimum_score <= 1.0:
+        raise ValueError(f"quality minimum score must be in [0, 1], got {minimum_score}")
+    validity = {}
+    for video_key in image_keys:
+        view_valid = np.ones(total_frames, dtype=bool)
+        for label in labels:
+            mask_key = f"{video_key}_{label}"
+            path = quality_dir / (mask_key.replace("/", "__").replace(".", "_") + ".npz")
+            if not path.is_file():
+                raise FileNotFoundError(f"Missing quality report: {path}")
+            with np.load(path) as report:
+                if "quality_score" not in report or "uncertain" not in report:
+                    raise KeyError(f"Quality report lacks quality_score/uncertain: {path}")
+                score = report["quality_score"]
+                uncertain = report["uncertain"]
+                if score.shape != (total_frames,) or uncertain.shape != (total_frames,):
+                    raise ValueError(
+                        f"Quality report {path} has shapes {score.shape}/{uncertain.shape}; "
+                        f"expected {(total_frames,)}"
+                    )
+                view_valid &= np.isfinite(score) & (score >= minimum_score) & ~uncertain.astype(bool)
+        validity[video_key] = view_valid
+    return validity
+
+
+def filter_samples_by_quality(
+    samples: list[Sample],
+    dataset_root: Path,
+    quality_dir: Path | None,
+    labels: list[str],
+    image_keys: list[str],
+    minimum_score: float,
+) -> tuple[list[Sample], dict[str, dict[str, int]] | None]:
+    if quality_dir is None:
+        return samples, None
+    info = json.loads((dataset_root / "meta" / "info.json").read_text())
+    validity = load_quality_validity(
+        quality_dir,
+        labels,
+        image_keys,
+        int(info["total_frames"]),
+        minimum_score,
+    )
+    kept = []
+    counts = {}
+    for video_key in image_keys:
+        view_samples = [sample for sample in samples if sample.video_key == video_key]
+        valid_samples = [
+            sample for sample in view_samples if validity[video_key][sample.dataset_index]
+        ]
+        counts[video_key] = {"before": len(view_samples), "after": len(valid_samples)}
+        kept.extend(valid_samples)
+    return kept, counts
 
 
 def build_samples(
@@ -284,13 +354,30 @@ def build_samples(
     max_samples: int | None,
 ) -> list[Sample]:
     samples: list[Sample] = []
-    for video_key in image_keys:
-        image_dir = dataset_root / "videos" / video_key / "chunk-000"
-        if not image_dir.exists():
-            raise FileNotFoundError(f"Missing image video directory: {image_dir}")
-        for image_video in sorted(image_dir.glob("file-*.mp4")):
-            chunk_index = int(image_video.parent.name.split("-")[-1])
-            file_index = int(image_video.stem.split("-")[-1])
+    info = json.loads((dataset_root / "meta" / "info.json").read_text())
+    fps = float(info["fps"])
+    total_frames = int(info["total_frames"])
+    records = episode_records(dataset_root)
+    for record in records:
+        episode_index = int(record["episode_index"])
+        dataset_from = int(record["dataset_from_index"])
+        dataset_to = int(record["dataset_to_index"])
+        episode_length = dataset_to - dataset_from
+        if episode_length <= 0 or dataset_to > total_frames:
+            raise ValueError(f"Invalid dataset frame range for episode {episode_index}")
+        for video_key in image_keys:
+            chunk_index = int(record[f"videos/{video_key}/chunk_index"])
+            file_index = int(record[f"videos/{video_key}/file_index"])
+            start_frame = round(float(record.get(f"videos/{video_key}/from_timestamp", 0.0)) * fps)
+            image_video = (
+                dataset_root
+                / "videos"
+                / video_key
+                / f"chunk-{chunk_index:03d}"
+                / f"file-{file_index:03d}.mp4"
+            )
+            if not image_video.is_file():
+                raise FileNotFoundError(f"Missing image video: {image_video}")
             mask_videos = [
                 str(dataset_root / "videos" / f"{video_key}_{label}" / image_video.parent.name / image_video.name)
                 for label in labels
@@ -298,8 +385,8 @@ def build_samples(
             missing = [p for p in mask_videos if not Path(p).exists()]
             if missing:
                 raise FileNotFoundError(f"Missing mask videos for {image_video}: {missing[:2]}")
-            frames = video_frame_count(image_video)
-            for frame_index in range(0, frames, frame_stride):
+            for episode_frame in range(0, episode_length, frame_stride):
+                frame_index = start_frame + episode_frame
                 samples.append(
                     Sample(
                         image_video=str(image_video),
@@ -308,6 +395,8 @@ def build_samples(
                         chunk_index=chunk_index,
                         file_index=file_index,
                         frame_index=frame_index,
+                        episode_index=episode_index,
+                        dataset_index=dataset_from + episode_frame,
                     )
                 )
     if max_samples is not None and len(samples) > max_samples:
@@ -316,7 +405,12 @@ def build_samples(
 
 
 def cache_paths(cache_root: Path, split: str, sample: Sample) -> tuple[Path, Path]:
-    rel_dir = Path(split) / sample.video_key / f"file-{sample.file_index:03d}"
+    rel_dir = (
+        Path(split)
+        / sample.video_key
+        / f"episode-{sample.episode_index:06d}"
+        / f"file-{sample.file_index:03d}"
+    )
     image_path = cache_root / "images" / rel_dir / f"{sample.frame_index:05d}.jpg"
     mask_path = cache_root / "masks" / rel_dir / f"{sample.frame_index:05d}.png"
     return image_path, mask_path
@@ -337,6 +431,8 @@ def to_image_samples(cache_root: Path, split: str, samples: list[Sample]) -> lis
                 chunk_index=sample.chunk_index,
                 file_index=sample.file_index,
                 frame_index=sample.frame_index,
+                episode_index=sample.episode_index,
+                dataset_index=sample.dataset_index,
             )
         )
     return image_samples
@@ -360,8 +456,8 @@ def ensure_image_cache(
     manifest: dict[str, Any] = {
         "labels": ["background", *labels],
         "splits": {split: len(samples) for split, samples in split_to_samples.items()},
-        "images": "images/{split}/{video_key}/file-{file_index:03d}/{frame_index:05d}.jpg",
-        "masks": "masks/{split}/{video_key}/file-{file_index:03d}/{frame_index:05d}.png",
+        "images": "images/{split}/{video_key}/episode-{episode_index:06d}/file-{file_index:03d}/{frame_index:05d}.jpg",
+        "masks": "masks/{split}/{video_key}/episode-{episode_index:06d}/file-{file_index:03d}/{frame_index:05d}.png",
     }
     write_json(cache_root / "manifest.json", manifest)
 
@@ -430,15 +526,23 @@ def ensure_image_cache(
 
 
 def split_samples(
-    samples: list[Sample], val_ratio: float, seed: int
+    samples: list[Sample], val_ratio: float, seed: int, split_unit: str
 ) -> tuple[list[Sample], list[Sample]]:
     rng = random.Random(seed)
-    episodes = sorted({(s.video_key, s.file_index) for s in samples})
-    rng.shuffle(episodes)
-    val_count = max(1, int(round(len(episodes) * val_ratio)))
-    val_episodes = set(episodes[:val_count])
-    train = [s for s in samples if (s.video_key, s.file_index) not in val_episodes]
-    val = [s for s in samples if (s.video_key, s.file_index) in val_episodes]
+    if split_unit == "episode":
+        def group(sample: Sample) -> Any:
+            return sample.episode_index
+    elif split_unit == "view-episode":
+        def group(sample: Sample) -> Any:
+            return sample.video_key, sample.episode_index
+    else:
+        raise ValueError(f"Unknown split unit: {split_unit}")
+    groups = sorted({group(sample) for sample in samples}, key=str)
+    rng.shuffle(groups)
+    val_count = max(1, int(round(len(groups) * val_ratio)))
+    val_groups = set(groups[:val_count])
+    train = [sample for sample in samples if group(sample) not in val_groups]
+    val = [sample for sample in samples if group(sample) in val_groups]
     return train, val
 
 
@@ -495,6 +599,17 @@ def evaluate(model: nn.Module, loader: Any, device: torch.device, num_classes: i
     }
 
 
+def named_evaluation(metrics: dict[str, float], labels: list[str]) -> dict[str, Any]:
+    return {
+        "loss": metrics["loss"],
+        "miou": metrics["miou"],
+        "pixel_acc": metrics["pixel_acc"],
+        "per_class_iou": {
+            label: metrics[f"iou_{index}"] for index, label in enumerate(labels)
+        },
+    }
+
+
 def overlay_prediction(image_tensor: torch.Tensor, pred: np.ndarray, palette: np.ndarray) -> np.ndarray:
     image = image_tensor.cpu().numpy().transpose(1, 2, 0)
     image = np.clip((image * STD + MEAN) * 255.0, 0, 255).astype(np.uint8)
@@ -503,7 +618,7 @@ def overlay_prediction(image_tensor: torch.Tensor, pred: np.ndarray, palette: np
 
 
 @torch.no_grad()
-def save_previews(model: nn.Module, dataset: VideoSemSegDataset, device: torch.device, out_dir: Path, count: int) -> None:
+def save_previews(model: nn.Module, dataset: Any, device: torch.device, out_dir: Path, count: int) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     palette = np.array(
         [
@@ -516,12 +631,47 @@ def save_previews(model: nn.Module, dataset: VideoSemSegDataset, device: torch.d
         dtype=np.uint8,
     )
     model.eval()
-    for i in range(min(count, len(dataset))):
-        image, _ = dataset[i]
+    samples = getattr(dataset, "samples", None)
+    if samples:
+        by_view: dict[str, list[int]] = {}
+        for index, sample in enumerate(samples):
+            by_view.setdefault(sample.video_key, []).append(index)
+        indices = []
+        views = sorted(by_view)
+        for view_index, view in enumerate(views):
+            bucket = by_view[view]
+            take = count // len(views) + (view_index < count % len(views))
+            positions = np.linspace(0, len(bucket) - 1, min(take, len(bucket)), dtype=int)
+            indices.extend(bucket[position] for position in positions)
+    else:
+        indices = np.linspace(0, len(dataset) - 1, min(count, len(dataset)), dtype=int).tolist()
+
+    manifest = []
+    for output_index, dataset_index in enumerate(indices):
+        image, _ = dataset[dataset_index]
         logits = model(image.unsqueeze(0).to(device))
         pred = logits.argmax(dim=1)[0].cpu().numpy().astype(np.uint8)
         overlay = overlay_prediction(image, pred, palette)
-        cv2.imwrite(str(out_dir / f"preview_{i:03d}.png"), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+        sample = samples[dataset_index] if samples else None
+        if sample is None:
+            filename = f"preview_{output_index:03d}.png"
+            metadata = {"dataset_index": int(dataset_index), "file": filename}
+        else:
+            view = sample.video_key.rsplit(".", 1)[-1]
+            filename = (
+                f"preview_{output_index:03d}_{view}_ep{sample.episode_index:06d}"
+                f"_f{sample.frame_index:05d}.png"
+            )
+            metadata = {
+                "dataset_index": int(dataset_index),
+                "video_key": sample.video_key,
+                "episode_index": sample.episode_index,
+                "frame_index": sample.frame_index,
+                "file": filename,
+            }
+        cv2.imwrite(str(out_dir / filename), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+        manifest.append(metadata)
+    write_json(out_dir / "manifest.json", manifest)
 
 
 def save_checkpoint(
@@ -562,6 +712,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prepare-cache-only", action="store_true")
     parser.add_argument("--labels", nargs="+", default=LABELS)
     parser.add_argument("--image-keys", nargs="+", default=IMAGE_KEYS)
+    parser.add_argument(
+        "--split-unit",
+        choices=["episode", "view-episode"],
+        default="episode",
+        help="Keep all camera views of an episode in one split by default.",
+    )
+    parser.add_argument(
+        "--quality-dir",
+        type=Path,
+        default=None,
+        help="Optional SAM2 quality directory; reject frames invalid for any class in their view.",
+    )
+    parser.add_argument("--quality-min-score", type=float, default=0.60)
     parser.add_argument("--image-size", type=parse_image_size, default=parse_image_size("320x180"))
     parser.add_argument("--frame-stride", type=int, default=10)
     parser.add_argument("--max-samples", type=int, default=None)
@@ -615,7 +778,24 @@ def main() -> None:
         )
         if not video_samples:
             raise SystemExit("No training samples found.")
-        train_video_samples, val_video_samples = split_samples(video_samples, args.val_ratio, args.seed)
+        unfiltered_samples = len(video_samples)
+        video_samples, quality_kept_by_view = filter_samples_by_quality(
+            video_samples,
+            args.dataset_root,
+            args.quality_dir,
+            args.labels,
+            args.image_keys,
+            args.quality_min_score,
+        )
+        if args.quality_dir is not None:
+            print(
+                f"quality_filter={args.quality_dir} min_score={args.quality_min_score:g} "
+                f"kept={len(video_samples)}/{unfiltered_samples} by_view={quality_kept_by_view}",
+                flush=True,
+            )
+        train_video_samples, val_video_samples = split_samples(
+            video_samples, args.val_ratio, args.seed, args.split_unit
+        )
         ensure_image_cache(
             image_cache_root,
             {"train": train_video_samples, "val": val_video_samples},
@@ -640,7 +820,24 @@ def main() -> None:
             args.frame_stride,
             args.max_samples,
         )
-        train_samples, val_samples = split_samples(samples, args.val_ratio, args.seed)
+        unfiltered_samples = len(samples)
+        samples, quality_kept_by_view = filter_samples_by_quality(
+            samples,
+            args.dataset_root,
+            args.quality_dir,
+            args.labels,
+            args.image_keys,
+            args.quality_min_score,
+        )
+        if args.quality_dir is not None:
+            print(
+                f"quality_filter={args.quality_dir} min_score={args.quality_min_score:g} "
+                f"kept={len(samples)}/{unfiltered_samples} by_view={quality_kept_by_view}",
+                flush=True,
+            )
+        train_samples, val_samples = split_samples(
+            samples, args.val_ratio, args.seed, args.split_unit
+        )
         source_kind = "video"
     if not samples:
         raise SystemExit("No training samples found.")
@@ -655,11 +852,18 @@ def main() -> None:
             "image_cache_root": str(image_cache_root) if image_cache_root is not None else None,
             "labels": ["background", *args.labels],
             "image_keys": args.image_keys,
+            "split_unit": args.split_unit,
             "frame_stride": args.frame_stride,
             "image_size": list(args.image_size),
+            "quality_dir": str(args.quality_dir) if args.quality_dir is not None else None,
+            "quality_min_score": args.quality_min_score if args.quality_dir is not None else None,
+            "quality_kept_by_view": quality_kept_by_view,
+            "unfiltered_samples": unfiltered_samples,
             "samples": len(samples),
             "train_samples": len(train_samples),
             "val_samples": len(val_samples),
+            "train_episodes": sorted({sample.episode_index for sample in train_samples}),
+            "val_episodes": sorted({sample.episode_index for sample in val_samples}),
             "train": [asdict(s) for s in train_samples[:2000]],
             "val": [asdict(s) for s in val_samples[:2000]],
             "note": "Sample lists are truncated to 2000 entries each to keep this manifest small.",
@@ -784,8 +988,48 @@ def main() -> None:
             )
             break
 
-    print(f"best_mIoU={best_miou:.4f} best_epoch={best_epoch}", flush=True)
-    print(f"best_checkpoint={args.work_dir / 'best.pt'}", flush=True)
+    best_checkpoint_path = args.work_dir / "best.pt"
+    checkpoint = torch.load(best_checkpoint_path, map_location=device, weights_only=False)
+    model.load_state_dict(checkpoint["model"])
+    class_names = ["background", *args.labels]
+    final_evaluation = {
+        "best_checkpoint": str(best_checkpoint_path),
+        "best_epoch": int(checkpoint["epoch"]),
+        "split_unit": args.split_unit,
+        "overall": named_evaluation(
+            evaluate(model, val_loader, device, num_classes), class_names
+        ),
+        "views": {},
+    }
+    for video_key in args.image_keys:
+        view_samples = [sample for sample in val_samples if sample.video_key == video_key]
+        if source_kind == "image-cache":
+            view_dataset = ImageSemSegDataset(view_samples, args.image_size, augment=False)
+        else:
+            view_dataset = VideoSemSegDataset(
+                view_samples,
+                args.image_size,
+                args.mask_threshold,
+                augment=False,
+                video_cache_size=args.video_cache_size,
+            )
+        view_loader = DataLoader(
+            view_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.workers,
+            pin_memory=True,
+        )
+        final_evaluation["views"][video_key] = {
+            "samples": len(view_samples),
+            **named_evaluation(evaluate(model, view_loader, device, num_classes), class_names),
+        }
+    write_json(args.work_dir / "evaluation.json", final_evaluation)
+    save_previews(model, val_dataset, device, args.work_dir / "previews", args.preview_count)
+
+    print(f"best_mIoU={final_evaluation['overall']['miou']:.4f} best_epoch={checkpoint['epoch']}", flush=True)
+    print(f"best_checkpoint={best_checkpoint_path}", flush=True)
+    print(f"evaluation={args.work_dir / 'evaluation.json'}", flush=True)
 
 
 if __name__ == "__main__":

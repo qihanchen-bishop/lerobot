@@ -19,12 +19,18 @@ Experiments:
       and action loss also backpropagates through the U-Net mask path.
   SEM-1: Each view's masks are merged into one soft semantic RGB map. ACT sees semantic maps plus
       the original RGB views through one shared image backbone; no pooled RGB latent is used.
+  SEM-1-V2: Each view keeps all five soft class probabilities. A lightweight semantic adapter maps
+      them to a residual for the corresponding RGB ResNet feature map, so ACT receives no extra image tokens.
   ASEM-1: Same inputs and losses as SEM-1, but the ACT action L1 gradient also supervises the
       segmentation network. The task gradient is warmed up, norm-limited relative to the supervised
       segmentation gradient, and projected when it conflicts with segmentation.
   SSACT-1: SEM-1 plus an expert-action-conditioned probabilistic semantic dynamics model and an
       automatically pseudo-labeled five-phase history model. Future semantic targets are loaded from
       an offline cache; predicted phase probabilities condition ACT.
+  SSACT-3: SEM-1-V2 plus event-derived expose/separate/transport/restore/done supervision,
+      Phase/Progress/Event/Transition/Relation heads, and phase-conditioned relation attention + FiLM.
+      Pseudo-label quality continuously weights auxiliary losses; action gradients never alter segmentation
+      or stage heads, and predicted semantic/phase conditioning is introduced only after warmup.
   SEM-2: Same soft semantic maps as SEM-1, but ACT sees no original RGB images and no pooled latent.
   3:  ACT sees only the pooled RGB encoder latent. U-Net mask decoder is kept as an auxiliary task.
 """
@@ -61,7 +67,7 @@ from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import cycle, dataset_to_policy_features
 from lerobot.policies.act.modeling_act import ACTPolicy
-from lerobot.policies.act.modeling_act import METRIC_INPUT, METRIC_PRED, METRIC_SEED
+from lerobot.policies.act.modeling_act import IMAGE_FEATURE_RESIDUALS, METRIC_INPUT, METRIC_PRED, METRIC_SEED
 from lerobot.policies.factory import make_policy_config, make_pre_post_processors
 from lerobot.utils.constants import OBS_ENV_STATE, OBS_STATE
 
@@ -72,6 +78,16 @@ from semantic_servo import (
     PhaseHistoryModel,
     PhaseSemanticFeatureExtractor,
     SoftSemanticStateExtractor,
+)
+from stage_semantic import (
+    EVENT_NAMES as STAGE_EVENT_NAMES,
+    PHASE_NAMES as STAGE_PHASE_NAMES,
+    RELATION_NAMES as STAGE_RELATION_NAMES,
+    TRANSITION_NAMES as STAGE_TRANSITION_NAMES,
+    PhaseConditionedSemanticAdapter,
+    StageAwareTemporalModel,
+    StageSupervisionStore,
+    stage_losses,
 )
 
 
@@ -88,10 +104,19 @@ CANONICAL_SEMANTIC_MASK_KEYS = [
     "observation.images.right_arm",
 ]
 DEFAULT_MASK_KEYS = CANONICAL_SEMANTIC_MASK_KEYS
-SEMANTIC_EXPERIMENTS = {"SEM-1", "ASEM-1", "SSACT-1", "SEM-2"}
+STAGE_AWARE_EXPERIMENTS = {"SSACT-3"}
+SEMANTIC_FEATURE_FUSION_EXPERIMENTS = {"SEM-1-V2", *STAGE_AWARE_EXPERIMENTS}
+SEMANTIC_EXPERIMENTS = {
+    "SEM-1",
+    "SEM-1-V2",
+    "ASEM-1",
+    "SSACT-1",
+    "SSACT-3",
+    "SEM-2",
+}
 ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS = {"ASEM-1"}
 PREDICTIVE_SEMANTIC_EXPERIMENTS = {"SSACT-1"}
-PHASE_CONDITIONED_EXPERIMENTS = {"SSACT-1"}
+PHASE_CONDITIONED_EXPERIMENTS = {"SSACT-1", *STAGE_AWARE_EXPERIMENTS}
 SEMANTIC_CLASSES = ("occluder", "object", "region", "tool")
 SEMANTIC_STATE_FEATURES_PER_VIEW = (
     "area_occluder",
@@ -455,6 +480,9 @@ class MaskActRunConfig:
     no_gripper: bool
     dice_loss_weight: float
     semantic_temperature: float
+    semantic_adapter_base_channels: int
+    semantic_fusion_warmup_steps: int
+    semantic_fusion_ramp_steps: int
     action_to_seg_grad_ratio: float
     action_to_seg_warmup_steps: int
     action_to_seg_ramp_steps: int
@@ -477,6 +505,17 @@ class MaskActRunConfig:
     phase_teacher_forcing_steps: int
     phase_teacher_forcing_ramp_steps: int
     phase_feature_reliability: list[list[float]] | None
+    stage_supervision: str | None
+    stage_conditioning_mode: str
+    stage_predicted_input_warmup_steps: int
+    stage_predicted_input_ramp_steps: int
+    stage_phase_loss_weight: float
+    stage_event_loss_weight: float
+    stage_progress_loss_weight: float
+    stage_transition_loss_weight: float
+    stage_relation_loss_weight: float
+    stage_attention_regularization_weight: float
+    stage_feature_dim: int | None
     seed: int
 
 
@@ -549,6 +588,60 @@ class UNetSegNet(nn.Module):
         x = self.up2(x, x2)
         x = self.up3(x, x1)
         return self.out_conv(x), latent
+
+
+class SemanticAdapterDownsample(nn.Module):
+    """Cheap spatial downsampling with a depthwise convolution and pointwise channel projection."""
+
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(
+                in_channels,
+                in_channels,
+                kernel_size=3,
+                stride=2,
+                padding=1,
+                groups=in_channels,
+                bias=False,
+            ),
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+            nn.GroupNorm(num_groups=min(8, out_channels), num_channels=out_channels),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, probabilities: Tensor) -> Tensor:
+        return self.net(probabilities)
+
+
+class SemanticFeatureAdapter(nn.Module):
+    """Map five class probabilities to an RGB-backbone-aligned feature residual."""
+
+    def __init__(self, num_classes: int, output_channels: int, base_channels: int = 32):
+        super().__init__()
+        if base_channels <= 0:
+            raise ValueError(f"semantic adapter base channels must be positive, got {base_channels}.")
+        channels = [base_channels, base_channels * 2, base_channels * 4, base_channels * 8]
+        self.stem = nn.Sequential(
+            nn.Conv2d(num_classes, channels[0], kernel_size=3, stride=2, padding=1, bias=False),
+            nn.GroupNorm(num_groups=min(8, channels[0]), num_channels=channels[0]),
+            nn.SiLU(inplace=True),
+        )
+        self.downsamples = nn.Sequential(
+            SemanticAdapterDownsample(channels[0], channels[1]),
+            SemanticAdapterDownsample(channels[1], channels[2]),
+            SemanticAdapterDownsample(channels[2], channels[3]),
+            SemanticAdapterDownsample(channels[3], channels[3]),
+        )
+        self.output_proj = nn.Conv2d(channels[3], output_channels, kernel_size=1)
+        nn.init.zeros_(self.output_proj.weight)
+        nn.init.zeros_(self.output_proj.bias)
+
+    def forward(self, probabilities: Tensor, output_size: tuple[int, int] | None = None) -> Tensor:
+        residual = self.output_proj(self.downsamples(self.stem(probabilities)))
+        if output_size is not None and residual.shape[-2:] != output_size:
+            residual = F.interpolate(residual, size=output_size, mode="bilinear", align_corners=False)
+        return residual
 
 
 class MaskSemanticEncoder(nn.Module):
@@ -684,6 +777,9 @@ class MaskACTPolicy(nn.Module):
         metric_loss_weight: float,
         metric_eps: float,
         semantic_temperature: float,
+        semantic_adapter_base_channels: int,
+        semantic_fusion_warmup_steps: int,
+        semantic_fusion_ramp_steps: int,
         action_to_seg_grad_ratio: float,
         action_to_seg_warmup_steps: int,
         action_to_seg_ramp_steps: int,
@@ -697,6 +793,16 @@ class MaskACTPolicy(nn.Module):
         phase_loss_weight: float,
         phase_teacher_forcing_steps: int,
         phase_teacher_forcing_ramp_steps: int,
+        stage_feature_dim: int | None,
+        stage_conditioning_mode: str,
+        stage_predicted_input_warmup_steps: int,
+        stage_predicted_input_ramp_steps: int,
+        stage_phase_loss_weight: float,
+        stage_event_loss_weight: float,
+        stage_progress_loss_weight: float,
+        stage_transition_loss_weight: float,
+        stage_relation_loss_weight: float,
+        stage_attention_regularization_weight: float,
         pretrained_backbone_weights: str | None,
         mask_quality_weighting: str = "hard",
         mask_quality_full_score: float = 0.95,
@@ -719,6 +825,9 @@ class MaskACTPolicy(nn.Module):
         self.metric_loss_weight = metric_loss_weight
         self.metric_eps = metric_eps
         self.semantic_temperature = semantic_temperature
+        self.semantic_adapter_base_channels = semantic_adapter_base_channels
+        self.semantic_fusion_warmup_steps = semantic_fusion_warmup_steps
+        self.semantic_fusion_ramp_steps = semantic_fusion_ramp_steps
         self.action_to_seg_grad_ratio = action_to_seg_grad_ratio
         self.action_to_seg_warmup_steps = action_to_seg_warmup_steps
         self.action_to_seg_ramp_steps = action_to_seg_ramp_steps
@@ -730,6 +839,16 @@ class MaskACTPolicy(nn.Module):
         self.phase_loss_weight = phase_loss_weight
         self.phase_teacher_forcing_steps = phase_teacher_forcing_steps
         self.phase_teacher_forcing_ramp_steps = phase_teacher_forcing_ramp_steps
+        self.stage_feature_dim = stage_feature_dim
+        self.stage_conditioning_mode = stage_conditioning_mode
+        self.stage_predicted_input_warmup_steps = stage_predicted_input_warmup_steps
+        self.stage_predicted_input_ramp_steps = stage_predicted_input_ramp_steps
+        self.stage_phase_loss_weight = stage_phase_loss_weight
+        self.stage_event_loss_weight = stage_event_loss_weight
+        self.stage_progress_loss_weight = stage_progress_loss_weight
+        self.stage_transition_loss_weight = stage_transition_loss_weight
+        self.stage_relation_loss_weight = stage_relation_loss_weight
+        self.stage_attention_regularization_weight = stage_attention_regularization_weight
         self.mask_quality_weighting = mask_quality_weighting
         self.mask_quality_full_score = mask_quality_full_score
         self.mask_quality_weight_gamma = mask_quality_weight_gamma
@@ -741,6 +860,7 @@ class MaskACTPolicy(nn.Module):
         self._latest_semantic_rollout: dict[str, Tensor] = {}
         self._phase_inference_history: Tensor | None = None
         self._latest_phase_probabilities: Tensor | None = None
+        self._latest_stage_outputs: dict[str, Tensor] = {}
         self._inference_control_step: int | None = None
         self._last_phase_history_step: int | None = None
         self._ssact_runtime_controller: Any | None = None
@@ -765,6 +885,11 @@ class MaskACTPolicy(nn.Module):
             )
         if self.semantic_temperature <= 0:
             raise ValueError(f"semantic_temperature must be positive, got {self.semantic_temperature}.")
+        if self.semantic_fusion_warmup_steps < 0 or self.semantic_fusion_ramp_steps < 0:
+            raise ValueError(
+                "semantic fusion warmup and ramp steps must be non-negative, got "
+                f"{self.semantic_fusion_warmup_steps} and {self.semantic_fusion_ramp_steps}."
+            )
         if not 0.0 <= self.action_to_seg_grad_ratio <= 1.0:
             raise ValueError(
                 "action_to_seg_grad_ratio must be between 0 and 1, "
@@ -789,7 +914,7 @@ class MaskACTPolicy(nn.Module):
             if self.semantic_dynamics_loss_weight < 0:
                 raise ValueError("semantic_dynamics_loss_weight must be non-negative.")
         if self.experiment in PHASE_CONDITIONED_EXPERIMENTS:
-            if phase_feature_reliability is None:
+            if self.experiment == "SSACT-1" and phase_feature_reliability is None:
                 raise ValueError("SSACT-1 requires phase feature reliability from --phase-labels.")
             if self.phase_history_length <= 0 or phase_hidden_dim <= 0:
                 raise ValueError("SSACT-1 phase history length and hidden dimension must be positive.")
@@ -799,6 +924,23 @@ class MaskACTPolicy(nn.Module):
                 raise ValueError("phase_loss_weight must be non-negative.")
             if self.phase_teacher_forcing_steps < 0 or self.phase_teacher_forcing_ramp_steps < 0:
                 raise ValueError("Phase teacher-forcing step counts must be non-negative.")
+        if getattr(self, "experiment", None) in STAGE_AWARE_EXPERIMENTS:
+            if self.stage_feature_dim is None or self.stage_feature_dim <= 0:
+                raise ValueError("SSACT-3 requires a positive stage feature dimension.")
+            if self.stage_conditioning_mode not in PhaseConditionedSemanticAdapter.VALID_MODES:
+                raise ValueError(f"Invalid stage conditioning mode '{self.stage_conditioning_mode}'.")
+            if self.stage_predicted_input_warmup_steps < 0 or self.stage_predicted_input_ramp_steps < 0:
+                raise ValueError("Stage predicted-input warmup and ramp must be non-negative.")
+            stage_weights = (
+                self.stage_phase_loss_weight,
+                self.stage_event_loss_weight,
+                self.stage_progress_loss_weight,
+                self.stage_transition_loss_weight,
+                self.stage_relation_loss_weight,
+                self.stage_attention_regularization_weight,
+            )
+            if any(weight < 0 for weight in stage_weights):
+                raise ValueError("SSACT-3 loss weights must be non-negative.")
         if self.uses_semantic_maps() and set(self.mask_suffixes) != set(SEMANTIC_CLASSES):
             raise ValueError(
                 f"{self.experiment} requires exactly these semantic mask suffixes: {list(SEMANTIC_CLASSES)}; "
@@ -813,6 +955,26 @@ class MaskACTPolicy(nn.Module):
             latent_dim=latent_dim,
             base_channels=unet_base_channels,
         )
+        self.semantic_adapter = None
+        if self.uses_semantic_feature_fusion():
+            if not self.config.image_features or len(self.config.image_features) != len(self.rgb_keys):
+                raise ValueError(
+                    "SEM-1-V2 requires exactly one ACT RGB image input per configured RGB view."
+                )
+            backbone_channels = self.act_policy.model.encoder_img_feat_input_proj.in_channels
+            if self.experiment in STAGE_AWARE_EXPERIMENTS:
+                self.semantic_adapter = PhaseConditionedSemanticAdapter(
+                    output_channels=backbone_channels,
+                    context_dim=phase_hidden_dim,
+                    base_channels=self.semantic_adapter_base_channels,
+                    mode=self.stage_conditioning_mode,
+                )
+            else:
+                self.semantic_adapter = SemanticFeatureAdapter(
+                    num_classes=semantic_output_channels,
+                    output_channels=backbone_channels,
+                    base_channels=self.semantic_adapter_base_channels,
+                )
         if self.uses_semantic_maps():
             palette = [SEMANTIC_PALETTE_BY_CLASS["background"]]
             palette.extend(SEMANTIC_PALETTE_BY_CLASS[suffix] for suffix in self.mask_suffixes)
@@ -836,6 +998,7 @@ class MaskACTPolicy(nn.Module):
         self.semantic_dynamics = None
         self.phase_feature_extractor = None
         self.phase_model = None
+        self.stage_model = None
         self.semantic_state_names: tuple[str, ...] = ()
         self.phase_feature_names: tuple[str, ...] = ()
         if self.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
@@ -857,7 +1020,7 @@ class MaskACTPolicy(nn.Module):
                 prediction_offsets=self.semantic_prediction_offsets,
                 hidden_dim=semantic_dynamics_hidden_dim,
             )
-        if self.experiment in PHASE_CONDITIONED_EXPERIMENTS:
+        if self.experiment == "SSACT-1":
             reliability = torch.tensor(phase_feature_reliability, dtype=torch.float32)
             self.phase_feature_extractor = PhaseSemanticFeatureExtractor(reliability)
             view_names = [key.rsplit(".", 1)[-1] for key in self.rgb_keys]
@@ -866,6 +1029,21 @@ class MaskACTPolicy(nn.Module):
                 semantic_dim=self.phase_feature_extractor.output_dim,
                 robot_state_dim=0,
                 action_dim=0,
+                hidden_dim=phase_hidden_dim,
+            )
+        if self.experiment in STAGE_AWARE_EXPERIMENTS:
+            self.semantic_state_extractor = SoftSemanticStateExtractor(include_confidence=True)
+            view_names = [key.rsplit(".", 1)[-1] for key in self.rgb_keys]
+            self.semantic_state_names = self.semantic_state_extractor.feature_names(view_names)
+            if len(self.semantic_state_names) != self.stage_feature_dim:
+                raise ValueError(
+                    f"Online SSACT-3 features have width {len(self.semantic_state_names)}, but offline "
+                    f"supervision has width {self.stage_feature_dim}."
+                )
+            robot_state_dim = self.act_policy.config.robot_state_feature.shape[0]
+            self.stage_model = StageAwareTemporalModel(
+                semantic_dim=self.stage_feature_dim,
+                robot_state_dim=robot_state_dim,
                 hidden_dim=phase_hidden_dim,
             )
 
@@ -880,6 +1058,7 @@ class MaskACTPolicy(nn.Module):
         self._latest_semantic_rollout = {}
         self._phase_inference_history = None
         self._latest_phase_probabilities = None
+        self._latest_stage_outputs = {}
         self._inference_control_step = None
         self._last_phase_history_step = None
         self._latest_ssact_control_report = {}
@@ -925,6 +1104,64 @@ class MaskACTPolicy(nn.Module):
             1.0,
         )
         return self.action_to_seg_grad_ratio * ramp_progress
+
+    def scheduled_semantic_fusion_scale(self) -> float:
+        if not self.uses_semantic_feature_fusion():
+            return 0.0
+        if not self.training:
+            return 1.0
+        if self._training_step <= self.semantic_fusion_warmup_steps:
+            return 0.0
+        if self.semantic_fusion_ramp_steps == 0:
+            return 1.0
+        return min(
+            (self._training_step - self.semantic_fusion_warmup_steps)
+            / self.semantic_fusion_ramp_steps,
+            1.0,
+        )
+
+    def semantic_feature_residuals(
+        self,
+        probabilities_by_view: list[Tensor],
+        *,
+        scale: float,
+        phase_probabilities: Tensor | None = None,
+        stage_context: Tensor | None = None,
+        stage_confidence: Tensor | None = None,
+    ) -> list[Tensor]:
+        if self.semantic_adapter is None:
+            raise RuntimeError("Semantic feature residuals require the SEM-1-V2 semantic adapter.")
+        # SEM-1-V2 keeps segmentation supervised only by pseudo-labels. The action loss trains
+        # the adapter and ACT, but cannot distort the segmentation network.
+        if getattr(self, "experiment", None) in STAGE_AWARE_EXPERIMENTS:
+            if phase_probabilities is None or stage_context is None:
+                raise RuntimeError("SSACT-3 semantic fusion requires phase probabilities and stage context.")
+            return [
+                self.semantic_adapter(
+                    probabilities.detach(),
+                    phase_probabilities.detach(),
+                    stage_context.detach(),
+                    confidence=None if stage_confidence is None else stage_confidence.detach(),
+                )
+                * scale
+                for probabilities in probabilities_by_view
+            ]
+        return [self.semantic_adapter(probabilities.detach()) * scale for probabilities in probabilities_by_view]
+
+    def scheduled_stage_predicted_input_ratio(self) -> float:
+        if self.experiment not in STAGE_AWARE_EXPERIMENTS:
+            return 1.0
+        if not self.training:
+            return 1.0
+        if self._training_step <= self.stage_predicted_input_warmup_steps:
+            return 0.0
+        if self.stage_predicted_input_ramp_steps == 0:
+            return 1.0
+        return min(
+            (self._training_step - self.stage_predicted_input_warmup_steps)
+            / self.stage_predicted_input_ramp_steps,
+            1.0,
+        )
 
     def scheduled_phase_teacher_forcing_ratio(self) -> float:
         if self.experiment not in PHASE_CONDITIONED_EXPERIMENTS:
@@ -1013,7 +1250,9 @@ class MaskACTPolicy(nn.Module):
             probabilities_by_view = self.semantic_probabilities(logits_by_view)
             if self.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
                 self._latest_semantic_state = self.semantic_states_from_probabilities(probabilities_by_view)
-            if self.experiment in PHASE_CONDITIONED_EXPERIMENTS:
+            stage_context = None
+            stage_confidence = None
+            if self.experiment == "SSACT-1":
                 current_phase_features = self.phase_features_from_probabilities(probabilities_by_view)
                 if (
                     self._phase_inference_history is None
@@ -1036,17 +1275,65 @@ class MaskACTPolicy(nn.Module):
                 _, phase_probabilities = self.predict_phase_from_history(self._phase_inference_history)
                 self._latest_phase_probabilities = phase_probabilities
                 act_batch[OBS_ENV_STATE] = phase_probabilities
+            elif self.experiment in STAGE_AWARE_EXPERIMENTS:
+                current_stage_features = self.semantic_states_from_probabilities(probabilities_by_view)
+                if (
+                    self._phase_inference_history is None
+                    or self._phase_inference_history.shape[0] != current_stage_features.shape[0]
+                ):
+                    self._phase_inference_history = current_stage_features.unsqueeze(1).expand(
+                        -1, self.phase_history_length, -1
+                    ).clone()
+                    self._last_phase_history_step = self._inference_control_step
+                elif (
+                    self._inference_control_step is None
+                    or self._last_phase_history_step is None
+                    or self._inference_control_step - self._last_phase_history_step >= self.phase_history_stride
+                ):
+                    self._phase_inference_history = torch.cat(
+                        [self._phase_inference_history[:, 1:], current_stage_features.unsqueeze(1)],
+                        dim=1,
+                    )
+                    self._last_phase_history_step = self._inference_control_step
+                if self.stage_model is None:
+                    raise RuntimeError("SSACT-3 stage model is missing.")
+                stage_outputs = self.stage_model(self._phase_inference_history, act_batch[OBS_STATE])
+                phase_probabilities = torch.softmax(stage_outputs["phase_logits"], dim=-1)
+                transition_probabilities = torch.softmax(stage_outputs["transition_logits"], dim=-1)
+                self._latest_phase_probabilities = phase_probabilities
+                self._latest_stage_outputs = {
+                    "phase_probabilities": phase_probabilities.detach().cpu(),
+                    "event_probabilities": torch.sigmoid(stage_outputs["event_logits"]).detach().cpu(),
+                    "progress": stage_outputs["progress"].detach().cpu(),
+                    "transition_probabilities": transition_probabilities.detach().cpu(),
+                    "relations": stage_outputs["relations"].detach().cpu(),
+                }
+                act_batch[OBS_ENV_STATE] = phase_probabilities
+                stage_context = stage_outputs["context"]
+                stage_confidence = phase_probabilities.amax(dim=-1) * (
+                    1.0 - transition_probabilities[:, STAGE_TRANSITION_NAMES.index("uncertain")]
+                )
             mask_probs = self.semantic_foreground_probs_for_mask_keys(probabilities_by_view)
             preview = mask_probs[0].detach().clamp(0.0, 1.0).mul(255).to(dtype=torch.uint8).cpu()
             self._latest_inference_mask_preview = {
                 key: preview[idx] for idx, key in enumerate(self.mask_keys)
             }
-            for rgb_key, semantic_rgb in zip(
-                self.rgb_keys,
-                self.semantic_rgb_maps(self.semantic_probabilities_for_act(probabilities_by_view)),
-                strict=True,
-            ):
-                act_batch[semantic_image_key(rgb_key)] = self.normalize_semantic_map(semantic_rgb)
+            probabilities_for_act = self.semantic_probabilities_for_act(probabilities_by_view)
+            if self.uses_semantic_feature_fusion():
+                act_batch[IMAGE_FEATURE_RESIDUALS] = self.semantic_feature_residuals(
+                    probabilities_for_act,
+                    scale=1.0,
+                    phase_probabilities=self._latest_phase_probabilities,
+                    stage_context=stage_context,
+                    stage_confidence=stage_confidence,
+                )
+            else:
+                for rgb_key, semantic_rgb in zip(
+                    self.rgb_keys,
+                    self.semantic_rgb_maps(probabilities_for_act),
+                    strict=True,
+                ):
+                    act_batch[semantic_image_key(rgb_key)] = self.normalize_semantic_map(semantic_rgb)
         else:
             mask_logits, rgb_latent = self.predict_masks_and_latent_from_rgbs(rgbs)
             mask_probs = torch.sigmoid(mask_logits)
@@ -1115,6 +1402,9 @@ class MaskACTPolicy(nn.Module):
             return None
         return self._latest_phase_probabilities.detach().cpu()
 
+    def latest_stage_outputs(self) -> dict[str, Tensor]:
+        return dict(self._latest_stage_outputs)
+
     def mask_action_grad_enabled(self) -> bool:
         return self.experiment in {"1B", "2B", "2C", "4A", "4B", "4C"}
 
@@ -1136,8 +1426,18 @@ class MaskACTPolicy(nn.Module):
     def uses_semantic_maps(self) -> bool:
         return self.experiment in SEMANTIC_EXPERIMENTS
 
+    def uses_semantic_feature_fusion(self) -> bool:
+        return self.experiment in SEMANTIC_FEATURE_FUSION_EXPERIMENTS
+
     def act_uses_raw_rgb_images(self) -> bool:
-        return self.experiment in {"2C", "SEM-1", "ASEM-1", "SSACT-1"}
+        return self.experiment in {
+            "2C",
+            "SEM-1",
+            "SEM-1-V2",
+            "ASEM-1",
+            "SSACT-1",
+            "SSACT-3",
+        }
 
     def normalize_visual_like(self, image: Tensor, key: str) -> Tensor:
         key_stats = self.stats[key]
@@ -1194,7 +1494,7 @@ class MaskACTPolicy(nn.Module):
 
     def semantic_states_from_probabilities(self, probabilities_by_view: list[Tensor]) -> Tensor:
         if self.semantic_state_extractor is None:
-            raise RuntimeError("Structured semantic states are only enabled for predictive semantic experiments.")
+            raise RuntimeError("Structured semantic states are not enabled for this experiment.")
         state = self.semantic_state_extractor(self.semantic_control_probabilities(probabilities_by_view))
         return self.apply_semantic_state_reliability(state)
 
@@ -1596,19 +1896,129 @@ class MaskACTPolicy(nn.Module):
                 class_quality_by_view,
             )
             probabilities_by_view = self.semantic_probabilities(logits_by_view)
-            semantic_maps = self.semantic_rgb_maps(
-                self.semantic_probabilities_for_act(probabilities_by_view)
-            )
             action_to_seg_ratio = self.scheduled_action_to_seg_grad_ratio()
-            if self.experiment not in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS or action_to_seg_ratio <= 0.0:
-                semantic_maps = [semantic_map.detach() for semantic_map in semantic_maps]
             act_batch = dict(batch)
-            for rgb_key, semantic_map in zip(self.rgb_keys, semantic_maps, strict=True):
-                act_batch[semantic_image_key(rgb_key)] = self.normalize_semantic_map(semantic_map)
+            stage_total_loss = None
+            stage_logs = {}
+            stage_phase_condition = None
+            stage_context = None
+            stage_confidence = None
+            if self.experiment in STAGE_AWARE_EXPERIMENTS:
+                required_stage_keys = (
+                    "stage_semantic_history",
+                    "stage_phase_target",
+                    "stage_phase_weight",
+                    "stage_event_target",
+                    "stage_event_weight",
+                    "stage_progress_target",
+                    "stage_progress_weight",
+                    "stage_transition_target",
+                    "stage_transition_weight",
+                    "stage_relation_target",
+                    "stage_relation_weight",
+                )
+                missing_stage_keys = [key for key in required_stage_keys if key not in raw_batch]
+                if missing_stage_keys:
+                    raise KeyError(f"SSACT-3 batch is missing stage data: {missing_stage_keys}.")
+                stage_history = raw_batch["stage_semantic_history"].to(
+                    device=device, dtype=torch.float32
+                )
+                expected_history_shape = (
+                    stage_history.shape[0],
+                    self.phase_history_length,
+                    self.stage_feature_dim,
+                )
+                if stage_history.shape != expected_history_shape:
+                    raise ValueError(
+                        f"SSACT-3 stage history has shape {tuple(stage_history.shape)}; "
+                        f"expected {expected_history_shape}."
+                    )
+                predicted_features = self.semantic_states_from_probabilities(
+                    probabilities_by_view
+                ).detach()
+                predicted_input_ratio = self.scheduled_stage_predicted_input_ratio()
+                stage_history = stage_history.clone()
+                stage_history[:, -1] = (
+                    (1.0 - predicted_input_ratio) * stage_history[:, -1]
+                    + predicted_input_ratio * predicted_features
+                )
+                if self.stage_model is None:
+                    raise RuntimeError("SSACT-3 stage model is missing.")
+                stage_outputs = self.stage_model(stage_history, batch[OBS_STATE])
+                stage_loss_terms, stage_metric_logs = stage_losses(stage_outputs, raw_batch)
+                stage_total_loss = (
+                    self.stage_phase_loss_weight * stage_loss_terms["phase"]
+                    + self.stage_event_loss_weight * stage_loss_terms["event"]
+                    + self.stage_progress_loss_weight * stage_loss_terms["progress"]
+                    + self.stage_transition_loss_weight * stage_loss_terms["transition"]
+                    + self.stage_relation_loss_weight * stage_loss_terms["relation"]
+                )
+                attention_regularization = self.semantic_adapter.attention_regularization()
+                stage_total_loss = (
+                    stage_total_loss
+                    + self.stage_attention_regularization_weight * attention_regularization
+                )
+                predicted_phase = torch.softmax(stage_outputs["phase_logits"], dim=-1)
+                predicted_transition = torch.softmax(stage_outputs["transition_logits"], dim=-1)
+                stage_phase_target = raw_batch["stage_phase_target"].to(
+                    device=device, dtype=torch.float32
+                )
+                teacher_ratio = self.scheduled_phase_teacher_forcing_ratio()
+                stage_phase_condition = (
+                    teacher_ratio * stage_phase_target
+                    + (1.0 - teacher_ratio) * predicted_phase.detach()
+                )
+                act_batch[OBS_ENV_STATE] = stage_phase_condition.detach()
+                stage_context = stage_outputs["context"].detach()
+                stage_confidence = stage_phase_condition.amax(dim=-1) * (
+                    1.0
+                    - predicted_transition.detach()[:, STAGE_TRANSITION_NAMES.index("uncertain")]
+                )
+                stage_logs = {
+                    "stage_total_loss": float(stage_total_loss.detach().cpu()),
+                    "stage_phase_loss": float(stage_loss_terms["phase"].detach().cpu()),
+                    "stage_event_loss": float(stage_loss_terms["event"].detach().cpu()),
+                    "stage_progress_loss": float(stage_loss_terms["progress"].detach().cpu()),
+                    "stage_transition_loss": float(stage_loss_terms["transition"].detach().cpu()),
+                    "stage_relation_loss": float(stage_loss_terms["relation"].detach().cpu()),
+                    "stage_attention_regularization": float(attention_regularization.detach().cpu()),
+                    "stage_predicted_input_ratio": predicted_input_ratio,
+                    "phase_teacher_forcing_ratio": teacher_ratio,
+                    "stage_condition_confidence": float(stage_confidence.mean().detach().cpu()),
+                    **stage_metric_logs,
+                }
+            semantic_fusion_logs = {}
+            probabilities_for_act = self.semantic_probabilities_for_act(probabilities_by_view)
+            if self.uses_semantic_feature_fusion():
+                semantic_fusion_scale = self.scheduled_semantic_fusion_scale()
+                semantic_residuals = self.semantic_feature_residuals(
+                    probabilities_for_act,
+                    scale=semantic_fusion_scale,
+                    phase_probabilities=stage_phase_condition,
+                    stage_context=stage_context,
+                    stage_confidence=stage_confidence,
+                )
+                act_batch[IMAGE_FEATURE_RESIDUALS] = semantic_residuals
+                residual_rms = torch.stack(
+                    [residual.detach().square().mean().sqrt() for residual in semantic_residuals]
+                ).mean()
+                semantic_fusion_logs = {
+                    "semantic_fusion_scale": semantic_fusion_scale,
+                    "semantic_residual_rms": float(residual_rms.cpu()),
+                }
+            else:
+                semantic_maps = self.semantic_rgb_maps(probabilities_for_act)
+                if (
+                    self.experiment not in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS
+                    or action_to_seg_ratio <= 0.0
+                ):
+                    semantic_maps = [semantic_map.detach() for semantic_map in semantic_maps]
+                for rgb_key, semantic_map in zip(self.rgb_keys, semantic_maps, strict=True):
+                    act_batch[semantic_image_key(rgb_key)] = self.normalize_semantic_map(semantic_map)
 
             phase_loss = None
             phase_logs = {}
-            if self.experiment in PHASE_CONDITIONED_EXPERIMENTS:
+            if self.experiment == "SSACT-1":
                 required_phase_keys = ("phase_semantic_history", "phase_target", "phase_confidence")
                 missing_phase_keys = [key for key in required_phase_keys if key not in raw_batch]
                 if missing_phase_keys:
@@ -1656,6 +2066,8 @@ class MaskACTPolicy(nn.Module):
             loss = self.action_loss_weight * action_loss + self.seg_loss_weight * seg_loss
             if phase_loss is not None:
                 loss = loss + self.phase_loss_weight * phase_loss
+            if stage_total_loss is not None:
+                loss = loss + stage_total_loss
             dynamics_logs = {}
             if self.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
                 if self.semantic_dynamics is None:
@@ -1708,7 +2120,9 @@ class MaskACTPolicy(nn.Module):
                 **dice_logs,
                 **dynamics_logs,
                 **phase_logs,
+                **stage_logs,
                 **quality_logs,
+                **semantic_fusion_logs,
             }
             if self.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
                 logs["action_to_seg_target_grad_ratio"] = action_to_seg_ratio
@@ -1906,8 +2320,10 @@ def parse_args() -> argparse.Namespace:
             "4C",
             "5",
             "SEM-1",
+            "SEM-1-V2",
             "ASEM-1",
             "SSACT-1",
+            "SSACT-3",
             "SEM-2",
         ],
         required=True,
@@ -1961,6 +2377,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--action-loss-weight", type=float, default=1.0)
     parser.add_argument("--dice-loss-weight", type=float, default=1.0)
     parser.add_argument("--semantic-temperature", type=float, default=1.0)
+    parser.add_argument(
+        "--semantic-adapter-base-channels",
+        type=int,
+        default=32,
+        help="SEM-1-V2 base width for the lightweight five-channel semantic adapter.",
+    )
+    parser.add_argument(
+        "--semantic-fusion-warmup-steps",
+        type=int,
+        default=20_000,
+        help="SEM-1-V2 steps that train segmentation and RGB ACT before semantic residual fusion begins.",
+    )
+    parser.add_argument(
+        "--semantic-fusion-ramp-steps",
+        type=int,
+        default=10_000,
+        help="SEM-1-V2 steps used to linearly ramp semantic residual fusion from zero to full strength.",
+    )
     parser.add_argument(
         "--action-to-seg-grad-ratio",
         type=float,
@@ -2052,6 +2486,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--phase-min-confidence", type=float, default=0.10)
     parser.add_argument("--phase-teacher-forcing-steps", type=int, default=10_000)
     parser.add_argument("--phase-teacher-forcing-ramp-steps", type=int, default=20_000)
+    parser.add_argument(
+        "--stage-supervision",
+        type=Path,
+        default=None,
+        help="Offline SSACT-3 event/stage targets generated by mycode/generate_stage_supervision.py.",
+    )
+    parser.add_argument(
+        "--stage-conditioning-mode",
+        choices=PhaseConditionedSemanticAdapter.VALID_MODES,
+        default="attention-film",
+        help="SSACT-3 phase-conditioned semantic fusion mode; modes are directly ablatable.",
+    )
+    parser.add_argument("--stage-predicted-input-warmup-steps", type=int, default=20_000)
+    parser.add_argument("--stage-predicted-input-ramp-steps", type=int, default=10_000)
+    parser.add_argument("--stage-phase-loss-weight", type=float, default=0.20)
+    parser.add_argument("--stage-event-loss-weight", type=float, default=0.10)
+    parser.add_argument("--stage-progress-loss-weight", type=float, default=0.10)
+    parser.add_argument("--stage-transition-loss-weight", type=float, default=0.10)
+    parser.add_argument("--stage-relation-loss-weight", type=float, default=0.10)
+    parser.add_argument("--stage-attention-regularization-weight", type=float, default=0.01)
     parser.add_argument("--chunk-size", type=int, default=100)
     parser.add_argument("--n-action-steps", type=int, default=100)
     parser.add_argument("--pretrained-backbone-weights", default="ResNet18_Weights.IMAGENET1K_V1")
@@ -2189,6 +2643,8 @@ def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     semantic_keys = [semantic_image_key(rgb_key) for rgb_key in args.rgb_keys]
     if experiment in {"SEM-1", "ASEM-1", "SSACT-1"}:
         return [*semantic_keys, *args.rgb_keys]
+    if experiment in {"SEM-1-V2", "SSACT-3"}:
+        return list(args.rgb_keys)
     if experiment == "SEM-2":
         return semantic_keys
     if experiment in {"1A", "1B"}:
@@ -2305,6 +2761,9 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         metric_loss_weight=args.metric_loss_weight,
         metric_eps=args.metric_eps,
         semantic_temperature=getattr(args, "semantic_temperature", 1.0),
+        semantic_adapter_base_channels=getattr(args, "semantic_adapter_base_channels", 32),
+        semantic_fusion_warmup_steps=getattr(args, "semantic_fusion_warmup_steps", 20_000),
+        semantic_fusion_ramp_steps=getattr(args, "semantic_fusion_ramp_steps", 10_000),
         action_to_seg_grad_ratio=getattr(args, "action_to_seg_grad_ratio", 0.1),
         action_to_seg_warmup_steps=getattr(args, "action_to_seg_warmup_steps", 20_000),
         action_to_seg_ramp_steps=getattr(args, "action_to_seg_ramp_steps", 20_000),
@@ -2318,6 +2777,20 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         phase_loss_weight=getattr(args, "phase_loss_weight", 0.2),
         phase_teacher_forcing_steps=getattr(args, "phase_teacher_forcing_steps", 10_000),
         phase_teacher_forcing_ramp_steps=getattr(args, "phase_teacher_forcing_ramp_steps", 20_000),
+        stage_feature_dim=getattr(args, "stage_feature_dim", None),
+        stage_conditioning_mode=getattr(args, "stage_conditioning_mode", "attention-film"),
+        stage_predicted_input_warmup_steps=getattr(
+            args, "stage_predicted_input_warmup_steps", 20_000
+        ),
+        stage_predicted_input_ramp_steps=getattr(args, "stage_predicted_input_ramp_steps", 10_000),
+        stage_phase_loss_weight=getattr(args, "stage_phase_loss_weight", 0.20),
+        stage_event_loss_weight=getattr(args, "stage_event_loss_weight", 0.10),
+        stage_progress_loss_weight=getattr(args, "stage_progress_loss_weight", 0.10),
+        stage_transition_loss_weight=getattr(args, "stage_transition_loss_weight", 0.10),
+        stage_relation_loss_weight=getattr(args, "stage_relation_loss_weight", 0.10),
+        stage_attention_regularization_weight=getattr(
+            args, "stage_attention_regularization_weight", 0.01
+        ),
         pretrained_backbone_weights=args.pretrained_backbone_weights,
         mask_quality_weighting=getattr(args, "mask_quality_weighting", "hard"),
         mask_quality_full_score=getattr(args, "mask_quality_full_score", 0.95),
@@ -2350,6 +2823,9 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         metric_loss_weight=args.metric_loss_weight,
         metric_eps=args.metric_eps,
         semantic_temperature=args.semantic_temperature,
+        semantic_adapter_base_channels=args.semantic_adapter_base_channels,
+        semantic_fusion_warmup_steps=args.semantic_fusion_warmup_steps,
+        semantic_fusion_ramp_steps=args.semantic_fusion_ramp_steps,
         action_to_seg_grad_ratio=args.action_to_seg_grad_ratio,
         action_to_seg_warmup_steps=args.action_to_seg_warmup_steps,
         action_to_seg_ramp_steps=args.action_to_seg_ramp_steps,
@@ -2372,6 +2848,19 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         phase_teacher_forcing_steps=args.phase_teacher_forcing_steps,
         phase_teacher_forcing_ramp_steps=args.phase_teacher_forcing_ramp_steps,
         phase_feature_reliability=args.phase_feature_reliability,
+        stage_supervision=(
+            str(args.stage_supervision) if args.stage_supervision is not None else None
+        ),
+        stage_conditioning_mode=args.stage_conditioning_mode,
+        stage_predicted_input_warmup_steps=args.stage_predicted_input_warmup_steps,
+        stage_predicted_input_ramp_steps=args.stage_predicted_input_ramp_steps,
+        stage_phase_loss_weight=args.stage_phase_loss_weight,
+        stage_event_loss_weight=args.stage_event_loss_weight,
+        stage_progress_loss_weight=args.stage_progress_loss_weight,
+        stage_transition_loss_weight=args.stage_transition_loss_weight,
+        stage_relation_loss_weight=args.stage_relation_loss_weight,
+        stage_attention_regularization_weight=args.stage_attention_regularization_weight,
+        stage_feature_dim=args.stage_feature_dim,
         seed=args.seed,
         chunk_size=args.chunk_size,
         n_action_steps=args.n_action_steps,
@@ -2398,6 +2887,19 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
                 for name, color in SEMANTIC_PALETTE_BY_CLASS.items()
             }
             payload["semantic_map_action_gradient"] = args.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS
+            if args.experiment in SEMANTIC_FEATURE_FUSION_EXPERIMENTS:
+                payload["semantic_input_representation"] = "five_class_soft_probabilities"
+                payload["semantic_fusion"] = {
+                    "type": (
+                        "phase_conditioned_relation_residual_at_resnet_layer4"
+                        if args.experiment in STAGE_AWARE_EXPERIMENTS
+                        else "per_view_residual_at_resnet_layer4"
+                    ),
+                    "shared_adapter_across_views": True,
+                    "adds_transformer_tokens": False,
+                    "probabilities_detached_from_action_loss": True,
+                    "zero_initialized_output_projection": True,
+                }
             if args.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
                 payload["action_supervision_design"] = "mycode/ASEM_1_DESIGN.md"
             if args.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
@@ -2414,7 +2916,7 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
                     )
                 with open(semantic_state_summary_path) as semantic_state_summary_file:
                     payload["semantic_state_summary"] = json.load(semantic_state_summary_file)
-            if args.experiment in PHASE_CONDITIONED_EXPERIMENTS:
+            if args.experiment == "SSACT-1":
                 payload["phase_design"] = "mycode/SSACT_1_DESIGN.md"
                 payload["phase_names"] = ["uncover", "expose", "transport", "restore", "done"]
                 payload["phase_feature_names"] = list(
@@ -2426,6 +2928,24 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
                 if phase_summary_path.is_file():
                     with open(phase_summary_path) as phase_summary_file:
                         payload["phase_label_summary"] = json.load(phase_summary_file)
+            if args.experiment in STAGE_AWARE_EXPERIMENTS:
+                payload["stage_design"] = "mycode/SSACT_3_STAGEFILM_DESIGN.md"
+                payload["phase_names"] = list(STAGE_PHASE_NAMES)
+                payload["event_names"] = list(STAGE_EVENT_NAMES)
+                payload["transition_names"] = list(STAGE_TRANSITION_NAMES)
+                payload["relation_names"] = list(STAGE_RELATION_NAMES)
+                payload["semantic_state_names"] = list(
+                    SoftSemanticStateExtractor(include_confidence=True).feature_names(
+                        [key.rsplit(".", 1)[-1] for key in args.rgb_keys]
+                    )
+                )
+                stage_summary_path = args.stage_supervision.with_suffix(".json")
+                if not stage_summary_path.is_file():
+                    raise FileNotFoundError(
+                        f"Stage-supervision summary is missing: {stage_summary_path}"
+                    )
+                with open(stage_summary_path) as stage_summary_file:
+                    payload["stage_supervision_summary"] = json.load(stage_summary_file)
         json.dump(payload, f, indent=4)
         f.write("\n")
 
@@ -2691,9 +3211,12 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     source_root = args.root.resolve()
     normalize_dataset_keys(args, source_root)
     mask_suffixes, _ = build_mask_layout(list(args.rgb_keys), list(args.mask_target_keys))
-    if args.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS and mask_suffixes != list(SEMANTIC_CLASSES):
+    if (
+        args.experiment in (PREDICTIVE_SEMANTIC_EXPERIMENTS | STAGE_AWARE_EXPERIMENTS)
+        and mask_suffixes != list(SEMANTIC_CLASSES)
+    ):
         raise ValueError(
-            f"SSACT-1 mask order must be {list(SEMANTIC_CLASSES)} so the offline state cache aligns; "
+            f"{args.experiment} mask order must be {list(SEMANTIC_CLASSES)} so offline states align; "
             f"got {mask_suffixes}."
         )
 
@@ -2706,8 +3229,16 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         raise ValueError("--semantic-states is currently only used by SSACT-1.")
     if args.mask_quality_dir is not None and args.experiment not in SEMANTIC_EXPERIMENTS:
         raise ValueError(
-            "--mask-quality-dir currently supports SEM-1, ASEM-1, SSACT-1, and SEM-2. "
+            "--mask-quality-dir currently supports semantic experiments including SSACT-3. "
             "The legacy independent-BCE mask experiments require a separate classwise BCE masking path."
+        )
+    if args.semantic_adapter_base_channels <= 0:
+        raise ValueError(
+            f"--semantic-adapter-base-channels must be positive, got {args.semantic_adapter_base_channels}."
+        )
+    if args.semantic_fusion_warmup_steps < 0 or args.semantic_fusion_ramp_steps < 0:
+        raise ValueError(
+            "--semantic-fusion-warmup-steps and --semantic-fusion-ramp-steps must be non-negative."
         )
     if not 0.0 < args.mask_quality_full_score <= 1.0:
         raise ValueError(
@@ -2717,12 +3248,18 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         raise ValueError(
             f"--mask-quality-weight-gamma must be positive, got {args.mask_quality_weight_gamma}."
         )
-    if args.experiment in PHASE_CONDITIONED_EXPERIMENTS and args.phase_labels is None:
+    if args.experiment == "SSACT-1" and args.phase_labels is None:
         raise ValueError(
             "SSACT-1 requires --phase-labels from mycode/semantic_phase_labels.py."
         )
-    if args.phase_labels is not None and args.experiment not in PHASE_CONDITIONED_EXPERIMENTS:
+    if args.phase_labels is not None and args.experiment != "SSACT-1":
         raise ValueError("--phase-labels is currently only used by SSACT-1.")
+    if args.experiment in STAGE_AWARE_EXPERIMENTS and args.stage_supervision is None:
+        raise ValueError(
+            "SSACT-3 requires --stage-supervision from mycode/generate_stage_supervision.py."
+        )
+    if args.stage_supervision is not None and args.experiment not in STAGE_AWARE_EXPERIMENTS:
+        raise ValueError("--stage-supervision is currently only used by SSACT-3.")
 
     if args.overwrite_output and args.resume_checkpoint is not None:
         raise ValueError("--overwrite-output cannot be used together with --resume-checkpoint.")
@@ -2740,7 +3277,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             minimum_quality_score=args.mask_quality_min_score,
         )
     phase_store = None
-    if args.experiment in PHASE_CONDITIONED_EXPERIMENTS:
+    if args.experiment == "SSACT-1":
         phase_store = SemanticPhaseStore(
             args.phase_labels.expanduser().resolve(),
             total_frames=source_meta.total_frames,
@@ -2752,6 +3289,28 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         args.phase_feature_reliability = phase_store.feature_reliability.tolist()
     else:
         args.phase_feature_reliability = None
+    stage_store = None
+    if args.experiment in STAGE_AWARE_EXPERIMENTS:
+        stage_store = StageSupervisionStore(
+            args.stage_supervision.expanduser().resolve(),
+            total_frames=source_meta.total_frames,
+            history_length=args.phase_history_length,
+            history_stride=args.phase_history_stride,
+        )
+        if stage_store.num_views != len(args.rgb_keys):
+            raise ValueError(
+                f"Stage supervision has {stage_store.num_views} views but training uses "
+                f"{len(args.rgb_keys)}."
+            )
+        cached_rgb_keys = stage_store.rgb_keys.astype(str).tolist()
+        if cached_rgb_keys != list(args.rgb_keys):
+            raise ValueError(
+                f"Stage supervision RGB keys {cached_rgb_keys} do not match training keys "
+                f"{list(args.rgb_keys)}."
+            )
+        args.stage_feature_dim = stage_store.feature_dim
+    else:
+        args.stage_feature_dim = None
 
     image_keys_in_view = sorted({*args.rgb_keys, *args.mask_target_keys})
     view_root = args.view_root or (args.output_dir.parent / "dataset_views" / args.output_dir.name)
@@ -2766,9 +3325,10 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     save_run_config(args, image_keys_in_view)
 
     meta = LeRobotDatasetMetadata(args.repo_id, root=filtered_root)
-    if phase_store is not None and meta.total_frames != source_meta.total_frames:
+    if (phase_store is not None or stage_store is not None) and meta.total_frames != source_meta.total_frames:
         raise ValueError(
-            f"Filtered dataset has {meta.total_frames} frames but phase labels cover {source_meta.total_frames}."
+            f"Filtered dataset has {meta.total_frames} frames but offline labels cover "
+            f"{source_meta.total_frames}."
         )
     delta_timestamps = {"action": [i / meta.fps for i in range(args.chunk_size)]}
     dataset = LeRobotDataset(
@@ -2848,6 +3408,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             f"Semantic phases: {phase_store.path}; history={phase_store.history_length}x"
             f"{phase_store.history_stride} frames; minimum confidence={phase_store.minimum_confidence:g}."
         )
+    if stage_store is not None:
+        print(
+            f"Stage supervision: {stage_store.path}; history={stage_store.history_length}x"
+            f"{stage_store.history_stride} frames; feature_dim={stage_store.feature_dim}."
+        )
     if semantic_state_store is not None:
         print(
             f"Offline semantic states: {semantic_state_store.path}; future mask video decoding disabled; "
@@ -2869,6 +3434,13 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             )
         else:
             print(f"{semantic_description}; action gradient to semantic map: disabled.")
+        if args.experiment in SEMANTIC_FEATURE_FUSION_EXPERIMENTS:
+            print(
+                "Semantic fusion: five soft class probabilities -> shared lightweight adapter -> "
+                "per-view RGB ResNet layer4 residual; no extra transformer tokens; segmentation detached "
+                f"from action loss; warmup={args.semantic_fusion_warmup_steps}, "
+                f"ramp={args.semantic_fusion_ramp_steps}."
+            )
         if args.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
             print(
                 "Semantic dynamics: expert-action conditioned Gaussian rollout at offsets "
@@ -2876,7 +3448,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 f"loss_weight={args.semantic_dynamics_loss_weight:g}. This output is predictive, not "
                 "CLF-certified until independent error-bound calibration is complete."
             )
-        if args.experiment in PHASE_CONDITIONED_EXPERIMENTS:
+        if args.experiment == "SSACT-1":
             print(
                 "Phase model: ordered five-phase soft supervision; "
                 f"history={args.phase_history_length} samples x {args.phase_history_stride} frames; "
@@ -2884,6 +3456,15 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 f"teacher forcing={args.phase_teacher_forcing_steps} + "
                 f"{args.phase_teacher_forcing_ramp_steps} ramp steps; "
                 f"view/class reliability={args.phase_feature_reliability}."
+            )
+        if args.experiment in STAGE_AWARE_EXPERIMENTS:
+            print(
+                "Stage model: event-derived expose/separate/transport/restore/done supervision; "
+                f"conditioning={args.stage_conditioning_mode}; history={args.phase_history_length}x"
+                f"{args.phase_history_stride}; predicted-input warmup/ramp="
+                f"{args.stage_predicted_input_warmup_steps}/{args.stage_predicted_input_ramp_steps}; "
+                f"phase teacher forcing={args.phase_teacher_forcing_steps} + "
+                f"{args.phase_teacher_forcing_ramp_steps} ramp."
             )
     if args.no_gripper:
         print("No gripper: dropped gripper dimensions when present in action and selected state features.")
@@ -2928,6 +3509,8 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 )
             if phase_store is not None:
                 raw_batch = phase_store.add_batch_phase(raw_batch)
+            if stage_store is not None:
+                raw_batch = stage_store.add_batch(raw_batch)
             raw_batch = resize_training_visuals(
                 raw_batch,
                 rgb_keys=args.rgb_keys,

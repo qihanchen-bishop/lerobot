@@ -40,6 +40,7 @@ from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
 METRIC_INPUT = "metric_input"
 METRIC_PRED = "metric_pred"
 METRIC_SEED = "metric_seed"
+IMAGE_FEATURE_RESIDUALS = "image_feature_residuals"
 
 
 class ACTPolicy(PreTrainedPolicy):
@@ -496,8 +497,22 @@ class ACT(nn.Module):
             # For a list of images, the H and W may vary but H*W is constant.
             # NOTE: If modifying this section, verify on MPS devices that
             # gradients remain stable (no explosions or NaNs).
-            for img in batch[OBS_IMAGES]:
+            image_feature_residuals = batch.get(IMAGE_FEATURE_RESIDUALS)
+            if image_feature_residuals is not None and len(image_feature_residuals) != len(batch[OBS_IMAGES]):
+                raise ValueError(
+                    f"Expected one image feature residual per image ({len(batch[OBS_IMAGES])}), "
+                    f"got {len(image_feature_residuals)}."
+                )
+            for image_idx, img in enumerate(batch[OBS_IMAGES]):
                 cam_features = self.backbone(img)["feature_map"]
+                if image_feature_residuals is not None:
+                    residual = image_feature_residuals[image_idx]
+                    if residual.shape != cam_features.shape:
+                        raise ValueError(
+                            f"Image feature residual {image_idx} has shape {tuple(residual.shape)}; "
+                            f"expected {tuple(cam_features.shape)}."
+                        )
+                    cam_features = cam_features + residual
                 cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
                 cam_features = self.encoder_img_feat_input_proj(cam_features)
 

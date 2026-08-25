@@ -1,0 +1,601 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+
+\usepackage{amsmath,amssymb,bm,mathtools}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{cite}
+\usepackage{hyperref}
+
+\geometry{left=24mm,right=24mm,top=25mm,bottom=25mm}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  citecolor=green!40!black,
+  urlcolor=blue!60!black
+}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\pos}[1]{\left[#1\right]_{+}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+
+\title{面向遮挡物操作的阶段条件语义预测与事件触发视觉伺服\\
+\large 基于语义阶段、进度与回退学习的第二版中文方法草稿}
+\author{作者待定}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+动作分块 Transformer（ACT）能够从示范中学习复杂操作，但长动作块在执行期间可能因视觉误差、接触扰动和执行器滞后而逐渐过时。尤其在遮挡物操作中，如果阶段模型只在“目标物体已经开始移动”后才识别运输阶段，而策略又只有在收到运输阶段后才输出运输动作，就会形成因果死锁。本文提出一个逐步可验证的闭环框架：首先利用人工审核过的稀疏提示、SAM2 和轻量级 YOLO 提示生成器自动构建语义标注，并对自动标签进行离线质量评估；随后从任意数量的相机视角提取面积、质心、距离和接触等可解释语义状态；不是只学习当前阶段类别，而是学习目标出现、目标与遮挡物分离、目标进入区域和信号失效等切换信号；由带滞回和最小驻留时间的状态机管理阶段，并在阶段切换、信号失效或进度停滞时截断尚未执行的动作块并立即重新规划；最后以 ACT 生成名义动作块，以动作条件语义动力学预测动作结果，并通过残差动作、CLF-QP 或短视野 MPC 做小幅闭环修正。该方法不强制要求相机标定：单视角或多视角均可在各自归一化图像坐标中工作；只有需要将多个视角融合到统一物理坐标、报告实际距离或声明物理空间控制保证时才需要相机标定。本文给出方法成立所需的可检查条件，并设计分阶段实验逐步验证这些条件，而不是直接声称任意初态和任意遮挡下的全局成功保证。
+\end{abstract}
+
+\noindent\textbf{关键词：}自动语义标注；动作分块 Transformer；切换信号；事件触发重规划；无标定视觉伺服；不确定性评估
+
+\section{问题与核心思路}
+
+任务由机器人状态 $\bm q_t\in\R^{n_q}$、可用相机集合 $\mathcal V_t$ 和动作 $\bm a_t$ 描述。相机数量不固定：$|\mathcal V_t|=1$ 时为单视角，$|\mathcal V_t|>1$ 时为多视角；某个相机暂时失效时，只要仍有可靠视角，系统可以继续工作。
+
+本文保留四个核心模块：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 自动生成语义标注，并在训练前评估每帧、每类标签质量；
+  \item 从一个或多个视角构造可解释语义状态，并学习阶段切换信号；
+  \item 用状态机把切换信号转成稳定阶段，并把阶段切换与动作块截断、重规划绑定；
+  \item ACT 预测名义动作，语义动力学预测这些动作将产生的视觉结果；
+  \item 图像空间视觉伺服、残差动作或短视野 MPC 根据实际语义反馈修正 ACT，并在观测不可靠时缩短执行或重新规划。
+\end{enumerate}
+
+该框架的目的不是用手工控制器替代 ACT。ACT 负责复杂的双臂协同和接触先验，语义闭环只负责发现动作块已经过时并做受限修正。
+
+\section{自动语义标注与标签不确定性}
+
+\subsection{数据采集前置条件}
+
+语义方法能否发挥作用，首先取决于关键部件是否在图像中可分。质量评估只能发现或降低坏标签的影响，不能从根本上修复颜色、纹理和光照本身造成的不可分。因此正式采集前应先完成小规模视觉可分性验证：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 各关键部分的颜色和纹理要容易区分。工具、目标物体、目标区域、遮挡布和背景遮挡布不应使用相近颜色；尤其要避免工具、目标区域和侧视图背景遮挡布颜色接近；
+  \item 光线尽量充足、均匀，避免强阴影、过曝、高反光和局部颜色漂移。相机自动曝光和白平衡若会在 episode 内明显变化，应固定或重新校准；
+  \item 相机视角在当前实验阶段必须固定。正视图和侧视图的位置、焦距、分辨率、曝光和裁剪范围都应记录；相机移动、镜头更换或视野明显变化，应视为新的运行域；
+  \item 先录制少量短视频，覆盖遮挡、分离、运输、工具靠近目标区域和机械臂遮挡等典型情况；确认分割混淆矩阵可接受后，再进行完整数据采集；
+  \item 采集时保留完整元数据，包括物体编号、初始位置方格、视角配置、颜色版本、是否成功、是否人工接管、失败原因和异常光照/遮挡说明。
+\end{enumerate}
+
+如果使用一种颜色、三个目标物体、十二个初始位置方格，第一批可采集 $3\times12\times2=72$ 条轨迹。该规模适合作为颜色、分割质量、视角互补和阶段切换机制的快速验证集，但不应被视为最终充分训练数据。若要稳定比较 ACT、sem-1/sem-2 和 SSACT-3-StageFiLM，后续应扩展到每个“物体--位置”组合更多重复，并覆盖不同布料形态、遮挡程度、工具初始接触角度和失败边界状态。
+
+\subsection{从少量人工审核到完整数据集}
+
+语义类别包括遮挡物或布料、目标物体、目标区域和工具/执行器，分别记为 $C,O,G,A$。完整标注按照以下流程生成：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 写好 AI 分割提示词和类别定义，明确每一类的名称、颜色、可接受边界和容易混淆的反例。提示词应固定版本并记录；
+  \item 使用 Codex 为少量代表视频生成初始离散 JSON。每条记录包含视频、帧号、类别和包围盒，可直接作为分割提示；
+  \item 将 JSON 渲染为带包围盒和类别名称的图片，由人工审核并修正错误框。人工审核的是少量关键提示，而不是逐帧描绘 mask；
+  \item 将审核后的框输入 SAM2，在少量种子视频中传播得到完整时序语义 mask\cite{ravi2024sam2}，同时记录时间一致性、面积跳变、质心跳变、连通域异常和人工可疑标记等不确定性分数；
+  \item 对 SAM2 传播结果进行人工抽查，重点检查阶段边界、遮挡解除时刻、目标区域边界、工具与背景遮挡布颜色接近的帧，以及侧视图中容易混淆的区域；
+  \item 使用人工检查后的完整种子标注训练轻量级 YOLO 网络\cite{redmon2016yolo}，使其为其余视频自动生成类别框提示；
+  \item 对 YOLO 生成的提示进行人工抽查和必要修正，记录框置信度、漏检、错检和类别混淆；
+  \item 将 YOLO 提示再次交给 SAM2 传播，生成整个训练数据集的逐帧语义标注；
+  \item 对全数据集分割结果重新计算不确定性分数，并输出每条轨迹、每个视角、每个类别的质量报告。训练策略前，应先确认高风险类别没有系统性误标。
+\end{enumerate}
+
+这个流程显著减少人工成本，但最终标签仍是自动生成的。Codex 初始框、YOLO 框和 SAM2 时序传播中的任一环节都可能产生系统误差，因此标签在进入策略训练前必须经过质量评估，并按质量连续调整监督强度。
+
+\subsection{离线标签质量评估}
+
+当前实现对视角 $v$、类别 $c$ 和二值标签 $M_{t,c}^{v}$ 逐帧计算五项诊断量。这里的质量分是用于排序、筛查和训练加权的工程启发式量，不是分割准确率，也不是经过校准的错误概率。
+
+\paragraph{时间一致性}
+令相邻帧 IoU 为
+\begin{equation}
+I_{t-}^{v,c}=\operatorname{IoU}(M_{t-1,c}^{v},M_{t,c}^{v}),\qquad
+I_{t+}^{v,c}=\operatorname{IoU}(M_{t,c}^{v},M_{t+1,c}^{v}),
+\end{equation}
+实际采用较保守的两侧最小值
+\begin{equation}
+T_t^{v,c}=\min\{I_{t-}^{v,c},I_{t+}^{v,c}\}.
+\end{equation}
+序列首尾缺少的邻居按 IoU 为 1 处理；若两个 mask 都为空，其 IoU 也定义为 1。
+
+\paragraph{面积突变}
+令 $A_t^{v,c}=|M_{t,c}^{v}|$ 为像素面积。实现对前后两个相邻对分别计算对数面积变化，并取较大值：
+\begin{equation}
+D_{A,t}^{v,c}=\max_{j\in\{t-1,t+1\}}
+\left|\log\frac{A_t^{v,c}+1}{A_j^{v,c}+1}\right|.
+\end{equation}
+面积阈值 $0.45$ 大致对应相邻帧面积变化倍数超过 $\exp(0.45)\approx1.57$。
+
+\paragraph{质心跳变}
+将质心横纵坐标分别除以图像宽高，得到 $\bm p_{t,c}^{v}\in[0,1]^2$，同样取与两个邻居距离的较大值：
+\begin{equation}
+D_{C,t}^{v,c}=\max_{j\in\{t-1,t+1\}}
+\norm{\bm p_{t,c}^{v}-\bm p_{j,c}^{v}}.
+\end{equation}
+若一侧 mask 为空而没有有限质心，该相邻对不产生质心惩罚，面积项和时间 IoU 项负责检测出现或消失。
+
+\paragraph{连通域异常}
+统计面积不小于图像面积 $10^{-4}$ 的有效连通域数量 $K_t^{v,c}$。布料可能被机械臂遮挡而自然分裂，工具也可能包含多个部件，因此阈值按类别设置。
+
+\paragraph{正反传播一致性}
+在独立正向和反向 SAM2 传播都覆盖的帧上，计算
+\begin{equation}
+B_t^{v,c}=\operatorname{IoU}(M_{t,c}^{v,\rightarrow},M_{t,c}^{v,\leftarrow}).
+\end{equation}
+该项检测传播方向改变后是否得到相近结果。没有双向覆盖的帧不应被解释为已经验证；当前第一版代码为保持分数完整，将其双向子分数设为 1，同时单独保存 \texttt{bidirectional\_available} 供报告覆盖率。
+
+\paragraph{归一化与综合分数}
+设阈值分别为 $\tau_T,\tau_A,\tau_C,K_{\max},\tau_B$，并令 $\operatorname{clip}(x)=\min(1,\max(0,x))$。五个子分数为
+\begin{align}
+s_T&=\operatorname{clip}(T/\tau_T), &
+s_A&=\operatorname{clip}(1-D_A/\tau_A),\\
+s_C&=\operatorname{clip}(1-D_C/\tau_C), &
+s_K&=\operatorname{clip}\!\left(K_{\max}/\max(K,1)\right),\\
+s_B&=\begin{cases}
+\operatorname{clip}(B/\tau_B),&\text{双向结果可用},\\
+1,&\text{双向结果不可用}.
+\end{cases}
+\end{align}
+当前实现采用五项等权平均：
+\begin{equation}
+Q_{t,c}^{v}=\frac{s_T+s_A+s_C+s_K+s_B}{5},\qquad
+\gamma_{t,c}^{v}=\mathbb I[Q_{t,c}^{v}\geq0.60].
+\end{equation}
+其中 $\gamma$ 只保留为低质量比例统计和旧硬门控实验的复现量。当前 SEM 质量实验改用连续损失权重
+\begin{equation}
+w_{t,c}^{v}=\left[\min\left(\frac{Q_{t,c}^{v}}{Q_{\mathrm{full}}},1\right)\right]^{\rho},
+\qquad Q_{\mathrm{full}}=0.95,\quad \rho=1.
+\end{equation}
+因此 $Q\geq0.95$ 的标签全量参与，$Q=0.60$ 时权重约为 0.63，分数较低的标签仍提供较弱监督而不会被阈值直接丢弃。对背景像素，使用同一视角所有前景类别权重的最小值，避免某个前景类别不可靠时仍将其误标区域作为高可信背景。
+基础阈值为
+\begin{equation}
+(\tau_T,\tau_A,\tau_C,K_{\max},\tau_B)=(0.6,0.45,0.08,3,0.6).
+\end{equation}
+object 将 $K_{\max}$ 改为 2；occluder 使用 $(\tau_T,K_{\max})=(0.5,8)$。tool 因运动快且可能由多个可见部件组成，使用 $(\tau_T,\tau_C,K_{\max},\tau_B)=(0.4,0.12,6,0.5)$。单次低 IoU 可能来自真实快速运动，因此原始指标和异常类型都保留供人工抽查，不能只看综合分数。
+
+\paragraph{当前 bettersetup 数据的结果}
+完整数据包含 90 条轨迹和每个语义流 53723 帧。逐流结果如下：
+\begin{table}[htbp]
+  \centering
+  \small
+  \begin{tabular}{lrrr}
+    \toprule
+    视角--类别 & 平均 $Q$ & 第 1 百分位 $Q$ & $Q<0.60$ 比例 \\
+    \midrule
+    front--object   & 0.9673 & 0.5935 & 1.080\% \\
+    front--occluder & 0.9770 & 0.7777 & 0.082\% \\
+    front--region   & 0.9886 & 0.7494 & 0.346\% \\
+    front--tool     & 0.9420 & 0.6568 & 0.410\% \\
+    side--object    & 0.9603 & 0.6231 & 0.765\% \\
+    side--occluder  & 0.9848 & 0.8840 & 0.000\% \\
+    side--region    & 0.9955 & 0.9516 & 0.009\% \\
+    side--tool      & 0.9457 & 0.5811 & 1.634\% \\
+    \bottomrule
+  \end{tabular}
+  \caption{bettersetup 自动标签诊断分数。该表反映时序和传播一致性，不是相对人工真值的 IoU。}
+\end{table}
+执行器改为橙色后，front--tool 相比旧数据的平均分从约 0.850 提高到 0.942，低分比例从约 7.11\% 降到 0.41\%，说明前视图中的颜色混淆明显减轻。side--tool 的低分帧仍主要来自布料遮挡、只露出很小区域或出画，而不是大面积颜色混淆。异常主要集中在 front episode 61、68 以及 side episode 65、82、83，应在正式实验前定点复查。
+
+这个分数有三项必须明确的局限。第一，达到阈值的子指标会饱和为 1，因此总体均值天然偏高，$Q=0.97$ 不能解释为 97\% 像素正确。第二，持续为空的 mask 在时间、面积、质心和连通域项上可能得到高分；对本应不可见的 object 这是合理状态，但意外的长期漏检也可能被遗漏。第三，时间稳定但始终跟错目标或分错类别的 mask 仍可能得高分。因此第一版可将 $Q$ 用作筛查和损失加权，但论文中的“不确定性”结论必须再通过独立人工标注子集上的 Dice/IoU、错误检出率和可靠性曲线进行校准。
+
+训练 SEM 时，加权交叉熵和前景 Dice 都乘以上述逐帧、逐视角、逐类别权重；未来任一必要标签不可靠时，相应时间点仍不参与语义动力学损失。当前数据的双向覆盖率为 front 93.1\%、side 70.9\%，报告质量时必须与平均双向 IoU 一并给出，不能把未覆盖帧当成已验证帧。
+
+离线标签质量与部署时模型置信度是两个不同问题。前者回答“训练标签是否可信”，后者回答“策略当前看到的分割是否可信”，二者需要分别评估。
+
+\section{可变视角语义状态}
+
+\subsection{每个视角的图像空间状态}
+
+分割模型输出软概率 $P_{t,c}^{v}(x,y)\in[0,1]$。每个视角独立计算：
+\begin{itemize}[leftmargin=2.3em]
+  \item 各类面积比例 $r_{t,c}^{v}$；
+  \item 物体、目标区域和执行器的归一化软质心；
+  \item 物体到目标、执行器到物体的归一化图像距离；
+  \item 物体--目标和物体--布料的图像接触指标；
+  \item 分割熵、时间跳变和类别可见性等在线置信度。
+\end{itemize}
+
+当前语义图采用互斥多类 softmax，所以物体和目标区域的硬标签不会在同一像素直接重叠。第一版使用局部膨胀后的接触代理
+\begin{equation}
+\eta_{OG,t}^{v}=
+\frac{\sum_{x,y}P_{t,O}^{v}(x,y)
+\mathcal D_{\rho}(P_{t,G}^{v})(x,y)}
+{\sum_{x,y}P_{t,O}^{v}(x,y)+\epsilon},
+\end{equation}
+其中 $\mathcal D_{\rho}$ 是局部软膨胀。它表示图像邻接或占据程度，不等于真实三维物理重叠。
+
+将上述量组成视角状态 $\bm z_t^v$。全部量都在各自图像坐标内归一化，因此不需要知道相机内参、外参或桌面单应矩阵。
+
+\subsection{主视角与补充视角}
+
+对每个可靠视角使用共享编码器 $\phi$，再进行与视角数量无关的集合聚合：
+\begin{equation}
+\bm h_t=\rho\left(
+\frac{\sum_{v\in\mathcal V_t}\alpha_t^v
+\phi(\bm g_t^v\odot\bm z_t^v,\bm g_t^v,e_v)}
+{\sum_{v\in\mathcal V_t}\alpha_t^v+\epsilon}
+\right),
+\end{equation}
+其中 $\bm g_t^v\in[0,1]^{d_z}$ 是按语义类别和特征计算的置信门，$\alpha_t^v$ 是该视角对当前任务相关特征的总体可用度，$e_v$ 是可学习的视角标识。两个视角不应被当成可以简单互换的传感器：正视图和侧视图的几何、遮挡模式和错误模式差别很大，硬切换或直接平均都可能引入新的不稳定性。
+
+更合适的第一版策略是“正视图主导，侧视图补充”。正视图作为阶段切换和目标区域判断的主视角；侧视图主要在正视图目标物体短暂丢失、被机械臂遮挡或正视图质量分下降时提供补充证据。实现上不做
+\begin{equation}
+\bm h_t=\bm h_t^{front}\ \text{或}\ \bm h_t^{side}
+\end{equation}
+这种硬切换，而是让侧视图通过可靠度门控提供残差信息：
+\begin{equation}
+\bm h_t=\rho\left(
+\phi(\bm g_t^{front}\odot\bm z_t^{front},\bm g_t^{front},e_{front})
++\alpha_t^{side\rightarrow front}
+\phi(\bm g_t^{side}\odot\bm z_t^{side},\bm g_t^{side},e_{side})
+\right),
+\end{equation}
+其中 $\alpha_t^{side\rightarrow front}$ 在正视图 object 质量高时较小，在正视图 object 丢失且侧视图 object 质量高时增大。这样可以只降低侧视图 tool 特征的权重，同时保留侧视图 object 和 region 的补充信息，而不是丢弃整个侧视角。一个视角时公式自然退化为单视角；多个视角时，不同相机提供遮挡互补信息。训练时随机丢弃视角和单个类别特征，使模型学会在观测缺失时退化运行。
+
+这一点也解释了早期 sem-1/sem-2 结果不强的一个可能原因：当时语义输入验证没有把自动标签质量作为训练权重，也没有显式建模正视图和侧视图的不同角色。语义图本身有用，但如果低质量标签被同等监督、侧视图 tool 错误被直接融合，语义分支可能会把错误证据稳定地传给策略。
+
+未经标定时，不直接平均不同相机中的质心坐标，而是先分别编码再聚合。若任务需要厘米级距离、统一桌面轨迹或把多个视角严格融合到同一物理坐标，则需要相机内外参或桌面单应标定。这是物理坐标融合的条件，不是图像空间视觉伺服的必要条件。
+
+\section{基于语义状态的阶段、进度与切换学习}
+
+\subsection{阶段定义与阶段目标}
+
+任务不再按轨迹时间比例划分，而是由可观测语义状态定义。阶段集合记为
+\begin{equation}
+\mathcal M=\{E,S,T,R,D\},
+\end{equation}
+分别表示暴露目标、分离目标与遮挡物、运输目标、恢复遮挡物和完成。各阶段的语义目标如下：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 暴露阶段 $E$：目标尚未稳定出现，策略应减小遮挡物在工作区中的占比并提高目标可见度；
+  \item 分离阶段 $S$：目标已经出现，策略应提高目标边界完整度和可见比例，增大目标与遮挡物的边界间隔并减小邻接长度；
+  \item 运输阶段 $T$：目标已与遮挡物分离，策略应关注执行器--目标相对位置、执行器高度、目标--目标区域距离和目标区域包含率；
+  \item 恢复阶段 $R$：目标已经完整进入目标区域，策略应提高遮挡物对指定工作区的覆盖比例；
+  \item 完成态 $D$：目标保持在目标区域内，且遮挡物覆盖比例达到完成阈值。
+\end{enumerate}
+
+“目标面积增大”只作为可见性辅助量，因为它也会随相机投影和目标距离变化；“遮挡物超过 50\%”应相对固定工作区 ROI 计算，而不是相对整幅图像计算。执行器高度优先由关节状态和正运动学获得，不能仅依赖单目分割。对互斥语义标签，目标与遮挡物的像素交集天然接近零，因此分离程度使用归一化边界距离和邻接长度，而不是直接使用 mask IoU。
+
+对每个视角构造归一化语义几何量，并与机器人状态组成
+\begin{equation}
+\bm g_t^v=[r_O,r_C,d_{OC},\eta_{OC},d_{AO},d_{OG},
+r_{O\subset G},r_{C\cap W},h_A,q_{mask}]_t^v,
+\end{equation}
+其中 $W$ 是工作区 ROI，$h_A$ 是执行器高度，$q_{mask}$ 是在线语义质量。面积除以对应 ROI 面积，距离除以图像对角线或目标尺度，相对位置按目标宽高归一化。多视角指标先在各自图像坐标中编码，再按视角可靠度融合，不直接平均不同相机的像素坐标。
+
+\subsection{未调制感知主干与四类输出头}
+
+仅增加一个阶段分类输出不能保证策略学会阶段目标。第二版模型首先从 RGB、soft semantic map 和机器人状态提取未调制基础特征
+\begin{equation}
+\bm z_t^{base}=F_{base}(I_t,P_t,\bm q_t),
+\end{equation}
+再由时序 Transformer 或 GRU 编码最近 $L$ 帧基础特征、语义几何量、机器人状态和动作历史：
+\begin{equation}
+\bm b_t=F_{temp}(\bm z_{t-L+1:t}^{base},\bm g_{t-L+1:t},
+\bm q_{t-L+1:t},\bm a_{t-L:t-1}).
+\end{equation}
+模型共享时序表示 $\bm b_t$，但分别输出：
+\begin{align}
+\bm\pi_t^m &= p_\psi(m_t\mid\bm b_t), &&\text{Phase Head},\\
+\hat r_t^m &= f_r(\bm b_t,m_t)\in[0,1], &&\text{Progress Head},\\
+\bm e_t &= f_e(\bm b_t), &&\text{Event Head},\\
+\bm u_t &= p_\omega(u_t\mid\bm b_t,m_t), &&\text{Transition Head}.
+\end{align}
+Event Head 预测目标可信出现、目标与遮挡物分离、目标完整进入区域、遮挡恢复、目标丢失、分离失效、目标离开区域和语义信号有效性。Transition Head 的输出集合为
+\begin{equation}
+\mathcal U=\{\text{Stay},\text{Advance},\text{Rollback},\text{Uncertain}\}.
+\end{equation}
+加入 Uncertain 很重要：目标 mask 消失既可能是真实重遮挡，也可能是分割暂时失败。低质量观测时应暂缓切换、缩短执行或请求补充视角，而不是强制前进或回退。
+
+Phase Head 负责估计观测对应的阶段，Progress Head 负责估计当前阶段完成度，Event Head 描述可解释的切换事实，Transition Head 根据连续历史预测应保持、前进还是回退。最终活动阶段由外部状态机维护，而不是逐帧采用 $\arg\max\bm\pi_t^m$。
+
+\subsection{阶段条件的残差特征调制}
+
+为了让 ACT 在不同阶段主动关注不同关系，使用阶段后验的软嵌入
+\begin{equation}
+\bm e_t^m=\sum_{k\in\mathcal M}\pi_{t,k}^{m}\bm e_k,
+\end{equation}
+并通过残差 FiLM 或 phase-conditioned attention 调制策略分支：
+\begin{equation}
+\bm z_t^{policy}=\bm z_t^{base}
++\alpha c_t^m\operatorname{FiLM}(\bm z_t^{base},\bm e_t^m),
+\end{equation}
+其中 $c_t^m$ 是阶段置信度。阶段不确定时调制自动减弱，未调制基础视觉信息始终保留。Phase、Progress、Event 和 Transition Heads 必须读取 $\bm z^{base}$ 或 $\bm b_t$，不能读取已经被阶段调制的特征，否则“错误阶段预测--抑制其他阶段特征--进一步确信错误阶段”会形成自强化闭环。
+
+策略分支可进一步加入四个关系查询：object--cover、tool--object、object--region 和 cover--workspace。阶段嵌入只改变这些关系对动作预测的相对权重，而不做硬特征删除。辅助几何预测损失要求隐特征恢复边界距离、邻接程度、相对位置和区域包含率，因此“关注什么”具有可检验监督，而不是仅依靠不可解释的注意力权重。
+
+训练早期使用语义生成的软阶段标签调制 ACT，随后逐渐混合预测阶段，最后主要使用预测阶段，减少训练与部署之间的 phase exposure bias。第一版将输入策略的预测阶段概率执行 stop-gradient，使动作误差训练阶段 adapter 和 ACT，但不能通过修改 Phase Head 来投机降低动作误差；若后续确需联合优化，再根据梯度冲突实验决定是否开放该路径。
+
+\subsection{从语义序列自动生成监督}
+
+阶段和切换监督可以从语义序列自动生成，不需要按固定时间划分，也不需要逐条手工标注精确边界：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 逐帧计算目标可见度、遮挡物工作区占比、目标--遮挡物边界距离与邻接、执行器--目标相对位置、目标区域包含率和恢复覆盖率；
+  \item 根据 mask 质量对时间序列做加权平滑，并为每个语义条件设置不同的进入和退出阈值；
+  \item 从高质量条件首次持续满足的位置产生候选事件，再根据 $E\rightarrow S\rightarrow T\rightarrow R\rightarrow D$ 的顺序约束生成初始阶段；
+  \item 在候选边界前后使用软标签窗口，不强制把单独一帧作为绝对边界；
+  \item 根据相邻帧阶段、阶段进度趋势和失败条件生成 Stay、Advance、Rollback 与 Uncertain 标签；
+  \item 只人工检查低置信、阶段逆序、事件缺失、不同视角冲突和模型分歧大的轨迹。
+\end{enumerate}
+
+该方法属于弱监督时间分解：TACO 可以在只给定子任务顺序而没有帧级边界时联合完成时间对齐和子策略学习\cite{shiarlis2018taco}；CompILE 说明可从演示中学习可变长度片段和边界\cite{kipf2019compile}。本文不完全无监督发现匿名技能，而是利用已知语义阶段和顺序产生可解释软监督，以避免潜在技能与物理阶段无法对应的问题。
+
+成功示范通常只能产生 Stay 和 Advance，不能提供真实 Rollback。要学习失败恢复，数据必须额外包含目标重新被遮挡、分离后再次邻接、目标进入区域后滑出以及恢复遮挡时破坏目标位置等轨迹；也可从阶段边界附近主动扰动并由人工接管恢复。没有这些状态，模型即使学会回退分类，也不能保证回退后的 ACT 会生成有效恢复动作。
+
+\subsection{受约束切换、滞回与动作块截断}
+
+最终在线切换采用学习信号与受约束状态机结合。允许的基本路径为
+\begin{equation}
+E\leftrightarrow S\leftrightarrow T\leftrightarrow R\rightarrow D,
+\end{equation}
+但具体回退还必须满足对应失败事件。例如 $T\rightarrow S$ 需要目标丢失或重新邻接，$R\rightarrow T$ 需要目标离开目标区域，不能仅因 Phase Head 一帧波动而回退。Neural Task Graphs 表明显式任务图可以表达组合任务路径以及失败后的前置步骤恢复\cite{huang2019ntg}；Option-Critic 则提供了联合学习阶段内部策略与终止函数的理论对应\cite{bacon2017optioncritic}。本文采用受约束图而不是完全自由的阶段选择，以利用已知任务拓扑并降低数据需求。
+
+切换信号使用进入阈值 $\tau^{on}$、退出阈值 $\tau^{off}$、连续确认帧数和最小驻留时间。例如：
+\begin{align}
+E\rightarrow S &: s_t^{vis}>\tau_{vis}^{on}\ \text{持续}\ N_{on}\ \text{帧},\\
+S\rightarrow T &: s_t^{sep}>\tau_{sep}^{on}\ \text{持续}\ N_{on}\ \text{帧},\\
+T\rightarrow R &: s_t^{in}>\tau_{in}^{on}\ \text{持续}\ N_{on}\ \text{帧},\\
+R\rightarrow D &: s_t^{cover}>\tau_{cover}^{on}\ \text{且}\ s_t^{in}\ \text{保持}.
+\end{align}
+其中 $S\rightarrow T$ 必须由“已经完成分离、可以开始运输”触发，不能等到目标已经移动后才进入运输，否则会再次形成因果死锁。进度回退使用时间窗口内的趋势而不是单帧差分；观测为 Uncertain 时优先保持当前阶段、缩短动作执行并重新观测。
+
+ACT 或 diffusion policy 可以输出长度为 $H$ 的动作块，但实际执行长度为
+\begin{equation}
+K_{exec}=\min\{K_m,K_{learned},K_{event}\}.
+\end{equation}
+确认 Advance 或 Rollback 后，系统立即清空未执行动作队列，更新活动阶段并用最新观测重新规划；进度长期停滞、语义质量下降或达到阶段执行上限时，也提前截断并重新规划。这样阶段、切换、执行长度和闭环恢复成为同一控制循环，而不是彼此独立的分类任务。
+
+\section{语义预测 ACT 与无标定视觉伺服}
+
+\subsection{ACT 名义动作}
+
+ACT 根据 RGB、软语义图、机器人状态和阶段表示预测长度为 $H$ 的名义动作块\cite{zhao2023act}：
+\begin{equation}
+\bm a_{t:t+H-1}^{ACT}=\pi_{ACT}(I_t,\bm h_t,\bm q_t,\bm\pi_t^m).
+\end{equation}
+ACT 保留复杂示范行为，策略以较短间隔重新观察和规划，而不是盲目执行完整长动作块。
+
+\subsection{动作条件语义动力学}
+
+学习模型预测给定动作后的未来语义状态及不确定性：
+\begin{equation}
+p_\theta\left(
+\bm h_{t+k}\mid \bm h_t,\bm q_t,
+\bm a_{t:t+k-1},\bm\pi_t^m
+\right),\qquad k\in\mathcal K.
+\end{equation}
+预测均值用于判断视觉进度，预测方差和独立校准残差共同构成可信区间。训练 softmax 自信并不代表动力学误差有界，因此误差界必须在未参与训练的轨迹上校准。
+
+\subsection{图像空间视觉目标}
+
+每个阶段定义简单、可解释的图像目标：
+\begin{align}
+V_E &= \pos{r_{C\cap W}-\bar r_C^E}^2
+       +\lambda_{EO}\pos{\bar r_O^E-r_O}^2,\\
+V_S &= \lambda_{S\eta}\pos{\eta_{OC}-\bar\eta_{OC}}^2
+       +\lambda_{Sd}\pos{\bar d_{OC}-d_{OC}}^2,\\
+V_T &= \pos{d_{OG}-\bar d_T}^2
+       +\lambda_{Tin}\pos{\bar r_{in}-r_{O\subset G}}^2
+       +\lambda_{TA}\pos{d_{AO}-\bar d_{AO}}^2
+       +\lambda_{Th}(h_A-h_A^*)^2,\\
+V_R &= \lambda_{RC}\pos{\bar r_{C\cap W}-r_{C\cap W}}^2
+       +\lambda_{Rin}\pos{\bar r_{in}-r_{O\subset G}}^2,\\
+V_D &= 0.
+\end{align}
+其中 $\eta_{OC}$ 是目标--遮挡物邻接程度，$r_{O\subset G}$ 是目标区域包含率。单视角时直接使用该视角的 $V_m^v$；多视角时按可靠度加权，或对关键误差采用保守最大值。阈值由成功训练轨迹和独立校准轨迹确定，不能在最终测试集上反复调整。
+
+\subsection{为什么不一定需要相机标定}
+
+经典基于图像的视觉伺服可以直接让图像误差下降\cite{chaumette2006visual}。本文不把像素速度直接解释为三维末端速度，而是从示范数据学习局部关系
+\begin{equation}
+\Delta\bm h_t=\bm f_m(\bm h_t)+
+\bm G_m(\bm h_t)\Delta\bm a_t+\bm d_t,
+\end{equation}
+其中 $\Delta\bm a_t$ 是关节目标增量。只要局部模型 $\bm G_m$ 在当前运行域内准确，便可以在图像空间判断某个关节修正是否使 $V_m$ 下降，不需要显式相机标定。这属于学习型、无标定图像视觉伺服。
+
+相机标定在以下情况才是必要或明显有益的：
+\begin{itemize}[leftmargin=2.3em]
+  \item 要把不同视角的点融合成统一三维点或桌面坐标；
+  \item 要直接使用解析图像雅可比矩阵，而不是学习局部动作--图像关系；
+  \item 要报告厘米、毫米等物理尺度误差；
+  \item 要把碰撞距离、工作空间边界等物理安全约束写入控制器。
+\end{itemize}
+
+\subsection{受限闭环修正}
+
+令 ACT 当前动作增量为 $\Delta\bm a_t^{ACT}$。在局部模型上寻找距离 ACT 最近的修正：
+\begin{align}
+\Delta\bm a_t^*,\delta_t^*=\argmin_{\Delta\bm a,\delta\geq0}\quad
+&\frac{1}{2}\norm{\Delta\bm a-\Delta\bm a_t^{ACT}}_{W}^{2}
++p_\delta\delta^2\\
+\text{s.t.}\quad
+&\widehat{\Delta V_m}(\bm h_t,\Delta\bm a)
++\beta_{model}+\beta_{obs}
+\leq-\rho_m V_m(\bm h_t)+\delta,\\
+&\Delta\bm a_{min}\leq\Delta\bm a\leq\Delta\bm a_{max}.
+\end{align}
+这里 $\beta_{model}$ 和 $\beta_{obs}$ 分别上界动力学预测误差和观测误差。QP 只做满足视觉下降条件所需的最小修正；若松弛 $\delta$ 过大或观测不可靠，则不继续声称下降，而是停止、减速或立即重新规划。
+
+\subsection{从残差动作到短视野 MPC}
+
+完整版本包含三种由弱到强的闭环修正方式。它们共享同一个语义 belief、切换信号和动作条件动力学，只是在线优化强度不同。
+
+\paragraph{残差动作}
+训练一个小幅修正头：
+\begin{equation}
+\Delta\bm a_t^{res}=r_\xi(\mathcal H_t,m_t,\bm a_t^{ACT}),\qquad
+\bm a_t=\bm a_t^{ACT}+\lambda_{res}\Delta\bm a_t^{res}.
+\end{equation}
+残差头零初始化，并限制幅度，使初始行为严格接近 ACT。训练目标是专家动作残差、动作平滑和语义进度共同约束。它计算快，适合作为第一种主动修正，但没有显式下降保证。
+
+\paragraph{CLF-QP}
+使用上一小节的 QP，只改写当前动作或很短一段动作。它的优势是可解释：若模型误差界和观测误差界成立，且 QP 可行，就可以声明图像空间 Lyapunov 目标 $V_m$ 局部下降。它适合运输和恢复这类目标稳定明确的阶段，不适合目标不可见的早期遮挡阶段。
+
+\paragraph{短视野 MPC}
+当动作和语义动力学足够稳定后，可在 horizon $H_M$ 上优化：
+\begin{align}
+\min_{\bm a_{t:t+H_M-1}}\quad
+&\sum_{k=1}^{H_M} c_m(\hat{\bm h}_{t+k},\bm a_{t+k-1})
+\ +\lambda_{nom}\sum_{k=0}^{H_M-1}
+\norm{\bm a_{t+k}-\bm a_{t+k}^{ACT}}^2\\
+\text{s.t.}\quad
+&\hat{\bm h}_{t+k+1}=f_\theta(\hat{\bm h}_{t+k},\bm q_{t+k},\bm a_{t+k},m_t).
+\end{align}
+MPC 可以看未来几步，因此比一步 QP 更适合接触前调整工具位置；但它更依赖动力学模型，多步预测误差也更容易累积。因此本文把 MPC 放在最后一阶段实验，而不是第一版直接启用。
+
+\subsection{完整在线系统}
+
+最终系统每个控制周期执行以下流程：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 从可用视角获得 RGB、soft mask 和在线置信度；
+  \item 将当前观测和历史输入 belief model，得到语义状态、切换信号、阶段概率和语义质量；
+  \item FSM 根据切换信号、滞回和最小驻留时间更新阶段；
+  \item 若发生切换、回退、进度停滞或质量失效，清空动作队列；
+  \item 队列为空时，ACT/DP 根据当前阶段重新规划动作块；
+  \item 根据实验版本选择无修正、残差修正、CLF-QP 或短视野 MPC；
+  \item 执行少量动作，再重新观测。
+\end{enumerate}
+这个流程把模仿学习和传统闭环控制分工明确化：ACT/DP 提供复杂操作先验；切换信号和 FSM 决定当前应优化哪个子目标；视觉伺服/MPC 只在目标明确、观测可信、动力学误差可校准时承担局部收敛职责。
+
+\section{训练目标与执行流程}
+
+总损失同时监督动作、语义、阶段、事件、进度和切换：
+\begin{align}
+\mathcal L={}&\mathcal L_{ACT}
++\lambda_{seg}\mathcal L_{seg}^{quality}
++\lambda_{phase}q_t\mathcal L_{phase}
++\lambda_{event}q_t\mathcal L_{event}\notag\\
+&+\lambda_{progress}q_t\mathcal L_{progress}
++\lambda_{transition}q_t\mathcal L_{transition}
++\lambda_{geometry}q_t\mathcal L_{geometry}\notag\\
+&+\lambda_{temporal}\mathcal L_{temporal}
++\lambda_{dyn}\mathcal L_{dyn}^{quality}
++\lambda_{stop}\mathcal L_{stop}.
+\end{align}
+其中 $q_t$ 是生成阶段标签所依赖语义的连续质量权重，只缩放语义派生监督，不缩放 $\mathcal L_{ACT}$。$\mathcal L_{phase}$ 使用带类别权重的软交叉熵；$\mathcal L_{event}$ 使用多标签二元交叉熵；$\mathcal L_{progress}$ 使用回归与阶段内排序约束；$\mathcal L_{transition}$ 使用类别加权交叉熵或 focal loss，因为 Stay 远多于 Advance 和 Rollback；$\mathcal L_{geometry}$ 要求隐特征恢复阶段相关关系；$\mathcal L_{temporal}$ 约束阶段连续性和合法转移。语义动力学损失仍使用有效性标记排除不可靠未来目标，$\mathcal L_{stop}$ 监督动作块何时应被截断或重新规划。
+
+训练时应单独记录各损失对共享主干的梯度范数和余弦相似度。第一版对送入 ACT 的预测阶段后验使用 stop-gradient，先避免动作损失改变 Phase Head；如果后续开放端到端回传后出现长期方向冲突，再比较降低对应权重、GradNorm 或 PCGrad，而不是默认让动作梯度无约束地重定义阶段。
+
+当前首个可训练实现固定命名为 \texttt{SSACT-3-StageFiLM-bettersetup-front-side}，避免与已有 SSACT-1 和 SSACT-2 重名。它基于 SEM-1-v2：五类 soft probability 先经过轻量 relation adapter，再以残差形式注入对应视角的 RGB ResNet layer4；Phase、Event、Progress、Transition 和 Relation Heads 共享语义历史 GRU。动作损失读取 stop-gradient 后的阶段后验和上下文，不能修改分割 U-Net 或阶段头。前 20000 步关闭语义残差并使用离线当前语义状态，随后用 10000 步线性引入语义残差和预测语义输入；ACT 前 30000 步使用阶段伪标签，随后用 20000 步切换到预测阶段。默认辅助权重为
+\begin{equation}
+(\lambda_{phase},\lambda_{event},\lambda_{progress},\lambda_{transition},
+\lambda_{geometry},\lambda_{attn})=(0.20,0.10,0.10,0.10,0.10,0.01).
+\end{equation}
+每项都可独立设为零做消融，attention、FiLM 也可分别关闭。该版本先验证“阶段能否学对、阶段关系调制是否改善动作”；它还没有训练 SSACT-2 所设计的执行长度头、残差动作头，也没有启用 CLF-QP，因此不能把本次训练结果解释为完整闭环控制结果。
+
+在 bettersetup 的 90 条轨迹、53723 帧上，事件规则不是按固定时间切段。front 作为主视角，side 可靠度设为 0.85，只在 front 的目标可见性或分离信号低质量时补充。进入条件连续满足 8 帧、回退条件连续满足 12 帧。离线生成得到 expose/separate/transport/restore/done 帧数分别为 18593、2533、8048、9868 和 14681；episode 61 和 84 未完成整个事件链，因此保留其已观测阶段，但不伪造 done 标签。这里的边界仍是自动语义伪标签，正式结论必须在人工审核的独立轨迹上报告事件边界误差。
+
+推荐按以下顺序训练：
+\begin{enumerate}[leftmargin=2.3em]
+  \item 完成自动语义标注、离线质量评估和小规模人工校准；
+  \item 复盘 sem-1/sem-2，加入连续质量加权和正视图主导、侧视图补充的视角融合；
+  \item 自动生成阶段、事件、进度和 Stay/Advance/Rollback/Uncertain 软标签，并审核困难轨迹；
+  \item 用切换信号驱动 FSM，验证阶段切换和动作块截断，不启用残差或 QP；
+  \item 使用专家动作训练语义动力学，在独立校准集上估计误差界；
+  \item 训练残差动作和学习执行长度，先限制修正幅度；
+  \item 先以影子模式记录 QP/MPC 修正，不发送给机器人；验证后再逐步开放小幅修正。
+\end{enumerate}
+
+在线控制循环为：获取可用视角、预测语义和置信度、更新切换信号、由 FSM 更新阶段、按需要清空动作队列、ACT 预测动作块、可选地由残差/QP/MPC 修正、执行少量动作，然后重新观察。若视角置信度过低、阶段异常变化、实际语义超出预测区间或 $V_m$ 未按预期下降，则提前重新规划。
+
+\section{方法成立的条件}
+
+\subsection{局部可靠性结论}
+
+本文的理论结论只针对单个阶段内的局部闭环，不声称整个多阶段任务全局收敛。在阶段 $m$ 的已验证运行域 $\mathcal D_m$ 内，假设真实离散视觉变化与学习模型的误差对 $V_m$ 的影响不超过 $\beta_{model}+\beta_{obs}$。若 QP 可行并满足上述鲁棒下降约束，则实际闭环满足
+\begin{equation}
+V_m(\bm h_{t+1})-V_m(\bm h_t)
+\leq-\rho_mV_m(\bm h_t)+\delta_t.
+\end{equation}
+当 $\delta_t\leq\bar\delta_m$ 时，$V_m$ 收敛到大小与 $\bar\delta_m/\rho_m$ 有关的邻域。该结论是局部、条件性的：它只在观测可信、模型误差界有效且 QP 可行时成立。
+
+多阶段任务要进一步成立，还需要混合系统条件：阶段切换信号必须以足够高的概率识别真实事件；状态机必须避免在阈值附近无限抖动；每个未完成阶段都要存在可执行动作让相应目标函数下降或让下一个事件更可能发生。滞回、最小驻留时间和事件触发重规划用于满足这些条件，但它们本身不是成功证明，必须通过实验校准。
+
+\subsection{条件是否能够达到}
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \begin{tabular}{p{0.25\linewidth}p{0.43\linewidth}p{0.20\linewidth}}
+    \toprule
+    条件 & 如何检查或实现 & 可达到性 \\
+    \midrule
+    自动标签质量可控 & 人工审核独立小样本，校准各类质量分数，连续降低低质量标签权重 & 可以，但不能零人工 \\
+    至少一个视角可观测 & 训练视角丢弃，部署时使用置信门并允许降级运行 & 通常可以 \\
+    切换信号可辨识 & 使用时间历史、顺序约束、软标签和困难轨迹审核 & 可以近似达到 \\
+    状态机不抖动 & 校准进入/退出阈值、最小驻留时间和回退条件 & 可以工程实现 \\
+    动作块可被及时截断 & 记录触发延迟、队列清空延迟和实际控制延迟 & 可以工程实现 \\
+    局部动作--视觉模型准确 & 划分独立校准集，检查预测区间覆盖率和域外检测 & 局部可以 \\
+    视觉目标在动作限制内可控 & 离线检查 QP 可行率，实机影子测试，限制修正幅度 & 需实验验证 \\
+    延迟和执行长度有界 & 短间隔重规划，记录端到端延迟，异常时中断 & 工程上可以 \\
+    测试状态接近训练域 & 扩充初始位置、遮挡和恢复数据，并进行域外检测 & 只能部分满足 \\
+    \bottomrule
+  \end{tabular}
+  \caption{可靠性条件、检查方法与现实可达到性。}
+\end{table}
+
+这些条件在受控工作台、固定任务对象和覆盖充分的数据中是可以近似达到并实证检查的，但很难在任意新物体、任意相机位置、完全遮挡或严重缠绕下始终成立。因此合理表述是“在校准运行域内提高闭环可靠性并满足局部视觉下降条件”，而不是“保证所有任务必然成功”。
+
+\section{实验环境与验证方案}
+
+建议首先在受控桌面操作环境中验证：机器人、任务对象和工作区域保持一致，使用一个或多个固定 RGB 相机，控制频率、图像延迟和动作执行间隔均可记录。相机可以有不同分辨率和观察方向，但训练阶段必须覆盖部署时可能出现的相机组合；若相机移动、镜头更换或视野明显改变，应视为新的运行域并重新校准质量阈值和动力学误差界。当前已知侧视图的 tool 会受到背景遮挡布干扰，因此实验必须单独报告 front-tool 与 side-tool 的标签质量、在线置信度和消融结果。
+
+数据按完整轨迹划分为训练集、校准集和测试集，不能把同一轨迹的相邻帧分到不同集合。训练集用于分割、阶段模型、ACT 和语义动力学训练；校准集用于确定标签质量阈值、阶段置信阈值、预测区间和 QP 裕量；测试集只用于最终报告。为了验证单视角与多视角能力，应分别报告单个相机、全部相机、随机缺失相机和短时遮挡四种设置。
+
+评估至少包含四组指标：自动标签在人工审核子集上的类别 IoU/Dice 与质量分校准误差；四个事件边界的平均帧误差、阶段准确率、切换信号召回率和低置信轨迹召回率；动作条件语义预测误差及预测区间覆盖率；实机任务成功率、重规划次数、队列截断次数、QP 可行率和视觉误差实际下降比例。只有当这些指标在独立测试轨迹上稳定，且部署环境未明显超出训练与校准范围时，才认为前述局部可靠性条件近似成立。
+
+\subsection{分阶段实验设计}
+
+为了避免一次性引入过多机制，实验按条件逐步推进。每一阶段只验证一个主要假设，当前阶段未通过时不进入下一阶段。
+
+\paragraph{E0：语义标签与质量加权}
+目标是验证训练信号是否可信。第一批 $3\times12\times2=72$ 条数据主要用于验证新颜色、固定相机、分割质量和阶段事件趋势，而不是最终充分训练。训练轻量分割模型并离线生成质量分，报告人工审核子集上的 Dice/IoU、质量分与真实错误的校准曲线、front/side 以及各类别分数。通过条件是：object 和 region 的高质量帧 Dice 足够稳定；side-tool 受遮挡布影响时质量分能明显下降；连续降权后低质量帧不会显著污染分割和语义状态训练。
+
+\paragraph{E1：语义质量与视角互补复盘}
+目标不是重复 SSACT-1，而是复盘 sem-1/sem-2 为什么没有超过标准 ACT。比较四种语义输入：无质量权重的 sem-1/sem-2、加入离线连续质量加权后的 sem-1/sem-2、正视图单视角、正视图主导加侧视图补充。侧视图不作为与正视图简单切换的等价视角，而是在正视图 object 低质量或丢失时提供补充证据。通过条件是：质量加权能降低错误标签监督的负面影响；侧视图补充只在正视图不可靠时提高 object 可见性或阶段事件召回率；side-tool 错误不会被直接放大到策略输入。
+
+\paragraph{E2：SSACT-3-StageFiLM 阶段辨识、切换信号与事件触发重规划}
+目标是把阶段辨识和切换机制合并验证，并直接解决 separate 到 transport 的因果死锁。训练 Phase、Progress、Event 和 Transition Heads，用受约束 FSM 管理活动阶段；推理时启用 Uncertain、滞回、最小驻留时间、阶段最大执行长度和动作队列截断，但不改写 ACT 动作。关键指标是：$E\rightarrow S$ 是否在目标可信出现后触发，$S\rightarrow T$ 是否在目标完成分离后及时触发，transport 概率是否不再长期停留在低值，动作队列是否在切换时清空，以及 object 是否开始朝目标区域运动。通过条件是：失败案例中的 transport 入口不再依赖 object 已经移动，且阶段切换不因短暂分割错误频繁抖动。
+
+\paragraph{E3：学习执行长度}
+目标是验证动作块执行长度能否从数据中学习。训练 stop/hazard head，标签来自下一事件边界、信号失效、质量下降、进度停滞和轨迹结束。推理时用学习执行长度替代或修正手工 $K_m$。比较固定 4 步、固定阶段上限、学习执行长度三种设置。通过条件是：学习长度减少过期动作执行，不增加阶段抖动和控制延迟。
+
+\paragraph{E4：残差动作修正}
+目标是验证小幅主动修正是否能提高运输阶段的 object-target 下降速度。冻结或半冻结 ACT，训练零初始化残差头，限制修正幅度，并报告残差范数、动作平滑、目标距离下降率和失败恢复比例。通过条件是：残差主要在 transport 阶段工作，且不会破坏 uncover/expose 的示范行为。
+
+\paragraph{E5：CLF-QP 影子模式}
+目标是验证语义动力学误差界和 QP 可行性。QP 先只记录建议动作，不发送给机器人。比较 ACT 动作和 QP 建议动作的预测 $\Delta V_T$、实际下一步 $\Delta V_T$、模型区间覆盖率、松弛变量和可行率。通过条件是：在校准域内，QP 建议的下降方向在统计上确实带来更高的实际下降概率，且松弛不过大。
+
+\paragraph{E6：CLF-QP 或短视野 MPC 主动修正}
+目标是验证局部闭环控制是否提升实机成功率。只在 object 可见、分离、信号质量高、动力学误差界有效且 QP/MPC 可行时启用；否则退回 SSACT-3-StageFiLM 的名义动作。先启用 CLF-QP，再考虑短视野 MPC。通过条件是：实机成功率、目标到达时间和 timeout\_separated\_not\_reached\_region 明显改善，同时动作安全、队列截断和重规划频率保持可接受。
+
+上述实验顺序的重点是先验证“语义标签质量和视角互补是否可靠”，再验证“阶段事件和动作块中断是否能解决死锁”，最后才验证“动作是否能被主动修正”。如果 E2 已经解决大部分卡死问题，后续残差/QP/MPC 应被定位为提升运输收敛速度和恢复能力，而不是弥补阶段定义错误。
+
+\section{简单说明}
+
+整个方法可以理解为：先用少量人工审核教会自动标注系统“画对语义 mask”，再给每张自动标签打质量分；高质量标签完整监督，低质量标签减弱监督但不被直接丢弃。机器人运行时，模型不只问“现在是什么阶段”，还问“目标是否出现、是否分离、是否进入目标区域、当前信号是否失效”。状态机把这些切换信号变成稳定阶段，并在事件发生时截断旧动作块重新规划。ACT 先给出它根据示范学到的一段动作，语义预测模型判断这段动作大概会把物体和布料带到哪里。执行少量动作后，系统重新看图像：如果物体确实更接近目标，就继续；如果没有进展、阶段判断改变或视觉不可信，就缩短执行并重新规划。视觉伺服只在图像坐标中要求“误差变小”，所以单相机可以工作，多相机只是提供更多互补证据，并不天然要求相机标定。
+
+\section{局限性}
+
+\begin{enumerate}[leftmargin=2.3em]
+  \item 自动质量指标只能发现时间跳变、面积异常、质心异常和拓扑异常，无法识别长期稳定但始终分错类别的系统偏差，因此仍需人工审核独立子集；
+  \item 单视角完全遮挡时没有方法能从当前图像恢复真实状态，多视角只能降低而不能消除这个问题；当前侧视图 tool 与背景遮挡布的混淆属于已知的视角相关偏差，必须单独校准和降权；
+  \item 无标定图像伺服只保证图像指标下降，不能直接解释为三维距离、碰撞距离或末端位姿误差下降；
+  \item 接触代理来自互斥语义图的局部邻接，不是真实物理接触。更精确的判断需要 amodal 标注、深度或标定后的目标区域；
+  \item 成功示范主要覆盖正常轨迹。卡住、推过目标、物体丢失和恢复行为需要额外失败/接管数据；
+  \item 阶段伪标签可能继承语义错误。顺序约束能减少抖动，但不能修复系统性误标；
+  \item 学习动力学和误差界只在校准域内有效。相机位置、光照、物体外观或机器人延迟显著变化后必须重新验证。
+\end{enumerate}
+
+\section{结论}
+
+本文给出一个从自动语义数据到闭环策略的精简方案。方法以 Codex、人工审核、SAM2 和轻量 YOLO 构成低成本标注流水线，以离线连续质量加权避免自动标签被无条件信任；以可变视角语义状态学习阶段切换信号，并由带滞回的状态机管理阶段、截断过期动作块和触发重规划；以 ACT 保留复杂示范行为，以语义动力学、残差动作、CLF-QP 或短视野 MPC 提供短周期反馈修正。相机标定不是图像空间闭环的必要条件，但在跨视角物理融合和物理安全约束中仍然必要。方法能够提供的是已验证运行域内、误差界成立时的局部可靠性，而不是不受条件限制的全局任务保证。
+
+\bibliographystyle{unsrt}
+\bibliography{references}
+
+\end{document}

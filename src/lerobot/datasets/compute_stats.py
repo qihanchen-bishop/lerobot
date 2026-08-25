@@ -51,6 +51,9 @@ class RunningQuantileStats:
         Args:
             batch: An array where all dimensions except the last are batch dimensions.
         """
+        # Squaring integer image values in their original dtype can overflow
+        # (for example, uint8 values above 15), corrupting the variance.
+        batch = np.asarray(batch, dtype=np.float64)
         batch = batch.reshape(-1, batch.shape[-1])
         num_elements, vector_length = batch.shape
 
