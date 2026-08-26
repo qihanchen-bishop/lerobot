@@ -376,16 +376,31 @@ class ACT(nn.Module):
         self.encoder_1d_feature_pos_embed = nn.Embedding(n_1d_tokens, config.dim_model)
         if self.config.image_features:
             self.encoder_cam_feat_pos_embed = ACTSinusoidalPositionEmbedding2d(config.dim_model // 2)
+            # Optional identity embeddings must not perturb initialization of shared
+            # ACT parameters in controlled ablations with the same random seed.
+            rng_state = torch.random.get_rng_state()
             self.image_camera_embed = (
                 nn.Embedding(max(config.image_camera_ids) + 1, config.dim_model)
                 if config.image_camera_ids is not None
                 else None
             )
+            self.image_camera_embed_gate = None
+            if self.image_camera_embed is not None:
+                if config.image_camera_embedding_mode == "zero":
+                    nn.init.zeros_(self.image_camera_embed.weight)
+                elif config.image_camera_embedding_mode == "gated":
+                    nn.init.normal_(
+                        self.image_camera_embed.weight,
+                        mean=0.0,
+                        std=config.image_camera_embedding_std,
+                    )
+                    self.image_camera_embed_gate = nn.Parameter(torch.zeros(()))
             self.image_modality_embed = (
                 nn.Embedding(max(config.image_modality_ids) + 1, config.dim_model)
                 if config.image_modality_ids is not None
                 else None
             )
+            torch.random.set_rng_state(rng_state)
 
         # Transformer decoder.
         # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
@@ -527,7 +542,10 @@ class ACT(nn.Module):
                 cam_features = self.encoder_img_feat_input_proj(cam_features)
                 if self.image_camera_embed is not None:
                     camera_id = self.config.image_camera_ids[image_idx]
-                    cam_features = cam_features + self.image_camera_embed.weight[camera_id].view(1, -1, 1, 1)
+                    camera_embedding = self.image_camera_embed.weight[camera_id].view(1, -1, 1, 1)
+                    if self.image_camera_embed_gate is not None:
+                        camera_embedding = self.image_camera_embed_gate * camera_embedding
+                    cam_features = cam_features + camera_embedding
                 if self.image_modality_embed is not None:
                     modality_id = self.config.image_modality_ids[image_idx]
                     cam_features = cam_features + self.image_modality_embed.weight[modality_id].view(1, -1, 1, 1)

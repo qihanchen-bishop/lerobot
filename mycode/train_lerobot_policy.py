@@ -72,11 +72,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--job-name", default="act_bi_so_left_front")
     parser.add_argument("--steps", type=int, default=100_000)
+    parser.add_argument("--seed", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--chunk-size", type=int, default=100, help="ACT action chunk size.")
     parser.add_argument("--n-action-steps", type=int, default=100, help="ACT actions used per policy call.")
+    parser.add_argument(
+        "--act-camera-embedding",
+        action="store_true",
+        help="Add one learned camera identity embedding per ordered ACT image key.",
+    )
+    parser.add_argument(
+        "--act-camera-embedding-mode",
+        choices=["default", "zero", "gated"],
+        default="default",
+        help=(
+            "Camera embedding initialization: default PyTorch initialization, all zeros, or "
+            "N(0, 0.02) multiplied by a zero-initialized learnable gate."
+        ),
+    )
     parser.add_argument("--diffusion-n-obs-steps", type=int, default=2, help="Diffusion observation window.")
     parser.add_argument("--diffusion-horizon", type=int, default=16, help="Diffusion action horizon.")
     parser.add_argument(
@@ -397,6 +412,9 @@ def build_policy_config(policy_type: str, meta: LeRobotDatasetMetadata, args: ar
         kwargs["chunk_size"] = args.chunk_size
         kwargs["n_action_steps"] = args.n_action_steps
         kwargs["pretrained_backbone_weights"] = args.pretrained_backbone_weights
+        if getattr(args, "act_camera_embedding", False):
+            kwargs["image_camera_ids"] = list(range(len(args.image_keys)))
+            kwargs["image_camera_embedding_mode"] = args.act_camera_embedding_mode
     elif policy_type == "diffusion":
         kwargs["n_obs_steps"] = args.diffusion_n_obs_steps
         kwargs["horizon"] = args.diffusion_horizon
@@ -437,6 +455,14 @@ def main() -> None:
 
 def run_training(args: argparse.Namespace, log_path: Path) -> None:
     ensure_device_is_usable(args.device)
+    if args.act_camera_embedding and args.policy_type.lower() != "act":
+        raise ValueError("--act-camera-embedding is only valid with --policy-type act.")
+    if args.act_camera_embedding and not args.image_keys:
+        raise ValueError("--act-camera-embedding requires at least one --image-keys entry.")
+    if not args.act_camera_embedding and args.act_camera_embedding_mode != "default":
+        raise ValueError(
+            "--act-camera-embedding-mode zero/gated requires --act-camera-embedding."
+        )
     view_root = args.view_root or (args.output_dir.parent / "dataset_views" / args.output_dir.name)
 
     if args.output_dir.exists() and args.overwrite_output:
@@ -459,6 +485,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         policy=policy_cfg,
         output_dir=args.output_dir,
         job_name=args.job_name,
+        seed=args.seed,
         batch_size=args.batch_size,
         steps=args.steps,
         num_workers=args.num_workers,
@@ -471,6 +498,14 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     print(f"Training dataset view: {filtered_root}")
     print(f"Input features: {list(policy_cfg.input_features)}")
     print(f"Output features: {list(policy_cfg.output_features)}")
+    if args.policy_type == "act":
+        print(
+            "ACT camera embedding: "
+            f"ids={policy_cfg.image_camera_ids}, mode={policy_cfg.image_camera_embedding_mode}, "
+            f"std={policy_cfg.image_camera_embedding_std:g}"
+            if policy_cfg.image_camera_ids is not None
+            else "ACT camera embedding: disabled"
+        )
     if args.policy_type == "diffusion":
         print(
             "Diffusion temporal config: "

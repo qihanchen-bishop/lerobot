@@ -125,6 +125,8 @@ class ACTConfig(PreTrainedConfig):
     metric_mode: str | None = None
     metric_dim: int = 2
     image_camera_ids: list[int] | None = None
+    image_camera_embedding_mode: str = "default"
+    image_camera_embedding_std: float = 0.02
     image_modality_ids: list[int] | None = None
 
     # Training preset
@@ -162,6 +164,19 @@ class ACTConfig(PreTrainedConfig):
         if self.metric_dim <= 0:
             raise ValueError(f"`metric_dim` must be positive. Got {self.metric_dim}.")
         image_count = len(self.image_features)
+        if self.image_camera_embedding_mode not in {"default", "zero", "gated"}:
+            raise ValueError(
+                "`image_camera_embedding_mode` must be 'default', 'zero', or 'gated'. "
+                f"Got {self.image_camera_embedding_mode!r}."
+            )
+        if self.image_camera_embedding_std <= 0:
+            raise ValueError(
+                f"`image_camera_embedding_std` must be positive. Got {self.image_camera_embedding_std}."
+            )
+        if self.image_camera_ids is None and self.image_camera_embedding_mode != "default":
+            raise ValueError(
+                "A non-default `image_camera_embedding_mode` requires `image_camera_ids`."
+            )
         for name, ids in (
             ("image_camera_ids", self.image_camera_ids),
             ("image_modality_ids", self.image_modality_ids),
