@@ -89,8 +89,14 @@ def parse_args() -> argparse.Namespace:
         default="default",
         help=(
             "Camera embedding initialization: default PyTorch initialization, all zeros, or "
-            "N(0, 0.02) multiplied by a zero-initialized learnable gate."
+            "N(0, 0.02) multiplied by a learnable gate."
         ),
+    )
+    parser.add_argument(
+        "--act-camera-embedding-gate-init",
+        type=float,
+        default=0.0,
+        help="Initial scalar gate for gated ACT camera embeddings.",
     )
     parser.add_argument("--diffusion-n-obs-steps", type=int, default=2, help="Diffusion observation window.")
     parser.add_argument("--diffusion-horizon", type=int, default=16, help="Diffusion action horizon.")
@@ -415,6 +421,7 @@ def build_policy_config(policy_type: str, meta: LeRobotDatasetMetadata, args: ar
         if getattr(args, "act_camera_embedding", False):
             kwargs["image_camera_ids"] = list(range(len(args.image_keys)))
             kwargs["image_camera_embedding_mode"] = args.act_camera_embedding_mode
+            kwargs["image_camera_embedding_gate_init"] = args.act_camera_embedding_gate_init
     elif policy_type == "diffusion":
         kwargs["n_obs_steps"] = args.diffusion_n_obs_steps
         kwargs["horizon"] = args.diffusion_horizon
@@ -502,7 +509,8 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         print(
             "ACT camera embedding: "
             f"ids={policy_cfg.image_camera_ids}, mode={policy_cfg.image_camera_embedding_mode}, "
-            f"std={policy_cfg.image_camera_embedding_std:g}"
+            f"std={policy_cfg.image_camera_embedding_std:g}, "
+            f"gate_init={policy_cfg.image_camera_embedding_gate_init:g}"
             if policy_cfg.image_camera_ids is not None
             else "ACT camera embedding: disabled"
         )

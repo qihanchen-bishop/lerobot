@@ -15,6 +15,7 @@ from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.policies.factory import make_pre_post_processors
 
 from train_mask_act_policy import (
+    FROZEN_SEMANTIC_EXPERIMENTS,
     MaskACTPolicy,
     SEMANTIC_EXPERIMENTS,
     VIEW_FUSION_EXPERIMENTS,
@@ -134,6 +135,16 @@ def load_mask_act_for_inference(
     args.device = "cuda" if torch.cuda.is_available() else "cpu"
     # Loading the checkpoint replaces these weights, so avoid an unnecessary network download.
     args.pretrained_backbone_weights = None
+    if str(args.experiment).upper() in FROZEN_SEMANTIC_EXPERIMENTS:
+        configured_segmenter = Path(args.pretrained_segmentation_checkpoint).expanduser()
+        if not configured_segmenter.is_file():
+            bundled_segmenter = project_root / "mycode" / "tool" / "seg_v2" / "best.pt"
+            if not bundled_segmenter.is_file():
+                raise FileNotFoundError(
+                    "UNET-SEM segmentation checkpoint is unavailable at both the recorded path "
+                    f"({configured_segmenter}) and bundled path ({bundled_segmenter})."
+                )
+            args.pretrained_segmentation_checkpoint = str(bundled_segmenter)
 
     meta = LeRobotDatasetMetadata(args.repo_id, root=metadata_root)
     if run_cfg.get("no_gripper"):

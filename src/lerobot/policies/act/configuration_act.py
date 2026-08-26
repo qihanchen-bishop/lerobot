@@ -127,7 +127,11 @@ class ACTConfig(PreTrainedConfig):
     image_camera_ids: list[int] | None = None
     image_camera_embedding_mode: str = "default"
     image_camera_embedding_std: float = 0.02
+    image_camera_embedding_gate_init: float = 0.0
     image_modality_ids: list[int] | None = None
+    image_modality_embedding_mode: str = "default"
+    image_modality_embedding_std: float = 0.02
+    image_modality_embedding_gate_init: float = 0.0
 
     # Training preset
     optimizer_lr: float = 1e-5
@@ -176,6 +180,20 @@ class ACTConfig(PreTrainedConfig):
         if self.image_camera_ids is None and self.image_camera_embedding_mode != "default":
             raise ValueError(
                 "A non-default `image_camera_embedding_mode` requires `image_camera_ids`."
+            )
+        if self.image_modality_embedding_mode not in {"default", "zero", "gated"}:
+            raise ValueError(
+                "`image_modality_embedding_mode` must be 'default', 'zero', or 'gated'. "
+                f"Got {self.image_modality_embedding_mode!r}."
+            )
+        if self.image_modality_embedding_std <= 0:
+            raise ValueError(
+                "`image_modality_embedding_std` must be positive. "
+                f"Got {self.image_modality_embedding_std}."
+            )
+        if self.image_modality_ids is None and self.image_modality_embedding_mode != "default":
+            raise ValueError(
+                "A non-default `image_modality_embedding_mode` requires `image_modality_ids`."
             )
         for name, ids in (
             ("image_camera_ids", self.image_camera_ids),

@@ -168,8 +168,85 @@ class ACTPolicy(PreTrainedPolicy):
 
         if METRIC_PRED in aux_outputs:
             loss_dict[METRIC_PRED] = aux_outputs[METRIC_PRED]
+        loss_dict.update(
+            {
+                key: float(value.detach().cpu()) if isinstance(value, Tensor) else float(value)
+                for key, value in aux_outputs.items()
+                if key.startswith("camera_embedding_") or key.startswith("camera_image_")
+            }
+        )
 
         return loss, loss_dict
+
+    @torch.no_grad()
+    def camera_embedding_action_ablation(self, batch: dict[str, Tensor]) -> dict[str, float]:
+        """Measure deterministic action sensitivity to the gated camera identity path."""
+        gate = getattr(self.model, "image_camera_embed_gate", None)
+        camera_ids = self.config.image_camera_ids
+        if gate is None or camera_ids is None:
+            return {}
+
+        model_batch = dict(batch)
+        if self.config.image_features:
+            model_batch[OBS_IMAGES] = [model_batch[key] for key in self.config.image_features]
+
+        was_training = self.training
+        saved_gate = gate.detach().clone()
+        saved_camera_ids = list(camera_ids)
+        try:
+            self.eval()
+            actions_enabled = self.model(model_batch)[0]
+
+            gate.zero_()
+            actions_disabled = self.model(model_batch)[0]
+            gate.copy_(saved_gate)
+
+            diagnostics = {
+                "camera_embedding_action_disable_delta_rms": float(
+                    (actions_enabled - actions_disabled).float().square().mean().sqrt().cpu()
+                ),
+                "camera_embedding_action_disable_delta_max": float(
+                    (actions_enabled - actions_disabled).float().abs().amax().cpu()
+                ),
+            }
+
+            if len(saved_camera_ids) == 2 and set(saved_camera_ids) == {0, 1}:
+                self.config.image_camera_ids = list(reversed(saved_camera_ids))
+                actions_swapped = self.model(model_batch)[0]
+                diagnostics.update(
+                    {
+                        "camera_embedding_action_swap_delta_rms": float(
+                            (actions_enabled - actions_swapped).float().square().mean().sqrt().cpu()
+                        ),
+                        "camera_embedding_action_swap_delta_max": float(
+                            (actions_enabled - actions_swapped).float().abs().amax().cpu()
+                        ),
+                    }
+                )
+            return diagnostics
+        finally:
+            gate.copy_(saved_gate)
+            self.config.image_camera_ids = saved_camera_ids
+            self.train(was_training)
+
+    def camera_embedding_gradient_diagnostics(self) -> dict[str, float]:
+        """Return camera identity gradient scales after backward and before optimizer zeroing."""
+        gate = getattr(self.model, "image_camera_embed_gate", None)
+        embedding = getattr(self.model, "image_camera_embed", None)
+        if gate is None or embedding is None:
+            return {}
+        gate_grad = gate.grad
+        embedding_grad = embedding.weight.grad
+        return {
+            "camera_embedding_gate_grad_abs": (
+                0.0 if gate_grad is None else float(gate_grad.detach().float().abs().cpu())
+            ),
+            "camera_embedding_weight_grad_rms": (
+                0.0
+                if embedding_grad is None
+                else float(embedding_grad.detach().float().square().mean().sqrt().cpu())
+            ),
+        }
 
 
 class ACTTemporalEnsembler:
@@ -394,12 +471,27 @@ class ACT(nn.Module):
                         mean=0.0,
                         std=config.image_camera_embedding_std,
                     )
-                    self.image_camera_embed_gate = nn.Parameter(torch.zeros(()))
+                    self.image_camera_embed_gate = nn.Parameter(
+                        torch.tensor(float(config.image_camera_embedding_gate_init))
+                    )
             self.image_modality_embed = (
                 nn.Embedding(max(config.image_modality_ids) + 1, config.dim_model)
                 if config.image_modality_ids is not None
                 else None
             )
+            self.image_modality_embed_gate = None
+            if self.image_modality_embed is not None:
+                if config.image_modality_embedding_mode == "zero":
+                    nn.init.zeros_(self.image_modality_embed.weight)
+                elif config.image_modality_embedding_mode == "gated":
+                    nn.init.normal_(
+                        self.image_modality_embed.weight,
+                        mean=0.0,
+                        std=config.image_modality_embedding_std,
+                    )
+                    self.image_modality_embed_gate = nn.Parameter(
+                        torch.tensor(float(config.image_modality_embedding_gate_init))
+                    )
             torch.random.set_rng_state(rng_state)
 
         # Transformer decoder.
@@ -518,6 +610,7 @@ class ACT(nn.Module):
             )
             encoder_in_tokens.extend(list(metric_tokens))
 
+        camera_embedding_diagnostics: dict[str, Tensor] = {}
         if self.config.image_features:
             # For a list of images, the H and W may vary but H*W is constant.
             # NOTE: If modifying this section, verify on MPS devices that
@@ -545,10 +638,25 @@ class ACT(nn.Module):
                     camera_embedding = self.image_camera_embed.weight[camera_id].view(1, -1, 1, 1)
                     if self.image_camera_embed_gate is not None:
                         camera_embedding = self.image_camera_embed_gate * camera_embedding
+                    if self.training and self.image_camera_embed_gate is not None:
+                        projected_rms = cam_features.detach().float().square().mean().sqrt()
+                        effective_rms = camera_embedding.detach().float().square().mean().sqrt()
+                        camera_embedding_diagnostics.update(
+                            {
+                                f"camera_image_{image_idx}_feature_rms": projected_rms,
+                                f"camera_image_{image_idx}_embedding_rms": effective_rms,
+                                f"camera_image_{image_idx}_embedding_to_feature_ratio": (
+                                    effective_rms / projected_rms.clamp_min(1e-12)
+                                ),
+                            }
+                        )
                     cam_features = cam_features + camera_embedding
                 if self.image_modality_embed is not None:
                     modality_id = self.config.image_modality_ids[image_idx]
-                    cam_features = cam_features + self.image_modality_embed.weight[modality_id].view(1, -1, 1, 1)
+                    modality_embedding = self.image_modality_embed.weight[modality_id].view(1, -1, 1, 1)
+                    if self.image_modality_embed_gate is not None:
+                        modality_embedding = self.image_modality_embed_gate * modality_embedding
+                    cam_features = cam_features + modality_embedding
 
                 # Rearrange features to (sequence, batch, dim).
                 cam_features = einops.rearrange(cam_features, "b c h w -> (h w) b c")
@@ -565,7 +673,21 @@ class ACT(nn.Module):
 
         # Forward pass through the transformer modules.
         encoder_out = self.encoder(encoder_in_tokens, pos_embed=encoder_in_pos_embed)
-        aux_outputs = {}
+        aux_outputs = dict(camera_embedding_diagnostics)
+        if self.training and self.image_camera_embed is not None and self.image_camera_embed_gate is not None:
+            raw_embeddings = self.image_camera_embed.weight.detach().float()
+            effective_embeddings = self.image_camera_embed_gate.detach().float() * raw_embeddings
+            aux_outputs.update(
+                {
+                    "camera_embedding_gate": self.image_camera_embed_gate.detach().float(),
+                    "camera_embedding_raw_rms": raw_embeddings.square().mean().sqrt(),
+                    "camera_embedding_effective_rms": effective_embeddings.square().mean().sqrt(),
+                }
+            )
+            if effective_embeddings.shape[0] >= 2:
+                aux_outputs["camera_embedding_pair_difference_rms"] = (
+                    effective_embeddings[0] - effective_embeddings[1]
+                ).square().mean().sqrt()
         if self.config.metric_mode == "encoder_tokens":
             metric_out = encoder_out[metric_token_start : metric_token_start + self.config.metric_dim]
             metric_out = metric_out.transpose(0, 1)
