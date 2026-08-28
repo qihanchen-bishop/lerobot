@@ -102,6 +102,15 @@ SEGMENTATION_PALETTE = (
     (60, 220, 120),
     (210, 210, 80),
 )
+SEGMENTATION_PALETTE_V3 = (
+    (0, 0, 0),
+    (64, 160, 255),
+    (255, 105, 97),
+    (119, 221, 119),
+    (255, 209, 102),
+    (234, 146, 199),
+    (173, 214, 101),
+)
 SEGMENTATION_MEAN = (0.485, 0.456, 0.406)
 SEGMENTATION_STD = (0.229, 0.224, 0.225)
 PREVIEW_MIN_WIDTH = 220
@@ -5529,9 +5538,18 @@ class EvalPolicyApp:
     ) -> tuple[dict[str, Any], dict[str, str]]:
         import numpy as np
 
-        semantic_order = ("background", "occluder", "object", "region", "tool")
+        has_arm_masks = any(
+            str(key).rsplit(".", 1)[-1].endswith(("_leftarm", "_rightarm"))
+            for key in model_masks
+        )
+        semantic_order = (
+            ("background", "occluder", "object", "region", "tool", "leftarm", "rightarm")
+            if has_arm_masks
+            else ("background", "occluder", "object", "region", "tool")
+        )
+        palette_values = SEGMENTATION_PALETTE_V3 if has_arm_masks else SEGMENTATION_PALETTE
         semantic_colors = {
-            semantic: SEGMENTATION_PALETTE[idx]
+            semantic: palette_values[idx]
             for idx, semantic in enumerate(semantic_order)
         }
         masks_by_view: dict[str, dict[str, Any]] = {"front": {}, "side": {}}
@@ -5566,7 +5584,7 @@ class EvalPolicyApp:
                 overlays[view] = np.ascontiguousarray(np.clip(overlay, 0, 255).astype(np.uint8))
                 winning_index = probabilities.argmax(axis=0)
                 confidence = probabilities.max(axis=0)
-                summaries[view] = "soft-5 | " + ", ".join(
+                summaries[view] = f"soft-{len(available)} | " + ", ".join(
                     f"{semantic} {100.0 * float((winning_index == idx).mean()):.1f}%"
                     for idx, semantic in enumerate(available)
                     if semantic != "background"

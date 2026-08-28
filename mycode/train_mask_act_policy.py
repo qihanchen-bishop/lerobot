@@ -19,6 +19,8 @@ Experiments:
       and action loss also backpropagates through the U-Net mask path.
   SEM-1: Each view's masks are merged into one soft semantic RGB map. ACT sees semantic maps plus
       the original RGB views through one shared image backbone; no pooled RGB latent is used.
+  SEM-1-N: Same as SEM-1, but accepts a dataset-defined semantic class list instead of requiring
+      exactly occluder, object, region, and tool. This keeps older SEM-1 checkpoints compatible.
   SEM-1-V2: Each view keeps all five soft class probabilities. A lightweight semantic adapter maps
       them to a residual for the corresponding RGB ResNet feature map, so ACT receives no extra image tokens.
   ViewFus-v1: A shared two-view U-Net predicts semantics, then a homography-aligned fusion adapter
@@ -37,6 +39,8 @@ Experiments:
   SEM-2: Same soft semantic maps as SEM-1, but ACT sees no original RGB images and no pooled latent.
   UNET-SEM: A frozen pretrained TinyUNet produces soft semantic maps. ACT receives those maps and
       the corresponding RGB views with gated camera and modality identity embeddings.
+  UNET-SEM-V3-F-NOEMB: A frozen seven-class front-only TinyUNet produces one soft semantic RGB
+      stream beside front RGB. The two streams share ACT's backbone and use no identity embeddings.
   3:  ACT sees only the pooled RGB encoder latent. U-Net mask decoder is kept as an auxiliary task.
 """
 
@@ -112,11 +116,14 @@ CANONICAL_SEMANTIC_MASK_KEYS = [
 DEFAULT_MASK_KEYS = CANONICAL_SEMANTIC_MASK_KEYS
 STAGE_AWARE_EXPERIMENTS = {"SSACT-3"}
 VIEW_FUSION_EXPERIMENTS = {"VIEWFUS-V1"}
-FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM"}
+FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM", "UNET-SEM-V3-F-NOEMB"}
+IDENTITY_EMBEDDED_FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM"}
+FRONT_ONLY_FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM-V3-F-NOEMB"}
 VIEWFUS_FUSED_FRONT_KEY = "observation.images.front_fused_semantic"
 SEMANTIC_FEATURE_FUSION_EXPERIMENTS = {"SEM-1-V2", *STAGE_AWARE_EXPERIMENTS}
 SEMANTIC_EXPERIMENTS = {
     "SEM-1",
+    "SEM-1-N",
     "SEM-1-V2",
     "ASEM-1",
     "SSACT-1",
@@ -125,6 +132,7 @@ SEMANTIC_EXPERIMENTS = {
     "VIEWFUS-V1",
     *FROZEN_SEMANTIC_EXPERIMENTS,
 }
+DYNAMIC_SEMANTIC_CLASS_EXPERIMENTS = {"SEM-1-N", "UNET-SEM-V3-F-NOEMB"}
 ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS = {"ASEM-1"}
 PREDICTIVE_SEMANTIC_EXPERIMENTS = {"SSACT-1"}
 PHASE_CONDITIONED_EXPERIMENTS = {"SSACT-1", *STAGE_AWARE_EXPERIMENTS}
@@ -152,12 +160,23 @@ SEMANTIC_PALETTE_BY_CLASS = {
     "region": (60 / 255, 220 / 255, 120 / 255),
     "tool": (210 / 255, 210 / 255, 80 / 255),
 }
+SEMANTIC_N_PALETTE_BY_CLASS = {
+    "background": (0.0, 0.0, 0.0),
+    "occluder": (64 / 255, 160 / 255, 1.0),
+    "object": (1.0, 105 / 255, 97 / 255),
+    "region": (119 / 255, 221 / 255, 119 / 255),
+    "tool": (1.0, 209 / 255, 102 / 255),
+    "leftarm": (234 / 255, 146 / 255, 199 / 255),
+    "rightarm": (173 / 255, 214 / 255, 101 / 255),
+}
 SEMANTIC_CLASS_WEIGHT_BY_NAME = {
     "background": 0.5,
     "occluder": 1.0,
     "object": 2.0,
     "region": 1.0,
     "tool": 1.0,
+    "leftarm": 1.0,
+    "rightarm": 1.0,
 }
 IMAGENET_VISUAL_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_VISUAL_STD = (0.229, 0.224, 0.225)
@@ -172,6 +191,31 @@ warnings.filterwarnings(
 
 def mask_quality_filename(mask_key: str) -> str:
     return mask_key.replace("/", "__").replace(".", "_") + ".npz"
+
+
+def semantic_palette_for_experiment(experiment: str) -> dict[str, tuple[float, float, float]]:
+    if experiment in DYNAMIC_SEMANTIC_CLASS_EXPERIMENTS:
+        return SEMANTIC_N_PALETTE_BY_CLASS
+    return SEMANTIC_PALETTE_BY_CLASS
+
+
+def validate_semantic_class_layout(experiment: str, mask_suffixes: list[str]) -> None:
+    """Validate semantic classes without changing legacy fixed-class experiments."""
+
+    if (
+        experiment not in DYNAMIC_SEMANTIC_CLASS_EXPERIMENTS
+        and set(mask_suffixes) != set(SEMANTIC_CLASSES)
+    ):
+        raise ValueError(
+            f"{experiment} requires exactly these semantic mask suffixes: "
+            f"{list(SEMANTIC_CLASSES)}; got {mask_suffixes}. Use SEM-1-N for "
+            "dataset-defined semantic classes."
+        )
+    unknown_suffixes = sorted(set(mask_suffixes).difference(semantic_palette_for_experiment(experiment)))
+    if unknown_suffixes:
+        raise ValueError(
+            f"{experiment} has semantic classes without palette/loss definitions: {unknown_suffixes}."
+        )
 
 
 class MaskQualityStore:
@@ -1055,11 +1099,8 @@ class MaskACTPolicy(nn.Module):
             )
             if any(weight < 0 for weight in stage_weights):
                 raise ValueError("SSACT-3 loss weights must be non-negative.")
-        if self.uses_semantic_maps() and set(self.mask_suffixes) != set(SEMANTIC_CLASSES):
-            raise ValueError(
-                f"{self.experiment} requires exactly these semantic mask suffixes: {list(SEMANTIC_CLASSES)}; "
-                f"got {self.mask_suffixes}."
-            )
+        if self.uses_semantic_maps():
+            validate_semantic_class_layout(self.experiment, self.mask_suffixes)
 
         semantic_output_channels = (
             len(self.mask_suffixes) + 1 if self.uses_semantic_maps() else len(self.mask_suffixes)
@@ -1068,12 +1109,11 @@ class MaskACTPolicy(nn.Module):
         if self.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
             if pretrained_segmentation_checkpoint is None:
                 raise ValueError(f"{self.experiment} requires a pretrained segmentation checkpoint.")
-            self.pretrained_segmenter = FrozenTinyUNetSegmenter(pretrained_segmentation_checkpoint)
-            if len(self.pretrained_segmenter.labels) != semantic_output_channels:
-                raise ValueError(
-                    f"{self.experiment} segmenter has {len(self.pretrained_segmenter.labels)} classes, "
-                    f"but the semantic layout requires {semantic_output_channels}."
-                )
+            expected_labels = ("background", *self.mask_suffixes)
+            self.pretrained_segmenter = FrozenTinyUNetSegmenter(
+                pretrained_segmentation_checkpoint,
+                expected_labels=expected_labels,
+            )
             self.seg_net = None
         else:
             self.seg_net = UNetSegNet(
@@ -1111,8 +1151,9 @@ class MaskACTPolicy(nn.Module):
             else None
         )
         if self.uses_semantic_maps():
-            palette = [SEMANTIC_PALETTE_BY_CLASS["background"]]
-            palette.extend(SEMANTIC_PALETTE_BY_CLASS[suffix] for suffix in self.mask_suffixes)
+            palette_by_class = semantic_palette_for_experiment(self.experiment)
+            palette = [palette_by_class["background"]]
+            palette.extend(palette_by_class[suffix] for suffix in self.mask_suffixes)
             class_weights = [SEMANTIC_CLASS_WEIGHT_BY_NAME["background"]]
             class_weights.extend(SEMANTIC_CLASS_WEIGHT_BY_NAME[suffix] for suffix in self.mask_suffixes)
             self.register_buffer("semantic_palette", torch.tensor(palette, dtype=torch.float32))
@@ -1610,12 +1651,13 @@ class MaskACTPolicy(nn.Module):
         return self.experiment in {
             "2C",
             "SEM-1",
+            "SEM-1-N",
             "SEM-1-V2",
             "ASEM-1",
             "SSACT-1",
             "SSACT-3",
             "VIEWFUS-V1",
-            "UNET-SEM",
+            *FROZEN_SEMANTIC_EXPERIMENTS,
         }
 
     def normalize_visual_like(self, image: Tensor, key: str) -> Tensor:
@@ -2576,6 +2618,7 @@ def parse_args() -> argparse.Namespace:
             "4C",
             "5",
             "SEM-1",
+            "SEM-1-N",
             "SEM-1-V2",
             "ASEM-1",
             "SSACT-1",
@@ -2583,6 +2626,7 @@ def parse_args() -> argparse.Namespace:
             "SEM-2",
             "VIEWFUS-V1",
             "UNET-SEM",
+            "UNET-SEM-V3-F-NOEMB",
         ],
         required=True,
     )
@@ -2953,7 +2997,7 @@ def reshape_visual_stats_for_channel_first(
 def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     experiment = args.experiment.upper()
     semantic_keys = [semantic_image_key(rgb_key) for rgb_key in args.rgb_keys]
-    if experiment in {"SEM-1", "ASEM-1", "SSACT-1", *FROZEN_SEMANTIC_EXPERIMENTS}:
+    if experiment in {"SEM-1", "SEM-1-N", "ASEM-1", "SSACT-1", *FROZEN_SEMANTIC_EXPERIMENTS}:
         return [*semantic_keys, *args.rgb_keys]
     if experiment in {"SEM-1-V2", "SSACT-3"}:
         return list(args.rgb_keys)
@@ -2980,7 +3024,7 @@ def act_identity_ids_for_experiment(
     args: argparse.Namespace,
 ) -> tuple[list[int] | None, list[int] | None]:
     experiment = args.experiment.upper()
-    if experiment in FROZEN_SEMANTIC_EXPERIMENTS:
+    if experiment in IDENTITY_EMBEDDED_FROZEN_SEMANTIC_EXPERIMENTS:
         view_ids = list(range(len(args.rgb_keys)))
         return [*view_ids, *view_ids], [1] * len(view_ids) + [0] * len(view_ids)
     if experiment in VIEW_FUSION_EXPERIMENTS:
@@ -3075,7 +3119,7 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
 
     image_camera_ids, image_modality_ids = act_identity_ids_for_experiment(args)
     identity_embedding_kwargs = {}
-    if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
+    if args.experiment.upper() in IDENTITY_EMBEDDED_FROZEN_SEMANTIC_EXPERIMENTS:
         identity_embedding_kwargs = {
             "image_camera_embedding_mode": "gated",
             "image_camera_embedding_std": 0.02,
@@ -3264,23 +3308,35 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
             }
         if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
             camera_ids, modality_ids = act_identity_ids_for_experiment(args)
+            mask_suffixes, _ = build_mask_layout(list(args.rgb_keys), list(args.mask_target_keys))
+            identity_embeddings_enabled = (
+                args.experiment.upper() in IDENTITY_EMBEDDED_FROZEN_SEMANTIC_EXPERIMENTS
+            )
             payload["frozen_semantic_input"] = {
                 "segmentation_checkpoint": str(args.pretrained_segmentation_checkpoint),
                 "segmentation_trainable": False,
-                "representation": "five_class_softmax_to_semantic_rgb",
+                "representation": f"{len(mask_suffixes) + 1}_class_softmax_to_semantic_rgb",
                 "shared_visual_backbone": True,
                 "image_camera_ids": camera_ids,
                 "image_modality_ids": modality_ids,
-                "camera_embedding": {
-                    "mode": "gated",
-                    "std": 0.02,
-                    "gate_init": args.identity_embedding_gate_init,
-                },
-                "modality_embedding": {
-                    "mode": "gated",
-                    "std": 0.02,
-                    "gate_init": args.identity_embedding_gate_init,
-                },
+                "camera_embedding": (
+                    {
+                        "mode": "gated",
+                        "std": 0.02,
+                        "gate_init": args.identity_embedding_gate_init,
+                    }
+                    if identity_embeddings_enabled
+                    else {"mode": "disabled"}
+                ),
+                "modality_embedding": (
+                    {
+                        "mode": "gated",
+                        "std": 0.02,
+                        "gate_init": args.identity_embedding_gate_init,
+                    }
+                    if identity_embeddings_enabled
+                    else {"mode": "disabled"}
+                ),
                 "camera_id_meanings": {
                     str(index): key.rsplit(".", 1)[-1]
                     for index, key in enumerate(args.rgb_keys)
@@ -3295,10 +3351,11 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
                 payload["mask_quality_summary"] = json.load(quality_summary_file)
         if args.experiment in SEMANTIC_EXPERIMENTS:
             mask_suffixes, _ = build_mask_layout(list(args.rgb_keys), list(args.mask_target_keys))
+            palette_by_class = semantic_palette_for_experiment(args.experiment)
             payload["semantic_classes"] = ["background", *mask_suffixes]
             payload["semantic_palette_rgb"] = {
                 name: [round(channel * 255) for channel in color]
-                for name, color in SEMANTIC_PALETTE_BY_CLASS.items()
+                for name, color in palette_by_class.items()
             }
             payload["semantic_map_action_gradient"] = args.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS
             if args.experiment in SEMANTIC_FEATURE_FUSION_EXPERIMENTS:
@@ -3627,6 +3684,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         torch.cuda.manual_seed_all(args.seed)
     source_root = args.root.resolve()
     normalize_dataset_keys(args, source_root)
+    if args.experiment.upper() in FRONT_ONLY_FROZEN_SEMANTIC_EXPERIMENTS:
+        if list(args.rgb_keys) != ["observation.images.front"]:
+            raise ValueError(
+                f"{args.experiment} requires exactly ['observation.images.front']; got {args.rgb_keys}."
+            )
     if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
         if args.pretrained_segmentation_checkpoint is None:
             raise ValueError(
@@ -3666,7 +3728,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         )
     if args.mask_quality_dir is not None and args.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
         raise ValueError(
-            "UNET-SEM uses a frozen pretrained segmenter and has no segmentation loss to quality-weight."
+            "Frozen UNET-SEM experiments have no segmentation loss to quality-weight."
         )
     if args.semantic_adapter_base_channels <= 0:
         raise ValueError(
@@ -3883,10 +3945,14 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 f"Frozen segmentation: {args.pretrained_segmentation_checkpoint}; no segmentation "
                 "parameters or losses are trained. Soft semantic RGB maps and RGB share ACT ResNet18."
             )
-            print(
-                f"Identity embeddings: camera IDs={camera_ids}, modality IDs={modality_ids}; "
-                f"camera/modality mode=gated, std=0.02, gate_init={args.identity_embedding_gate_init:g}."
-            )
+            if args.experiment in IDENTITY_EMBEDDED_FROZEN_SEMANTIC_EXPERIMENTS:
+                print(
+                    f"Identity embeddings: camera IDs={camera_ids}, modality IDs={modality_ids}; "
+                    "camera/modality mode=gated, std=0.02, "
+                    f"gate_init={args.identity_embedding_gate_init:g}."
+                )
+            else:
+                print("Identity embeddings: disabled (camera IDs=None, modality IDs=None).")
         elif args.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
             semantic_description = (
                 "Semantic loss: weighted multiclass CE + "

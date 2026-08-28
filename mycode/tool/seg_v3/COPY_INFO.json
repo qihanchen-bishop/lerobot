@@ -1,0 +1,9 @@
+{
+  "deployment_name": "seg_v3",
+  "training_work_dir": "/home/qihan/data/sam2/segdata/temp/bettersetup_v4/unet_front_v4_r1",
+  "best_checkpoint_source": "/home/qihan/data/sam2/segdata/temp/bettersetup_v4/unet_front_v4_r1/candidate_ep040.pt",
+  "best_checkpoint_destination": "best.pt",
+  "selected_epoch": 40,
+  "reason": "Epoch 40 had the highest actual validation mIoU; the training directory best.pt retained epoch 32 because of the old min-delta save rule.",
+  "final_package_source": "/home/qihan/data/sam2/segdata/final/bettersetup_v4/models/unet_front_v4_r1"
+}
