@@ -1006,6 +1006,8 @@ class MaskACTPolicy(nn.Module):
         self._asem_backward_losses: tuple[Tensor, Tensor, float] | None = None
         self.bce = nn.BCEWithLogitsLoss()
         self._latest_inference_mask_preview: dict[str, Tensor] = {}
+        self._prepared_inference_semantic_input: dict[str, Tensor] = {}
+        self._latest_inference_semantic_input: dict[str, Tensor] = {}
         self._latest_semantic_state: Tensor | None = None
         self._latest_semantic_rollout: dict[str, Tensor] = {}
         self._phase_inference_history: Tensor | None = None
@@ -1230,6 +1232,8 @@ class MaskACTPolicy(nn.Module):
     def reset(self) -> None:
         self.act_policy.reset()
         self._latest_inference_mask_preview = {}
+        self._prepared_inference_semantic_input = {}
+        self._latest_inference_semantic_input = {}
         self._latest_semantic_state = None
         self._latest_semantic_rollout = {}
         self._phase_inference_history = None
@@ -1375,6 +1379,14 @@ class MaskACTPolicy(nn.Module):
         """
         return dict(self._latest_inference_mask_preview)
 
+    def latest_inference_semantic_input(self) -> dict[str, Tensor]:
+        """Return soft semantic RGB images used for the latest ACT chunk inference.
+
+        Images are CPU uint8 HWC tensors before ACT input normalization. The
+        class-probability mixture is retained in their palette-weighted colors.
+        """
+        return dict(self._latest_inference_semantic_input)
+
     def latest_semantic_rollout(self) -> dict[str, Tensor]:
         """Return the latest SSACT-1 rollout as detached CPU tensors."""
         return dict(self._latest_semantic_rollout)
@@ -1428,6 +1440,7 @@ class MaskACTPolicy(nn.Module):
     @torch.no_grad()
     def _prepare_inference_batch(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         self.eval()
+        self._prepared_inference_semantic_input = {}
         rgbs = self._get_rgb_inputs(batch, denormalize=self.act_uses_raw_rgb_images())
         act_batch = dict(batch)
 
@@ -1543,9 +1556,23 @@ class MaskACTPolicy(nn.Module):
                     stage_confidence=stage_confidence,
                 )
             else:
+                semantic_maps = self.semantic_rgb_maps(probabilities_for_act)
+                self._prepared_inference_semantic_input = {
+                    semantic_image_key(rgb_key): (
+                        semantic_rgb[0]
+                        .detach()
+                        .clamp(0.0, 1.0)
+                        .permute(1, 2, 0)
+                        .mul(255)
+                        .round()
+                        .to(dtype=torch.uint8)
+                        .cpu()
+                    )
+                    for rgb_key, semantic_rgb in zip(self.rgb_keys, semantic_maps, strict=True)
+                }
                 for rgb_key, semantic_rgb in zip(
                     self.rgb_keys,
-                    self.semantic_rgb_maps(probabilities_for_act),
+                    semantic_maps,
                     strict=True,
                 ):
                     act_batch[semantic_image_key(rgb_key)] = self.normalize_semantic_map(semantic_rgb)
@@ -1577,13 +1604,20 @@ class MaskACTPolicy(nn.Module):
     @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor]) -> Tensor:
         """Run RGB-only Mask-ACT inference and return one action from the ACT action queue."""
-        return self.act_policy.select_action(self._prepare_inference_batch(batch))
+        action_queue = getattr(self.act_policy, "_action_queue", None)
+        temporal_ensemble = getattr(self.act_policy.config, "temporal_ensemble_coeff", None)
+        predicts_new_chunk = temporal_ensemble is not None or action_queue is None or len(action_queue) == 0
+        action = self.act_policy.select_action(self._prepare_inference_batch(batch))
+        if predicts_new_chunk:
+            self._latest_inference_semantic_input = dict(self._prepared_inference_semantic_input)
+        return action
 
     def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
         """Run RGB-only Mask-ACT inference and return the complete predicted action chunk."""
         with torch.no_grad():
             act_batch = self._prepare_inference_batch(batch)
             actions = self.act_policy.predict_action_chunk(act_batch)
+        self._latest_inference_semantic_input = dict(self._prepared_inference_semantic_input)
         if self.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
             if self.semantic_dynamics is None or self._latest_semantic_state is None:
                 raise RuntimeError("SSACT-1 semantic dynamics state was not prepared for inference.")

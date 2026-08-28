@@ -43,6 +43,7 @@ DEFAULT_DIFFUSION_EXECUTION_MODE = "asynchronous"
 DEFAULT_CAMERA_READ_MODE = "wait_new_frame"
 SEGMENTATION_V1_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "seg_v1" / "best.pt"
 SEGMENTATION_V2_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "seg_v2" / "best.pt"
+SEGMENTATION_V3_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "seg_v3" / "best.pt"
 DEFAULT_SEGMENTATION_MODEL_PATH = SEGMENTATION_V1_MODEL_PATH
 SEGMENTATION_OBJECT_PRESENT_MIN_RATIO = 0.001
 SEGMENTATION_SCREW_OBJECT_PRESENT_MIN_RATIO = 0.0008
@@ -60,8 +61,8 @@ DEFAULT_SIDE_CAMERA_ID = "v4l2-serial://202412231836/rgb"
 V4L2_SERIAL_PREFIX = "v4l2-serial://"
 
 
-def segmentation_model_path_for_policy(checkpoint_path: str | Path) -> Path:
-    """Select the scene-matched segmentation model from the policy run name."""
+def segmentation_model_paths_for_policy(checkpoint_path: str | Path) -> tuple[Path, Path]:
+    """Select scene- and view-matched segmentation models from the policy run name."""
     path = Path(checkpoint_path).expanduser()
     try:
         relative_path = path.resolve().relative_to(DEFAULT_OUTPUT_ROOT.resolve())
@@ -69,8 +70,13 @@ def segmentation_model_path_for_policy(checkpoint_path: str | Path) -> Path:
         relative_path = path
     strategy_name = relative_path.parts[0] if relative_path.parts else ""
     if strategy_name.lower().startswith("newsetup"):
-        return SEGMENTATION_V2_MODEL_PATH
-    return SEGMENTATION_V1_MODEL_PATH
+        return SEGMENTATION_V3_MODEL_PATH, SEGMENTATION_V2_MODEL_PATH
+    return SEGMENTATION_V1_MODEL_PATH, SEGMENTATION_V1_MODEL_PATH
+
+
+def segmentation_model_path_for_policy(checkpoint_path: str | Path) -> Path:
+    """Return the front-view segmentation model for compatibility with callers."""
+    return segmentation_model_paths_for_policy(checkpoint_path)[0]
 
 POLICY_TYPES = (
     "mask_act",
@@ -501,6 +507,15 @@ class SegmentationPreviewModel:
             raise FileNotFoundError(f"Segmentation checkpoint does not exist: {self.checkpoint_path}")
         checkpoint = torch.load(self.checkpoint_path, map_location="cpu", weights_only=False)
         self.labels = list(checkpoint.get("labels", ["background", "occluder", "object", "region", "tool"]))
+        supported_labels = (
+            ["background", "occluder", "object", "region", "tool"],
+            ["background", "occluder", "object", "region", "tool", "leftarm", "rightarm"],
+        )
+        if self.labels not in supported_labels:
+            raise ValueError(
+                f"Unsupported segmentation labels in {self.checkpoint_path}: {self.labels}. "
+                f"Expected one of {supported_labels}."
+            )
         self.image_size = tuple(checkpoint.get("image_size", (320, 180)))
         width = int(checkpoint.get("args", {}).get("width", 32))
         requested = self.device_name.strip().lower()
@@ -549,7 +564,8 @@ class SegmentationPreviewModel:
             logits = self.model(batch)
             preds = logits.argmax(dim=1).cpu().numpy().astype(np.uint8)
 
-        palette = np.asarray(SEGMENTATION_PALETTE, dtype=np.uint8)
+        palette_values = SEGMENTATION_PALETTE_V3 if len(self.labels) == 7 else SEGMENTATION_PALETTE
+        palette = np.asarray(palette_values, dtype=np.uint8)
         overlays: dict[str, Any] = {}
         summaries: dict[str, str] = {}
         measurements: dict[str, Any] = {}
@@ -713,8 +729,8 @@ class EvalPolicyApp:
         self.segmentation_summary_labels: dict[str, ttk.Label] = {}
         self.model_mask_preview_labels: dict[str, ttk.Label] = {}
         self.model_mask_summary_labels: dict[str, ttk.Label] = {}
-        self.segmentation_model: SegmentationPreviewModel | None = None
-        self.segmentation_loaded_logged = False
+        self.segmentation_models: dict[str, SegmentationPreviewModel] = {}
+        self.segmentation_loaded_logged: set[str] = set()
         self.segmentation_error_logged = False
         self.segmentation_eval_metrics = self._new_segmentation_eval_metrics()
         self.connected_preview_stop: threading.Event | None = None
@@ -748,6 +764,7 @@ class EvalPolicyApp:
             "camera_config": tk.StringVar(value=""),
             "dataset_repo_id": tk.StringVar(value="seeed/eval_test"),
             "dataset_root": tk.StringVar(value=str(DEFAULT_EVAL_ROOT)),
+            "save_subfolder": tk.StringVar(value=""),
             "task": tk.StringVar(value=TASK_CHOICES[0]),
             "episode_time_s": tk.StringVar(value="25"),
             "fps": tk.StringVar(value="30"),
@@ -759,6 +776,7 @@ class EvalPolicyApp:
             "execution_mode": tk.StringVar(value=DEFAULT_DIFFUSION_EXECUTION_MODE),
             "camera_read_mode": tk.StringVar(value=DEFAULT_CAMERA_READ_MODE),
             "segmentation_model_path": tk.StringVar(value=str(DEFAULT_SEGMENTATION_MODEL_PATH)),
+            "segmentation_side_model_path": tk.StringVar(value=str(SEGMENTATION_V1_MODEL_PATH)),
             "segmentation_device": tk.StringVar(value="auto"),
             "fusion_steps": tk.StringVar(value="0"),
             "fusion_history_weight": tk.StringVar(value="0"),
@@ -802,7 +820,7 @@ class EvalPolicyApp:
         self._refresh_camera_config_preview()
         for key in ("realsense_serial", "opencv_front", "opencv_side"):
             self.vars[key].trace_add("write", lambda *_args: self._refresh_camera_config_preview())
-        for key in ("segmentation_model_path", "segmentation_device"):
+        for key in ("segmentation_model_path", "segmentation_side_model_path", "segmentation_device"):
             self.vars[key].trace_add("write", self._reset_segmentation_preview_model)
         self.vars["checkpoint_path"].trace_add("write", self._on_checkpoint_path_changed)
         self.vars["front_camera_type"].trace_add("write", self._on_front_camera_type_changed)
@@ -811,8 +829,17 @@ class EvalPolicyApp:
         self.low_resolution.trace_add("write", lambda *_args: self._refresh_camera_config_preview())
         for key in ("grid_rows", "grid_cols"):
             self.vars[key].trace_add("write", self._refresh_grid_cells)
-        for key in ("policy_type", "task", "grid_cell", "dataset_root", "trials_per_grid"):
+        for key in (
+            "policy_type",
+            "task",
+            "grid_cell",
+            "dataset_root",
+            "save_subfolder",
+            "trials_per_grid",
+        ):
             self.vars[key].trace_add("write", self._refresh_grid_stats)
+        for key in ("policy_type", "dataset_root"):
+            self.vars[key].trace_add("write", self._refresh_save_subfolder_options)
         self.vars["result"].trace_add("write", self._on_result_changed)
         self._refresh_grid_cells()
         self._on_result_changed()
@@ -1187,6 +1214,18 @@ class EvalPolicyApp:
         ttk.Button(save_frame, text="Browse", command=self.browse_dataset_root).grid(row=0, column=1, padx=(8, 0))
 
         row += 1
+        ttk.Label(top, text="Save subfolder (blank=auto)").grid(
+            row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
+        )
+        self.save_subfolder_combo = ttk.Combobox(
+            top,
+            textvariable=self.vars["save_subfolder"],
+            state="normal",
+        )
+        self.save_subfolder_combo.grid(row=row, column=1, columnspan=3, sticky=tk.EW)
+        self.save_subfolder_combo.configure(postcommand=self._refresh_save_subfolder_options)
+
+        row += 1
         ttk.Label(top, text="Task type").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
         ttk.Combobox(
             top,
@@ -1307,7 +1346,7 @@ class EvalPolicyApp:
         row += 1
         ttk.Checkbutton(
             top,
-            text="Segmentation preview",
+            text="Front segmentation",
             variable=self.enable_segmentation_preview,
         ).grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
         ttk.Entry(top, textvariable=self.vars["segmentation_model_path"]).grid(
@@ -1315,6 +1354,14 @@ class EvalPolicyApp:
         )
         ttk.Entry(top, textvariable=self.vars["segmentation_device"], width=12).grid(
             row=row, column=3, sticky=tk.W, pady=5
+        )
+
+        row += 1
+        ttk.Label(top, text="Side segmentation").grid(
+            row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
+        )
+        ttk.Entry(top, textvariable=self.vars["segmentation_side_model_path"]).grid(
+            row=row, column=1, columnspan=2, sticky=tk.EW, pady=5
         )
 
         row += 1
@@ -1513,23 +1560,35 @@ class EvalPolicyApp:
         scrollbar.pack(side=tk.LEFT, fill=tk.Y)
 
     def _reset_segmentation_preview_model(self, *_args: Any) -> None:
-        self.segmentation_model = None
-        self.segmentation_loaded_logged = False
+        self.segmentation_models.clear()
+        self.segmentation_loaded_logged.clear()
         self.segmentation_error_logged = False
 
     def _on_checkpoint_path_changed(self, *_args: Any) -> None:
         self._sync_segmentation_model_for_checkpoint()
 
     def _sync_segmentation_model_for_checkpoint(self) -> Path:
-        selected_path = segmentation_model_path_for_policy(self.vars["checkpoint_path"].get())
-        current_path = Path(self.vars["segmentation_model_path"].get()).expanduser()
-        if current_path != selected_path:
-            self.vars["segmentation_model_path"].set(str(selected_path))
+        front_path, side_path = segmentation_model_paths_for_policy(
+            self.vars["checkpoint_path"].get()
+        )
+        selected_paths = {
+            "segmentation_model_path": front_path,
+            "segmentation_side_model_path": side_path,
+        }
+        changed = False
+        for key, selected_path in selected_paths.items():
+            current_path = Path(self.vars[key].get()).expanduser()
+            if current_path == selected_path:
+                continue
+            self.vars[key].set(str(selected_path))
+            changed = True
+        if changed:
             self._append_log(
-                f"[SEG] Auto-selected {selected_path.parent.name}/best.pt for "
+                f"[SEG] Auto-selected front={front_path.parent.name}/best.pt, "
+                f"side={side_path.parent.name}/best.pt for "
                 f"{self.vars['checkpoint_path'].get()}"
             )
-        return selected_path
+        return front_path
 
     def _segmentation_base_task(self) -> str:
         if not hasattr(self, "vars"):
@@ -1967,6 +2026,7 @@ class EvalPolicyApp:
             "checkpoint_path",
             "dataset_repo_id",
             "dataset_root",
+            "save_subfolder",
             "task",
             "episode_time_s",
             "fps",
@@ -2003,10 +2063,12 @@ class EvalPolicyApp:
             "ssact_max_execution_steps",
             "ssact_max_action_residual",
             "segmentation_model_path",
+            "segmentation_side_model_path",
             "segmentation_device",
             "reset_time_s",
             "extra_args",
         )
+        self.vars["save_subfolder"].set(str(config.get("save_subfolder") or ""))
         for key in string_keys:
             if key not in config or key not in self.vars:
                 continue
@@ -2029,6 +2091,15 @@ class EvalPolicyApp:
                 var.set(bool(config[key]))
 
         self._sync_segmentation_model_for_checkpoint()
+        if not str(config.get("save_subfolder") or "").strip():
+            recent_subfolder = self._recent_save_subfolder_for_current_checkpoint()
+            if recent_subfolder:
+                self.vars["save_subfolder"].set(recent_subfolder)
+                self._append_log(
+                    f"[CONFIG] Restored recent save subfolder for this checkpoint: "
+                    f"{recent_subfolder}"
+                )
+        self._refresh_save_subfolder_options()
         self._select_checkpoint_combo_for_path(Path(self.vars["checkpoint_path"].get()).expanduser())
         self._refresh_camera_config_preview()
         self._refresh_grid_cells()
@@ -2406,6 +2477,75 @@ class EvalPolicyApp:
     def _base_save_root(self) -> Path:
         return Path(self.vars["dataset_root"].get()).expanduser()
 
+    def _refresh_save_subfolder_options(self, *_args: Any) -> None:
+        if not hasattr(self, "save_subfolder_combo"):
+            return
+        policy_type = self.vars["policy_type"].get().strip()
+        parent = self._base_save_root() / policy_type
+        candidates: list[Path] = []
+        try:
+            if parent.is_dir():
+                candidates = [path for path in parent.iterdir() if path.is_dir()]
+                candidates.sort(
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
+                )
+        except OSError:
+            candidates = []
+        names = [path.name for path in candidates]
+        current = self.vars["save_subfolder"].get().strip()
+        if current and current not in names:
+            names.insert(0, current)
+        self.save_subfolder_combo.configure(values=("", *names))
+
+    def _recent_save_subfolder_for_current_checkpoint(self) -> str | None:
+        policy_type = self.vars["policy_type"].get().strip()
+        checkpoint_text = self.vars["checkpoint_path"].get().strip()
+        if not policy_type or not checkpoint_text:
+            return None
+        try:
+            target_checkpoint = Path(checkpoint_text).expanduser().resolve()
+        except OSError:
+            target_checkpoint = Path(checkpoint_text).expanduser()
+
+        parent = self._base_save_root() / policy_type
+        try:
+            result_paths = list(parent.glob(f"*/{RESULTS_FILENAME}"))
+        except OSError:
+            return None
+
+        latest: tuple[str, float, str] | None = None
+        for result_path in result_paths:
+            for record in self._read_jsonl_records(result_path):
+                if record.get("policy_type") != policy_type:
+                    continue
+                recorded_checkpoint = record.get("policy_path")
+                if not recorded_checkpoint:
+                    continue
+                try:
+                    recorded_path = Path(str(recorded_checkpoint)).expanduser().resolve()
+                except OSError:
+                    recorded_path = Path(str(recorded_checkpoint)).expanduser()
+                if recorded_path != target_checkpoint:
+                    continue
+                timestamp = str(record.get("saved_at") or record.get("ended_at") or "")
+                try:
+                    modified = result_path.stat().st_mtime
+                except OSError:
+                    modified = 0.0
+                candidate = (timestamp, modified, result_path.parent.name)
+                if latest is None or candidate[:2] > latest[:2]:
+                    latest = candidate
+        return latest[2] if latest is not None else None
+
+    def _custom_save_subfolder(self) -> str | None:
+        name = self.vars["save_subfolder"].get().strip()
+        if not name:
+            return None
+        if name in {".", ".."} or "/" in name or "\\" in name or Path(name).is_absolute():
+            raise ValueError("Save subfolder must be one directory name without '/' or '\\'.")
+        return name
+
     @staticmethod
     def _mask_act_experiment_from_checkpoint(checkpoint_path: str | Path) -> str | None:
         current = Path(checkpoint_path).expanduser()
@@ -2510,7 +2650,10 @@ class EvalPolicyApp:
                 raise ValueError(
                     "Could not determine the Mask-ACT experiment from mask_act_run_config.json."
                 )
-        if selected_policy in POLICY_TYPES_WITH_VARIANTS and selected_variant:
+        custom_subfolder = self._custom_save_subfolder()
+        if custom_subfolder:
+            path /= custom_subfolder
+        elif selected_policy in POLICY_TYPES_WITH_VARIANTS and selected_variant:
             path /= selected_variant
         if create:
             path.mkdir(parents=True, exist_ok=True)
@@ -2540,7 +2683,10 @@ class EvalPolicyApp:
         policy_type: str,
         policy_variant: str | None = None,
     ) -> list[dict[str, Any]]:
-        if policy_type in POLICY_TYPES_WITH_VARIANTS and policy_variant:
+        custom_subfolder = self._custom_save_subfolder()
+        if custom_subfolder:
+            paths = (save_root / policy_type / custom_subfolder / RESULTS_FILENAME,)
+        elif policy_type in POLICY_TYPES_WITH_VARIANTS and policy_variant:
             paths = (save_root / policy_type / policy_variant / RESULTS_FILENAME,)
         else:
             paths = (
@@ -2843,7 +2989,11 @@ class EvalPolicyApp:
             self.vars["grid_stats"].set("Enter a valid grid and trials-per-cell value.")
             return
         rate = 0.0 if total == 0 else successes / total * 100
-        policy_label = f"{policy_type}/{policy_variant}" if policy_variant else policy_type
+        custom_subfolder = self._custom_save_subfolder()
+        if custom_subfolder:
+            policy_label = f"{policy_type}/{custom_subfolder} (policy={policy_variant or policy_type})"
+        else:
+            policy_label = f"{policy_type}/{policy_variant}" if policy_variant else policy_type
         cell = grid["grid_cell"]
         other_task_counts: dict[str, int] = {}
         if total == 0:
@@ -3368,6 +3518,7 @@ class EvalPolicyApp:
             "fps": int(self.vars["fps"].get()),
             "save_root": str(save_root),
             "save_parent": str(policy_save_parent),
+            "save_subfolder": self._custom_save_subfolder(),
             "target_trials_per_grid": int(self.vars["trials_per_grid"].get()),
             "planned_trial_index": trial_count + 1,
         }
@@ -3581,6 +3732,26 @@ class EvalPolicyApp:
                 "observation.state",
                 policy_state_names,
             )
+        sensor_dataset_features = dataset_features
+        semantic_recording_features = self._policy_semantic_recording_features(
+            sensor_dataset_features,
+            policy_cfg.input_features,
+        )
+        if semantic_recording_features:
+            dataset_features = {**sensor_dataset_features, **semantic_recording_features}
+            semantic_keys = sorted(semantic_recording_features)
+            self.active_eval_metadata.update(
+                {
+                    "policy_semantic_recording_keys": semantic_keys,
+                    "policy_semantic_recording_format": "video" if save_video else "image_frames",
+                    "policy_semantic_representation": "soft_palette_rgb_before_act_normalization",
+                    "policy_semantic_alignment": "latest_act_chunk_input_held_until_next_chunk_inference",
+                }
+            )
+            self.log_queue.put(
+                "[RECORD] Saving the soft semantic RGB actually used for ACT chunk inference: "
+                + ", ".join(semantic_keys)
+            )
         obs_features = sorted(key for key in dataset_features if key.startswith("observation."))
         self.log_queue.put(f"Raw robot observation features: {sorted(robot.observation_features)}")
         self.log_queue.put(f"Dataset observation features: {obs_features}")
@@ -3606,7 +3777,10 @@ class EvalPolicyApp:
                 features=dataset_features,
                 use_videos=save_video,
                 image_writer_processes=0,
-                image_writer_threads=max(1, 4 * len(robot.cameras)),
+                image_writer_threads=max(
+                    1,
+                    4 * (len(robot.cameras) + len(semantic_recording_features)),
+                ),
                 batch_encoding_size=1_000_000 if save_video else 1,
                 vcodec="h264",
             )
@@ -3722,7 +3896,7 @@ class EvalPolicyApp:
                         raw_warmup_obs = self._get_eval_observation(robot)
                         processed_warmup_obs = robot_observation_processor(raw_warmup_obs)
                         warmup_observation_frame = build_dataset_frame(
-                            dataset.features,
+                            sensor_dataset_features,
                             processed_warmup_obs,
                             prefix=OBS_STR,
                         )
@@ -3945,7 +4119,11 @@ class EvalPolicyApp:
                     observation_started = time.perf_counter()
                     raw_obs = self._get_eval_observation(robot)
                     obs_processed = robot_observation_processor(raw_obs)
-                    observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
+                    observation_frame = build_dataset_frame(
+                        sensor_dataset_features,
+                        obs_processed,
+                        prefix=OBS_STR,
+                    )
                     policy_observation_frame = self._policy_observation_frame(
                         observation_frame,
                         dataset.features,
@@ -4016,8 +4194,23 @@ class EvalPolicyApp:
                     control_step += 1
                     rate_window_steps += 1
 
-                    action_frame = build_dataset_frame(dataset.features, action_dict, prefix=ACTION)
-                    dataset.add_frame({**observation_frame, **action_frame, "task": task})
+                    action_frame = build_dataset_frame(
+                        sensor_dataset_features,
+                        action_dict,
+                        prefix=ACTION,
+                    )
+                    semantic_frame = self._latest_policy_semantic_frame(
+                        policy,
+                        semantic_recording_features,
+                    )
+                    dataset.add_frame(
+                        {
+                            **observation_frame,
+                            **semantic_frame,
+                            **action_frame,
+                            "task": task,
+                        }
+                    )
 
                     loop_s = max(time.perf_counter() - loop_t, 1e-6)
                     latest_masks = getattr(policy, "latest_inference_mask_preview", None)
@@ -4026,7 +4219,7 @@ class EvalPolicyApp:
                         raw_obs,
                         action_dict,
                         1.0 / loop_s,
-                        ", ".join(sorted(observation_frame)),
+                        ", ".join(sorted({*observation_frame, *semantic_frame})),
                         model_masks,
                     )
                     now = time.perf_counter()
@@ -4068,6 +4261,7 @@ class EvalPolicyApp:
             )
         if not self.vars["dataset_repo_id"].get().strip():
             raise ValueError("Dataset repo cannot be empty.")
+        self._custom_save_subfolder()
         if not self.vars["task"].get().strip():
             raise ValueError("Task cannot be empty.")
         self._grid_metadata()
@@ -4083,9 +4277,19 @@ class EvalPolicyApp:
         if self.vars["camera_read_mode"].get() not in {"wait_new_frame", "latest_nonblocking"}:
             raise ValueError("Camera read mode must be wait_new_frame or latest_nonblocking.")
         if self.enable_segmentation_preview.get():
-            segmentation_path = Path(self.vars["segmentation_model_path"].get()).expanduser()
-            if not segmentation_path.is_file():
-                raise ValueError(f"Segmentation checkpoint path does not exist: {segmentation_path}")
+            segmentation_paths = {
+                "front": Path(self.vars["segmentation_model_path"].get()).expanduser(),
+            }
+            if self.include_side_camera.get():
+                segmentation_paths["side"] = Path(
+                    self.vars["segmentation_side_model_path"].get()
+                ).expanduser()
+            for view, segmentation_path in segmentation_paths.items():
+                if not segmentation_path.is_file():
+                    raise ValueError(
+                        f"{view.capitalize()} segmentation checkpoint does not exist: "
+                        f"{segmentation_path}"
+                    )
         action_steps_text = self.vars["n_action_steps"].get().strip()
         if not action_steps_text or int(action_steps_text) <= 0:
             raise ValueError("Replan interval must be greater than zero.")
@@ -5033,6 +5237,53 @@ class EvalPolicyApp:
             for key, feature in features.items()
         }
 
+    @staticmethod
+    def _policy_semantic_recording_features(
+        dataset_features: dict[str, dict[str, Any]],
+        policy_input_features: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """Build recording features for semantic RGB images directly consumed by ACT."""
+        recording_features: dict[str, dict[str, Any]] = {}
+        for semantic_key in policy_input_features:
+            if not semantic_key.startswith("observation.images.") or not semantic_key.endswith(
+                "_semantic"
+            ):
+                continue
+            rgb_key = semantic_key.removesuffix("_semantic")
+            rgb_feature = dataset_features.get(rgb_key)
+            if not isinstance(rgb_feature, dict) or rgb_feature.get("dtype") not in {
+                "image",
+                "video",
+            }:
+                raise ValueError(
+                    f"Cannot record policy semantic input '{semantic_key}': source RGB feature "
+                    f"'{rgb_key}' is unavailable."
+                )
+            recording_features[semantic_key] = dict(rgb_feature)
+        return recording_features
+
+    @staticmethod
+    def _latest_policy_semantic_frame(
+        policy: Any,
+        recording_features: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not recording_features:
+            return {}
+        latest_input = getattr(policy, "latest_inference_semantic_input", None)
+        if not callable(latest_input):
+            raise RuntimeError(
+                "The selected policy declares semantic image inputs but cannot expose the images "
+                "used for chunk inference."
+            )
+        frames = latest_input()
+        missing = sorted(set(recording_features) - set(frames))
+        if missing:
+            raise RuntimeError(
+                "Policy semantic input is unavailable after action inference for: "
+                + ", ".join(missing)
+            )
+        return {key: frames[key] for key in recording_features}
+
     def disconnect_robot(self) -> None:
         if self.eval_running:
             self.vars["status"].set("Stop the policy loop first; robot remains connected.")
@@ -5628,12 +5879,40 @@ class EvalPolicyApp:
                     self.current_images[image_key] = ImageTk.PhotoImage(pil)
                     label.configure(image=self.current_images[image_key])
             if self.enable_segmentation_preview.get():
-                if self.segmentation_model is None:
-                    self.segmentation_model = SegmentationPreviewModel(
-                        self.vars["segmentation_model_path"].get(),
-                        self.vars["segmentation_device"].get(),
+                overlays: dict[str, Any] = {}
+                summaries: dict[str, str] = {}
+                measurements: dict[str, Any] = {}
+                model_path_vars = {
+                    "front": "segmentation_model_path",
+                    "side": "segmentation_side_model_path",
+                }
+                for image_key in ("front", "side"):
+                    image = images.get(image_key)
+                    if image is None:
+                        continue
+                    model = self.segmentation_models.get(image_key)
+                    if model is None:
+                        model = SegmentationPreviewModel(
+                            self.vars[model_path_vars[image_key]].get(),
+                            self.vars["segmentation_device"].get(),
+                        )
+                        self.segmentation_models[image_key] = model
+                    view_overlays, view_summaries, view_measurements = model.predict(
+                        {image_key: image}
                     )
-                overlays, summaries, measurements = self.segmentation_model.predict(images)
+                    overlays.update(view_overlays)
+                    summaries.update(view_summaries)
+                    measurements.update(view_measurements)
+                    if (
+                        image_key not in self.segmentation_loaded_logged
+                        and model.loaded_device != "not-loaded"
+                    ):
+                        self.segmentation_loaded_logged.add(image_key)
+                        self._append_log(
+                            f"[SEG] Loaded {image_key} model "
+                            f"{self.vars[model_path_vars[image_key]].get()} "
+                            f"on {model.loaded_device}."
+                        )
                 self._update_segmentation_eval_metrics(measurements)
                 for image_key, overlay in overlays.items():
                     label = self.segmentation_preview_labels.get(image_key)
@@ -5646,12 +5925,6 @@ class EvalPolicyApp:
                     summary = self.segmentation_summary_labels.get(image_key)
                     if summary is not None:
                         summary.configure(text=summaries.get(image_key, ""))
-                if not self.segmentation_loaded_logged and self.segmentation_model.loaded_device != "not-loaded":
-                    self.segmentation_loaded_logged = True
-                    self._append_log(
-                        f"[SEG] Loaded {self.vars['segmentation_model_path'].get()} "
-                        f"on {self.segmentation_model.loaded_device}."
-                    )
             else:
                 self.current_segmentation_images.clear()
                 for label in self.segmentation_preview_labels.values():
