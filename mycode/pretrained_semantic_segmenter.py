@@ -76,7 +76,12 @@ class TinyUNet(nn.Module):
 class FrozenTinyUNetSegmenter(nn.Module):
     """Load a TinyUNet checkpoint and always run it without parameter updates."""
 
-    def __init__(self, checkpoint_path: str | Path) -> None:
+    def __init__(
+        self,
+        checkpoint_path: str | Path,
+        *,
+        expected_labels: tuple[str, ...] | None = EXPECTED_LABELS,
+    ) -> None:
         super().__init__()
         path = Path(checkpoint_path).expanduser().resolve()
         if not path.is_file():
@@ -84,9 +89,14 @@ class FrozenTinyUNetSegmenter(nn.Module):
 
         checkpoint: dict[str, Any] = torch.load(path, map_location="cpu", weights_only=False)
         labels = tuple(checkpoint.get("labels", ()))
-        if labels != EXPECTED_LABELS:
+        if expected_labels is not None and labels != expected_labels:
             raise ValueError(
-                f"Segmentation checkpoint labels must be {EXPECTED_LABELS}, got {labels} from {path}."
+                f"Segmentation checkpoint labels must be {expected_labels}, got {labels} from {path}."
+            )
+        if not labels or labels[0] != "background" or len(set(labels)) != len(labels):
+            raise ValueError(
+                "Segmentation checkpoint labels must be unique, non-empty, and start with "
+                f"'background'; got {labels} from {path}."
             )
         image_size = checkpoint.get("image_size")
         if not isinstance(image_size, (tuple, list)) or len(image_size) != 2:

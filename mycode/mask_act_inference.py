@@ -138,10 +138,15 @@ def load_mask_act_for_inference(
     if str(args.experiment).upper() in FROZEN_SEMANTIC_EXPERIMENTS:
         configured_segmenter = Path(args.pretrained_segmentation_checkpoint).expanduser()
         if not configured_segmenter.is_file():
-            bundled_segmenter = project_root / "mycode" / "tool" / "seg_v2" / "best.pt"
+            segmenter_version = (
+                "seg_v3"
+                if str(args.experiment).upper() == "UNET-SEM-V3-F-NOEMB"
+                else "seg_v2"
+            )
+            bundled_segmenter = project_root / "mycode" / "tool" / segmenter_version / "best.pt"
             if not bundled_segmenter.is_file():
                 raise FileNotFoundError(
-                    "UNET-SEM segmentation checkpoint is unavailable at both the recorded path "
+                    "Frozen semantic segmentation checkpoint is unavailable at both the recorded path "
                     f"({configured_segmenter}) and bundled path ({bundled_segmenter})."
                 )
             args.pretrained_segmentation_checkpoint = str(bundled_segmenter)
