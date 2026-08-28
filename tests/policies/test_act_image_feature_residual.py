@@ -3,7 +3,7 @@ import torch
 
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.act.configuration_act import ACTConfig
-from lerobot.policies.act.modeling_act import ACT, IMAGE_FEATURE_RESIDUALS
+from lerobot.policies.act.modeling_act import ACT, ACTPolicy, IMAGE_FEATURE_RESIDUALS
 from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
 
 
@@ -199,3 +199,99 @@ def test_gated_camera_embedding_starts_with_baseline_output_and_trains_gate():
     gated_actions.square().mean().backward()
     assert gated.image_camera_embed_gate.grad is not None
     assert gated.image_camera_embed_gate.grad.abs() > 0
+
+
+def test_nonzero_gated_camera_and_modality_embeddings_train_from_first_step():
+    config = ACTConfig(
+        input_features={
+            "observation.images.front_seg": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 64, 64)),
+            "observation.images.side_seg": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 64, 64)),
+            "observation.images.front": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 64, 64)),
+            "observation.images.side": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 64, 64)),
+            OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(2,)),
+        },
+        output_features={ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(2,))},
+        image_camera_ids=[0, 1, 0, 1],
+        image_camera_embedding_mode="gated",
+        image_camera_embedding_gate_init=0.01,
+        image_modality_ids=[1, 1, 0, 0],
+        image_modality_embedding_mode="gated",
+        image_modality_embedding_gate_init=0.01,
+        pretrained_backbone_weights=None,
+        chunk_size=2,
+        n_action_steps=2,
+        use_vae=False,
+        dim_model=32,
+        n_heads=4,
+        dim_feedforward=64,
+        n_encoder_layers=1,
+        n_decoder_layers=1,
+    )
+    model = ACT(config)
+    actions = model(
+        {
+            OBS_IMAGES: [torch.rand(1, 3, 64, 64) for _ in range(4)],
+            OBS_STATE: torch.rand(1, 2),
+        }
+    )[0]
+    actions.square().mean().backward()
+
+    assert model.image_camera_embed_gate.item() == pytest.approx(0.01)
+    assert model.image_modality_embed_gate.item() == pytest.approx(0.01)
+    assert model.image_camera_embed.weight.grad is not None
+    assert model.image_camera_embed.weight.grad.abs().sum() > 0
+    assert model.image_modality_embed.weight.grad is not None
+    assert model.image_modality_embed.weight.grad.abs().sum() > 0
+    assert model.image_camera_embed_gate.grad is not None
+    assert model.image_modality_embed_gate.grad is not None
+
+
+def test_gated_camera_diagnostics_measure_scale_and_restore_action_ablation_state():
+    config = ACTConfig(
+        input_features={
+            "observation.images.front": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 64, 64)),
+            "observation.images.side": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 64, 64)),
+            OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(2,)),
+        },
+        output_features={ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(2,))},
+        image_camera_ids=[0, 1],
+        image_camera_embedding_mode="gated",
+        image_camera_embedding_gate_init=0.01,
+        pretrained_backbone_weights=None,
+        chunk_size=2,
+        n_action_steps=2,
+        use_vae=False,
+        dim_model=32,
+        n_heads=4,
+        dim_feedforward=64,
+        n_encoder_layers=1,
+        n_decoder_layers=1,
+    )
+    policy = ACTPolicy(config)
+    batch = {
+        "observation.images.front": torch.rand(1, 3, 64, 64),
+        "observation.images.side": torch.rand(1, 3, 64, 64),
+        OBS_STATE: torch.rand(1, 2),
+        ACTION: torch.rand(1, 2, 2),
+        "action_is_pad": torch.zeros(1, 2, dtype=torch.bool),
+    }
+
+    loss, logs = policy(batch)
+    assert logs["camera_embedding_gate"] == pytest.approx(0.01)
+    assert logs["camera_embedding_effective_rms"] > 0
+    assert logs["camera_image_0_feature_rms"] > 0
+    assert logs["camera_image_0_embedding_to_feature_ratio"] > 0
+    loss.backward()
+    gradient_diagnostics = policy.camera_embedding_gradient_diagnostics()
+    assert gradient_diagnostics["camera_embedding_gate_grad_abs"] > 0
+    assert gradient_diagnostics["camera_embedding_weight_grad_rms"] > 0
+
+    saved_gate = policy.model.image_camera_embed_gate.detach().clone()
+    saved_ids = list(policy.config.image_camera_ids)
+    diagnostics = policy.camera_embedding_action_ablation(batch)
+
+    assert diagnostics["camera_embedding_action_disable_delta_rms"] > 0
+    assert diagnostics["camera_embedding_action_swap_delta_rms"] > 0
+    torch.testing.assert_close(policy.model.image_camera_embed_gate, saved_gate)
+    assert policy.config.image_camera_ids == saved_ids
+    assert policy.training

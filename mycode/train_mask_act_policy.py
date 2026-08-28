@@ -35,6 +35,8 @@ Experiments:
       Pseudo-label quality continuously weights auxiliary losses; action gradients never alter segmentation
       or stage heads, and predicted semantic/phase conditioning is introduced only after warmup.
   SEM-2: Same soft semantic maps as SEM-1, but ACT sees no original RGB images and no pooled latent.
+  UNET-SEM: A frozen pretrained TinyUNet produces soft semantic maps. ACT receives those maps and
+      the corresponding RGB views with gated camera and modality identity embeddings.
   3:  ACT sees only the pooled RGB encoder latent. U-Net mask decoder is kept as an auxiliary task.
 """
 
@@ -76,6 +78,7 @@ from lerobot.utils.constants import OBS_ENV_STATE, OBS_STATE
 
 from train_lerobot_policy import ensure_device_is_usable, make_filtered_dataset_view
 from training_artifacts import plot_training_curves, tee_output
+from pretrained_semantic_segmenter import FrozenTinyUNetSegmenter
 from semantic_servo import (
     ActionConditionedSemanticDynamics,
     PhaseHistoryModel,
@@ -109,6 +112,7 @@ CANONICAL_SEMANTIC_MASK_KEYS = [
 DEFAULT_MASK_KEYS = CANONICAL_SEMANTIC_MASK_KEYS
 STAGE_AWARE_EXPERIMENTS = {"SSACT-3"}
 VIEW_FUSION_EXPERIMENTS = {"VIEWFUS-V1"}
+FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM"}
 VIEWFUS_FUSED_FRONT_KEY = "observation.images.front_fused_semantic"
 SEMANTIC_FEATURE_FUSION_EXPERIMENTS = {"SEM-1-V2", *STAGE_AWARE_EXPERIMENTS}
 SEMANTIC_EXPERIMENTS = {
@@ -119,6 +123,7 @@ SEMANTIC_EXPERIMENTS = {
     "SSACT-3",
     "SEM-2",
     "VIEWFUS-V1",
+    *FROZEN_SEMANTIC_EXPERIMENTS,
 }
 ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS = {"ASEM-1"}
 PREDICTIVE_SEMANTIC_EXPERIMENTS = {"SSACT-1"}
@@ -482,6 +487,8 @@ class MaskActRunConfig:
     chunk_size: int
     n_action_steps: int
     pretrained_backbone_weights: str | None
+    pretrained_segmentation_checkpoint: str | None
+    identity_embedding_gate_init: float
     canonical_mask_definition: list[str]
     no_gripper: bool
     dice_loss_weight: float
@@ -899,6 +906,7 @@ class MaskACTPolicy(nn.Module):
         stage_relation_loss_weight: float,
         stage_attention_regularization_weight: float,
         pretrained_backbone_weights: str | None,
+        pretrained_segmentation_checkpoint: str | Path | None,
         mask_quality_weighting: str = "hard",
         mask_quality_full_score: float = 0.95,
         mask_quality_weight_gamma: float = 1.0,
@@ -1056,11 +1064,23 @@ class MaskACTPolicy(nn.Module):
         semantic_output_channels = (
             len(self.mask_suffixes) + 1 if self.uses_semantic_maps() else len(self.mask_suffixes)
         )
-        self.seg_net = UNetSegNet(
-            out_masks=semantic_output_channels,
-            latent_dim=latent_dim,
-            base_channels=unet_base_channels,
-        )
+        self.pretrained_segmenter = None
+        if self.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
+            if pretrained_segmentation_checkpoint is None:
+                raise ValueError(f"{self.experiment} requires a pretrained segmentation checkpoint.")
+            self.pretrained_segmenter = FrozenTinyUNetSegmenter(pretrained_segmentation_checkpoint)
+            if len(self.pretrained_segmenter.labels) != semantic_output_channels:
+                raise ValueError(
+                    f"{self.experiment} segmenter has {len(self.pretrained_segmenter.labels)} classes, "
+                    f"but the semantic layout requires {semantic_output_channels}."
+                )
+            self.seg_net = None
+        else:
+            self.seg_net = UNetSegNet(
+                out_masks=semantic_output_channels,
+                latent_dim=latent_dim,
+                base_channels=unet_base_channels,
+            )
         self.semantic_adapter = None
         if self.uses_semantic_feature_fusion():
             if not self.config.image_features or len(self.config.image_features) != len(self.rgb_keys):
@@ -1583,6 +1603,9 @@ class MaskACTPolicy(nn.Module):
     def uses_semantic_feature_fusion(self) -> bool:
         return self.experiment in SEMANTIC_FEATURE_FUSION_EXPERIMENTS
 
+    def uses_frozen_semantic_segmenter(self) -> bool:
+        return self.experiment in FROZEN_SEMANTIC_EXPERIMENTS
+
     def act_uses_raw_rgb_images(self) -> bool:
         return self.experiment in {
             "2C",
@@ -1592,6 +1615,7 @@ class MaskACTPolicy(nn.Module):
             "SSACT-1",
             "SSACT-3",
             "VIEWFUS-V1",
+            "UNET-SEM",
         }
 
     def normalize_visual_like(self, image: Tensor, key: str) -> Tensor:
@@ -1852,6 +1876,15 @@ class MaskACTPolicy(nn.Module):
         return self.predict_masks_and_latent_from_rgbs(self._get_rgb_inputs(raw_batch, device=device))
 
     def predict_view_logits_and_latent_from_rgbs(self, rgbs: list[Tensor]) -> tuple[list[Tensor], Tensor]:
+        if self.uses_frozen_semantic_segmenter():
+            if self.pretrained_segmenter is None:
+                raise RuntimeError(f"{self.experiment} pretrained segmenter is missing.")
+            probabilities_by_view = [self.pretrained_segmenter(rgb) for rgb in rgbs]
+            logits_by_view = [probabilities.clamp_min(1e-8).log() for probabilities in probabilities_by_view]
+            empty_latent = rgbs[0].new_zeros((rgbs[0].shape[0], 0))
+            return logits_by_view, empty_latent
+        if self.seg_net is None:
+            raise RuntimeError(f"{self.experiment} trainable segmentation network is missing.")
         logits_by_view = []
         latents = []
         for rgb in rgbs:
@@ -1980,9 +2013,13 @@ class MaskACTPolicy(nn.Module):
 
     def forward(self, batch: dict[str, Tensor], raw_batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, float]]:
         device = batch["action"].device
-        mask_targets = self.build_mask_targets(raw_batch, device=device)
+        mask_targets = None
+        if not self.uses_frozen_semantic_segmenter():
+            mask_targets = self.build_mask_targets(raw_batch, device=device)
 
         if self.uses_semantic_latents():
+            if mask_targets is None:
+                raise RuntimeError("Semantic latent training requires mask targets.")
             rgb_main_latent, rgb_semantic_latents, mask_semantic_latents = self.predict_semantic_latents(
                 raw_batch,
                 device=device,
@@ -2013,7 +2050,9 @@ class MaskACTPolicy(nn.Module):
         if self.uses_semantic_maps():
             rgbs = self._get_rgb_inputs(raw_batch, device=device)
             logits_by_view, _ = self.predict_view_logits_and_latent_from_rgbs(rgbs)
-            semantic_targets = self.build_semantic_targets(raw_batch, device=device)
+            semantic_targets = None
+            if not self.uses_frozen_semantic_segmenter():
+                semantic_targets = self.build_semantic_targets(raw_batch, device=device)
             quality_validity = raw_batch.get("mask_quality_current_valid")
             quality_scores = raw_batch.get("mask_quality_current_score")
             class_quality_by_view = None
@@ -2048,11 +2087,19 @@ class MaskACTPolicy(nn.Module):
                     "mask_quality_current_valid_ratio": float(quality_validity.float().mean().cpu()),
                     "mask_quality_current_score": float(raw_batch["mask_quality_current_score"].float().mean()),
                 }
-            seg_loss, ce_loss, dice_loss, dice_logs = self.semantic_segmentation_loss(
-                logits_by_view,
-                semantic_targets,
-                class_quality_by_view,
-            )
+            if self.uses_frozen_semantic_segmenter():
+                seg_loss = torch.zeros((), device=device, dtype=torch.float32)
+                ce_loss = seg_loss
+                dice_loss = seg_loss
+                dice_logs = {}
+            else:
+                if semantic_targets is None:
+                    raise RuntimeError("Trainable semantic experiments require semantic targets.")
+                seg_loss, ce_loss, dice_loss, dice_logs = self.semantic_segmentation_loss(
+                    logits_by_view,
+                    semantic_targets,
+                    class_quality_by_view,
+                )
             probabilities_by_view = self.semantic_probabilities(logits_by_view)
             action_to_seg_ratio = self.scheduled_action_to_seg_grad_ratio()
             act_batch = dict(batch)
@@ -2152,6 +2199,8 @@ class MaskACTPolicy(nn.Module):
                 if self.viewfusion_adapter is None or len(probabilities_for_act) != 2:
                     raise RuntimeError("ViewFus-v1 requires a two-view fusion adapter.")
                 teacher_ratio = self.scheduled_viewfusion_teacher_forcing_ratio()
+                if semantic_targets is None:
+                    raise RuntimeError("ViewFus-v1 requires semantic targets for teacher forcing.")
                 teacher_probabilities = [
                     F.one_hot(target, num_classes=len(self.mask_suffixes) + 1)
                     .permute(0, 3, 1, 2)
@@ -2334,6 +2383,8 @@ class MaskACTPolicy(nn.Module):
             logs.update({key: float(value) for key, value in action_logs.items() if isinstance(value, (int, float))})
             return loss, logs
 
+        if mask_targets is None:
+            raise RuntimeError(f"{self.experiment} requires mask targets.")
         mask_logits, rgb_latent = self.predict_masks_and_latent(raw_batch, device=device)
         seg_loss = self.bce(mask_logits, mask_targets)
         metric_targets = self.compute_mask_metrics(mask_targets) if self.uses_mask_metrics() else None
@@ -2531,6 +2582,7 @@ def parse_args() -> argparse.Namespace:
             "SSACT-3",
             "SEM-2",
             "VIEWFUS-V1",
+            "UNET-SEM",
         ],
         required=True,
     )
@@ -2735,6 +2787,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chunk-size", type=int, default=100)
     parser.add_argument("--n-action-steps", type=int, default=100)
     parser.add_argument("--pretrained-backbone-weights", default="ResNet18_Weights.IMAGENET1K_V1")
+    parser.add_argument(
+        "--pretrained-segmentation-checkpoint",
+        type=Path,
+        default=None,
+        help="Frozen five-class TinyUNet checkpoint required by UNET-SEM.",
+    )
+    parser.add_argument(
+        "--identity-embedding-gate-init",
+        type=float,
+        default=0.01,
+        help="Initial camera and modality embedding gates for UNET-SEM.",
+    )
     parser.add_argument("--video-backend", default="pyav")
     parser.add_argument("--log-freq", type=int, default=100)
     parser.add_argument("--save-freq", type=int, default=10_000)
@@ -2889,7 +2953,7 @@ def reshape_visual_stats_for_channel_first(
 def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     experiment = args.experiment.upper()
     semantic_keys = [semantic_image_key(rgb_key) for rgb_key in args.rgb_keys]
-    if experiment in {"SEM-1", "ASEM-1", "SSACT-1"}:
+    if experiment in {"SEM-1", "ASEM-1", "SSACT-1", *FROZEN_SEMANTIC_EXPERIMENTS}:
         return [*semantic_keys, *args.rgb_keys]
     if experiment in {"SEM-1-V2", "SSACT-3"}:
         return list(args.rgb_keys)
@@ -2910,6 +2974,18 @@ def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     if experiment in {"3", "5"}:
         return []
     raise ValueError(experiment)
+
+
+def act_identity_ids_for_experiment(
+    args: argparse.Namespace,
+) -> tuple[list[int] | None, list[int] | None]:
+    experiment = args.experiment.upper()
+    if experiment in FROZEN_SEMANTIC_EXPERIMENTS:
+        view_ids = list(range(len(args.rgb_keys)))
+        return [*view_ids, *view_ids], [1] * len(view_ids) + [0] * len(view_ids)
+    if experiment in VIEW_FUSION_EXPERIMENTS:
+        return [0, 1, 0], [0, 0, 1]
+    return None, None
 
 
 def act_uses_latent(experiment: str) -> bool:
@@ -2997,6 +3073,17 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
             scale @ np.asarray(viewfusion_homography, dtype=np.float64) @ np.linalg.inv(scale)
         ).tolist()
 
+    image_camera_ids, image_modality_ids = act_identity_ids_for_experiment(args)
+    identity_embedding_kwargs = {}
+    if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
+        identity_embedding_kwargs = {
+            "image_camera_embedding_mode": "gated",
+            "image_camera_embedding_std": 0.02,
+            "image_camera_embedding_gate_init": args.identity_embedding_gate_init,
+            "image_modality_embedding_mode": "gated",
+            "image_modality_embedding_std": 0.02,
+            "image_modality_embedding_gate_init": args.identity_embedding_gate_init,
+        }
     policy_cfg = make_policy_config(
         "act",
         input_features=input_features,
@@ -3008,8 +3095,9 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         pretrained_backbone_weights=args.pretrained_backbone_weights,
         metric_mode=act_metric_mode(args.experiment),
         metric_dim=2,
-        image_camera_ids=[0, 1, 0] if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS else None,
-        image_modality_ids=[0, 0, 1] if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS else None,
+        image_camera_ids=image_camera_ids,
+        image_modality_ids=image_modality_ids,
+        **identity_embedding_kwargs,
     )
     act_policy = ACTPolicy(policy_cfg)
     return MaskACTPolicy(
@@ -3065,6 +3153,7 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
             args, "stage_attention_regularization_weight", 0.01
         ),
         pretrained_backbone_weights=args.pretrained_backbone_weights,
+        pretrained_segmentation_checkpoint=getattr(args, "pretrained_segmentation_checkpoint", None),
         mask_quality_weighting=getattr(args, "mask_quality_weighting", "hard"),
         mask_quality_full_score=getattr(args, "mask_quality_full_score", 0.95),
         mask_quality_weight_gamma=getattr(args, "mask_quality_weight_gamma", 1.0),
@@ -3144,6 +3233,12 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         chunk_size=args.chunk_size,
         n_action_steps=args.n_action_steps,
         pretrained_backbone_weights=args.pretrained_backbone_weights,
+        pretrained_segmentation_checkpoint=(
+            str(args.pretrained_segmentation_checkpoint)
+            if args.pretrained_segmentation_checkpoint is not None
+            else None
+        ),
+        identity_embedding_gate_init=args.identity_embedding_gate_init,
         canonical_mask_definition=list(CANONICAL_SEMANTIC_MASK_KEYS),
         no_gripper=args.no_gripper,
     )
@@ -3165,6 +3260,31 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
                 "image_camera_ids": [0, 1, 0],
                 "image_modality_ids": [0, 0, 1],
                 "camera_id_meanings": {"0": "front", "1": "side"},
+                "modality_id_meanings": {"0": "rgb", "1": "semantic_rgb"},
+            }
+        if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
+            camera_ids, modality_ids = act_identity_ids_for_experiment(args)
+            payload["frozen_semantic_input"] = {
+                "segmentation_checkpoint": str(args.pretrained_segmentation_checkpoint),
+                "segmentation_trainable": False,
+                "representation": "five_class_softmax_to_semantic_rgb",
+                "shared_visual_backbone": True,
+                "image_camera_ids": camera_ids,
+                "image_modality_ids": modality_ids,
+                "camera_embedding": {
+                    "mode": "gated",
+                    "std": 0.02,
+                    "gate_init": args.identity_embedding_gate_init,
+                },
+                "modality_embedding": {
+                    "mode": "gated",
+                    "std": 0.02,
+                    "gate_init": args.identity_embedding_gate_init,
+                },
+                "camera_id_meanings": {
+                    str(index): key.rsplit(".", 1)[-1]
+                    for index, key in enumerate(args.rgb_keys)
+                },
                 "modality_id_meanings": {"0": "rgb", "1": "semantic_rgb"},
             }
         if args.mask_quality_dir is not None:
@@ -3322,18 +3442,21 @@ def save_mask_preview(checkpoint_dir: Path, step: int, model: MaskACTPolicy, raw
         logits_by_view, _ = model.predict_view_logits_and_latent_from_rgbs(rgbs)
         probabilities_by_view = model.semantic_probabilities(logits_by_view)
         soft_maps = model.semantic_rgb_maps(probabilities_by_view)
-        targets_by_view = model.build_semantic_targets(raw_batch, device=device)
+        targets_by_view = None
+        if not model.uses_frozen_semantic_segmenter():
+            targets_by_view = model.build_semantic_targets(raw_batch, device=device)
 
         tiles = []
         for view_idx, rgb_key in enumerate(model.rgb_keys):
             view_name = rgb_key.rsplit(".", 1)[-1]
             hard_prediction = probabilities_by_view[view_idx].argmax(dim=1)
-            gt_map = model.semantic_palette[targets_by_view[view_idx]].permute(0, 3, 1, 2)
             hard_map = model.semantic_palette[hard_prediction].permute(0, 3, 1, 2)
+            tiles.append(make_labeled_tile(raw_batch[rgb_key][0], f"rgb {view_name}"))
+            if targets_by_view is not None:
+                gt_map = model.semantic_palette[targets_by_view[view_idx]].permute(0, 3, 1, 2)
+                tiles.append(make_labeled_tile(gt_map[0], f"gt semantic {view_name}"))
             tiles.extend(
                 [
-                    make_labeled_tile(raw_batch[rgb_key][0], f"rgb {view_name}"),
-                    make_labeled_tile(gt_map[0], f"gt semantic {view_name}"),
                     make_labeled_tile(soft_maps[view_idx][0], f"soft semantic {view_name}"),
                     make_labeled_tile(hard_map[0], f"hard preview {view_name}"),
                 ]
@@ -3504,6 +3627,20 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         torch.cuda.manual_seed_all(args.seed)
     source_root = args.root.resolve()
     normalize_dataset_keys(args, source_root)
+    if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
+        if args.pretrained_segmentation_checkpoint is None:
+            raise ValueError(
+                f"{args.experiment} requires --pretrained-segmentation-checkpoint."
+            )
+        args.pretrained_segmentation_checkpoint = (
+            args.pretrained_segmentation_checkpoint.expanduser().resolve()
+        )
+        if not args.pretrained_segmentation_checkpoint.is_file():
+            raise FileNotFoundError(
+                f"Pretrained segmentation checkpoint not found: {args.pretrained_segmentation_checkpoint}"
+            )
+        if args.identity_embedding_gate_init < 0:
+            raise ValueError("--identity-embedding-gate-init must be non-negative.")
     load_viewfusion_homography(args)
     mask_suffixes, _ = build_mask_layout(list(args.rgb_keys), list(args.mask_target_keys))
     if (
@@ -3526,6 +3663,10 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         raise ValueError(
             "--mask-quality-dir currently supports semantic experiments including SSACT-3. "
             "The legacy independent-BCE mask experiments require a separate classwise BCE masking path."
+        )
+    if args.mask_quality_dir is not None and args.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
+        raise ValueError(
+            "UNET-SEM uses a frozen pretrained segmenter and has no segmentation loss to quality-weight."
         )
     if args.semantic_adapter_base_channels <= 0:
         raise ValueError(
@@ -3616,7 +3757,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     image_keys_in_view = sorted(
         {
             *args.rgb_keys,
-            *args.mask_target_keys,
+            *(
+                []
+                if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS
+                else args.mask_target_keys
+            ),
             *(
                 [VIEWFUS_FUSED_FRONT_KEY]
                 if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS
@@ -3671,7 +3816,8 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         dataset_stats=stats,
     )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    optimizer = torch.optim.AdamW(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
     start_step = 0
     if args.resume_checkpoint is not None:
         start_step = load_checkpoint(args.resume_checkpoint, model, optimizer, device)
@@ -3731,11 +3877,21 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         )
     if args.experiment in SEMANTIC_EXPERIMENTS:
         print(f"Semantic classes: {['background', *build_mask_layout(args.rgb_keys, args.mask_target_keys)[0]]}")
-        semantic_description = (
-            "Semantic loss: weighted multiclass CE + "
-            f"{args.dice_loss_weight:g} * foreground Dice"
-        )
-        if args.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
+        if args.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
+            camera_ids, modality_ids = act_identity_ids_for_experiment(args)
+            print(
+                f"Frozen segmentation: {args.pretrained_segmentation_checkpoint}; no segmentation "
+                "parameters or losses are trained. Soft semantic RGB maps and RGB share ACT ResNet18."
+            )
+            print(
+                f"Identity embeddings: camera IDs={camera_ids}, modality IDs={modality_ids}; "
+                f"camera/modality mode=gated, std=0.02, gate_init={args.identity_embedding_gate_init:g}."
+            )
+        elif args.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
+            semantic_description = (
+                "Semantic loss: weighted multiclass CE + "
+                f"{args.dice_loss_weight:g} * foreground Dice"
+            )
             print(
                 f"{semantic_description}; action gradient to semantic map: enabled with "
                 f"{args.action_to_seg_warmup_steps} warmup steps, "
@@ -3744,6 +3900,10 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 f"conflict projection: {args.action_to_seg_conflict_projection}."
             )
         else:
+            semantic_description = (
+                "Semantic loss: weighted multiclass CE + "
+                f"{args.dice_loss_weight:g} * foreground Dice"
+            )
             print(f"{semantic_description}; action gradient to semantic map: disabled.")
         if args.experiment in VIEW_FUSION_EXPERIMENTS:
             print(
@@ -3831,7 +3991,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             if stage_store is not None:
                 raw_batch = stage_store.add_batch(raw_batch)
             resize_mask_keys = [
-                *args.mask_target_keys,
+                *(
+                    []
+                    if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS
+                    else args.mask_target_keys
+                ),
                 *(
                     [VIEWFUS_FUSED_FRONT_KEY]
                     if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS
@@ -3850,7 +4014,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             model.set_training_step(step)
             loss, logs = model(batch, raw_batch)
             model.backward_training_loss(loss, logs)
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(trainable_parameters, args.grad_clip_norm)
             optimizer.step()
 
             if args.log_freq > 0 and (step % args.log_freq == 0 or step == args.steps):

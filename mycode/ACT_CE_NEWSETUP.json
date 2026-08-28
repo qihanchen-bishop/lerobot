@@ -1,6 +1,6 @@
 {
   "policy_type": "act",
-  "checkpoint_path": "/home/romilab/Projects/IsaacLab/source/lerobot/outputs/train/newsetup_act/100000/pretrained_model",
+  "checkpoint_path": "/home/romilab/Projects/IsaacLab/source/lerobot/outputs/train/newsetup_act_ce/100000/pretrained_model",
   "dataset_repo_id": "seeed/eval_test",
   "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/newsetup",
   "task": "cube",

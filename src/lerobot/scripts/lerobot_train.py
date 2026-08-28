@@ -306,6 +306,10 @@ def update_policy(
     # Use accelerator's backward method
     accelerator.backward(loss)
 
+    unwrapped_policy = accelerator.unwrap_model(policy, keep_fp32_wrapper=True)
+    if has_method(unwrapped_policy, "camera_embedding_gradient_diagnostics"):
+        output_dict.update(unwrapped_policy.camera_embedding_gradient_diagnostics())
+
     # Clip gradients if specified
     if grad_clip_norm > 0:
         grad_norm = accelerator.clip_grad_norm_(policy.parameters(), grad_clip_norm)
@@ -624,6 +628,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         is_eval_step = cfg.eval_freq > 0 and step % cfg.eval_freq == 0
 
         if is_log_step:
+            unwrapped_policy = accelerator.unwrap_model(policy, keep_fp32_wrapper=True)
+            if has_method(unwrapped_policy, "camera_embedding_action_ablation"):
+                output_dict.update(unwrapped_policy.camera_embedding_action_ablation(batch))
             metrics_record = {
                 "step": step,
                 "total_steps": cfg.steps,

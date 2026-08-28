@@ -50,6 +50,7 @@ SEGMENTATION_OCCLUDER_COMPLETE_RATIO = 0.50
 SEGMENTATION_VOTE_WINDOW = 7
 SEGMENTATION_VOTE_REQUIRED = 4
 RESULTS_FILENAME = "eval_results.jsonl"
+POLICY_TYPES_WITH_VARIANTS = {"act", "mask_act"}
 DEFAULT_TRIALS_PER_GRID = 10
 DEFAULT_LEFT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E122511-if00"
 DEFAULT_RIGHT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E119029-if00"
@@ -2052,7 +2053,9 @@ class EvalPolicyApp:
                 rel = path.relative_to(PROJECT_ROOT)
             except ValueError:
                 rel = path
-            options.append(CheckpointOption(f"{policy_type}: {rel}", path, policy_type))
+            policy_variant = self._act_variant_from_checkpoint(path) if policy_type == "act" else None
+            policy_label = f"{policy_type}/{policy_variant}" if policy_variant else policy_type
+            options.append(CheckpointOption(f"{policy_label}: {rel}", path, policy_type))
 
         for state_path in sorted(DEFAULT_OUTPUT_ROOT.glob("**/checkpoint_step_*/training_state.pt")):
             checkpoint_dir = state_path.parent
@@ -2412,12 +2415,72 @@ class EvalPolicyApp:
             current = current.parent
         return None
 
+    @staticmethod
+    def _act_variant_from_checkpoint(checkpoint_path: str | Path) -> str | None:
+        current = Path(checkpoint_path).expanduser()
+        if current.is_file():
+            current = current.parent
+        while current != current.parent:
+            config_path = current / "config.json"
+            if config_path.is_file():
+                try:
+                    config = json.loads(config_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    return None
+                if str(config.get("type", "")).lower() != "act":
+                    return None
+                try:
+                    run_name = current.resolve().relative_to(DEFAULT_OUTPUT_ROOT.resolve()).parts[0]
+                except (OSError, ValueError, IndexError):
+                    return None
+                if not run_name.lower().startswith("newsetup"):
+                    return None
+                input_features = config.get("input_features")
+                if isinstance(input_features, dict):
+                    visual_features = {
+                        key
+                        for key, feature in input_features.items()
+                        if isinstance(feature, dict)
+                        and str(feature.get("type", "")).upper() == "VISUAL"
+                    }
+                    if visual_features == {"observation.images.front"}:
+                        return "ACT-SINGLE-FRONT"
+                camera_ids = config.get("image_camera_ids")
+                if not isinstance(camera_ids, list) or not camera_ids:
+                    return "ACT"
+                embedding_mode = str(config.get("image_camera_embedding_mode") or "default").lower()
+                if embedding_mode == "gated" and float(config.get("image_camera_embedding_gate_init") or 0.0) > 0:
+                    return "ACT-CE-GATED-V2"
+                return {
+                    "default": "ACT-CE",
+                    "gated": "ACT-CE-GATED",
+                    "zero": "ACT-CE-ZERO",
+                }.get(embedding_mode, f"ACT-CE-{embedding_mode.upper()}")
+            current = current.parent
+        return None
+
     def _selected_policy_variant(self, policy_type: str | None = None) -> str | None:
         selected_policy = (policy_type or self.vars["policy_type"].get()).strip()
-        if selected_policy != "mask_act":
-            return None
         checkpoint = self.vars["checkpoint_path"].get().strip()
-        return self._mask_act_experiment_from_checkpoint(checkpoint) if checkpoint else None
+        if not checkpoint:
+            return None
+        if selected_policy == "mask_act":
+            return self._mask_act_experiment_from_checkpoint(checkpoint)
+        if selected_policy == "act":
+            return self._act_variant_from_checkpoint(checkpoint)
+        return None
+
+    @staticmethod
+    def _record_matches_policy_variant(
+        record: dict[str, Any],
+        policy_type: str,
+        policy_variant: str | None,
+    ) -> bool:
+        if not policy_variant:
+            return True
+        if record.get("policy_variant") == policy_variant:
+            return True
+        return policy_type == "mask_act" and record.get("mask_act_experiment") == policy_variant
 
     def _policy_save_parent(
         self,
@@ -2438,6 +2501,7 @@ class EvalPolicyApp:
                 raise ValueError(
                     "Could not determine the Mask-ACT experiment from mask_act_run_config.json."
                 )
+        if selected_policy in POLICY_TYPES_WITH_VARIANTS and selected_variant:
             path /= selected_variant
         if create:
             path.mkdir(parents=True, exist_ok=True)
@@ -2467,7 +2531,7 @@ class EvalPolicyApp:
         policy_type: str,
         policy_variant: str | None = None,
     ) -> list[dict[str, Any]]:
-        if policy_type == "mask_act" and policy_variant:
+        if policy_type in POLICY_TYPES_WITH_VARIANTS and policy_variant:
             paths = (save_root / policy_type / policy_variant / RESULTS_FILENAME,)
         else:
             paths = (
@@ -2480,12 +2544,7 @@ class EvalPolicyApp:
                 record
                 for record in self._read_jsonl_records(path)
                 if record.get("policy_type") == policy_type
-                and (
-                    policy_type != "mask_act"
-                    or not policy_variant
-                    or record.get("policy_variant") == policy_variant
-                    or record.get("mask_act_experiment") == policy_variant
-                )
+                and self._record_matches_policy_variant(record, policy_type, policy_variant)
             )
         return records
 
@@ -2550,11 +2609,7 @@ class EvalPolicyApp:
                 and record.get("policy_type") == policy_type
                 and record.get("task") == task
                 and self._record_matches_grid(record, grid)
-                and (
-                    policy_type != "mask_act"
-                    or record.get("policy_variant") == policy_variant
-                    or record.get("mask_act_experiment") == policy_variant
-                )
+                and self._record_matches_policy_variant(record, policy_type, policy_variant)
             ):
                 delete_index = index
                 selected_record = record
@@ -2625,11 +2680,7 @@ class EvalPolicyApp:
                 and record.get("policy_type") == policy_type
                 and record.get("task") == task
                 and self._record_matches_grid(record, grid)
-                and (
-                    policy_type != "mask_act"
-                    or record.get("policy_variant") == policy_variant
-                    or record.get("mask_act_experiment") == policy_variant
-                )
+                and self._record_matches_policy_variant(record, policy_type, policy_variant)
             ):
                 matching_indices.append(index)
 
@@ -5947,7 +5998,7 @@ class EvalPolicyApp:
             str(self.last_run.get("save_root") or self.vars["dataset_root"].get())
         ).expanduser()
         default_save_parent = save_root / policy_type
-        if policy_type == "mask_act" and policy_variant:
+        if policy_type in POLICY_TYPES_WITH_VARIANTS and policy_variant:
             default_save_parent /= policy_variant
         save_parent = Path(str(self.last_run.get("save_parent") or default_save_parent)).expanduser()
         save_parent.mkdir(parents=True, exist_ok=True)

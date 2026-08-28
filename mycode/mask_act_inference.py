@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.policies.factory import make_pre_post_processors
 
 from train_mask_act_policy import (
+    FROZEN_SEMANTIC_EXPERIMENTS,
     MaskACTPolicy,
     SEMANTIC_EXPERIMENTS,
     VIEW_FUSION_EXPERIMENTS,
@@ -24,6 +26,9 @@ from train_mask_act_policy import (
     reshape_visual_stats_for_channel_first,
 )
 from train_lerobot_policy import make_filtered_dataset_view
+
+
+VIEWFUS_INFERENCE_STATS_FILENAME = "viewfus_inference_stats.json"
 
 
 def resolve_mask_act_checkpoint(path: str | Path) -> tuple[Path, Path]:
@@ -83,8 +88,6 @@ def _find_metadata_root(run_cfg: dict[str, Any], project_root: Path) -> Path:
     experiment = str(run_cfg.get("experiment", "")).upper()
     if experiment not in SEMANTIC_EXPERIMENTS | VIEW_FUSION_EXPERIMENTS:
         required.update(run_cfg["mask_target_keys"])
-    if experiment in VIEW_FUSION_EXPERIMENTS:
-        required.add(VIEWFUS_FUSED_FRONT_KEY)
     configured = Path(run_cfg["root"]).expanduser()
     direct_candidates = [
         configured,
@@ -120,6 +123,56 @@ def _find_metadata_root(run_cfg: dict[str, Any], project_root: Path) -> Path:
     )
 
 
+def _inject_viewfusion_inference_metadata(
+    meta: LeRobotDatasetMetadata,
+    run_cfg: dict[str, Any],
+    run_dir: Path,
+    project_root: Path,
+) -> str:
+    """Restore the derived ViewFus input spec when only base dataset metadata is local."""
+    if VIEWFUS_FUSED_FRONT_KEY in meta.features and VIEWFUS_FUSED_FRONT_KEY in meta.stats:
+        return "dataset_metadata"
+
+    rgb_keys = list(run_cfg.get("rgb_keys") or [])
+    if not rgb_keys or rgb_keys[0] not in meta.features or rgb_keys[0] not in meta.stats:
+        raise KeyError("ViewFus-v1 requires front RGB feature metadata and statistics.")
+
+    stats_candidates = (
+        run_dir / VIEWFUS_INFERENCE_STATS_FILENAME,
+        project_root / "mycode" / "viewfus_inference_stats" / f"{run_dir.name}.json",
+    )
+    stats_path = next((path for path in stats_candidates if path.is_file()), None)
+    if stats_path is None:
+        raise FileNotFoundError(
+            f"ViewFus-v1 metadata is missing '{VIEWFUS_FUSED_FRONT_KEY}', and no calibrated "
+            "inference statistics were found. Checked: "
+            + ", ".join(str(path) for path in stats_candidates)
+        )
+    try:
+        payload = json.loads(stats_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read ViewFus-v1 inference statistics: {stats_path}") from exc
+
+    fused_stats = payload.get("stats")
+    if not isinstance(fused_stats, dict):
+        raise ValueError(f"ViewFus-v1 inference statistics must contain a 'stats' object: {stats_path}")
+    for key in ("min", "max", "mean", "std", "q01", "q10", "q50", "q90", "q99"):
+        values = fused_stats.get(key)
+        if not isinstance(values, list) or len(values) != 3:
+            raise ValueError(f"ViewFus-v1 statistic '{key}' must contain three channels: {stats_path}")
+        if not all(isinstance(value, (int, float)) for value in values):
+            raise ValueError(f"ViewFus-v1 statistic '{key}' contains a non-numeric value: {stats_path}")
+    if any(float(value) <= 0 for value in fused_stats["std"]):
+        raise ValueError(f"ViewFus-v1 standard deviations must be positive: {stats_path}")
+
+    meta.info["features"][VIEWFUS_FUSED_FRONT_KEY] = deepcopy(meta.features[rgb_keys[0]])
+    restored_stats = deepcopy(meta.stats[rgb_keys[0]])
+    for key, values in fused_stats.items():
+        restored_stats[key] = deepcopy(values)
+    meta.stats[VIEWFUS_FUSED_FRONT_KEY] = restored_stats
+    return str(stats_path.resolve())
+
+
 def load_mask_act_for_inference(
     checkpoint_path: str | Path,
     project_root: str | Path,
@@ -134,6 +187,16 @@ def load_mask_act_for_inference(
     args.device = "cuda" if torch.cuda.is_available() else "cpu"
     # Loading the checkpoint replaces these weights, so avoid an unnecessary network download.
     args.pretrained_backbone_weights = None
+    if str(args.experiment).upper() in FROZEN_SEMANTIC_EXPERIMENTS:
+        configured_segmenter = Path(args.pretrained_segmentation_checkpoint).expanduser()
+        if not configured_segmenter.is_file():
+            bundled_segmenter = project_root / "mycode" / "tool" / "seg_v2" / "best.pt"
+            if not bundled_segmenter.is_file():
+                raise FileNotFoundError(
+                    "UNET-SEM segmentation checkpoint is unavailable at both the recorded path "
+                    f"({configured_segmenter}) and bundled path ({bundled_segmenter})."
+                )
+            args.pretrained_segmentation_checkpoint = str(bundled_segmenter)
 
     meta = LeRobotDatasetMetadata(args.repo_id, root=metadata_root)
     if run_cfg.get("no_gripper"):
@@ -150,6 +213,15 @@ def load_mask_act_for_inference(
             no_gripper=True,
         )
         meta = LeRobotDatasetMetadata(args.repo_id, root=metadata_root)
+
+    viewfusion_stats_source = None
+    if str(args.experiment).upper() in VIEW_FUSION_EXPERIMENTS:
+        viewfusion_stats_source = _inject_viewfusion_inference_metadata(
+            meta,
+            run_cfg,
+            run_dir,
+            project_root,
+        )
 
     features = dataset_to_policy_features(meta.features)
     act_input_keys = [*args.state_keys, *act_image_keys_for_experiment(args)]
@@ -175,5 +247,6 @@ def load_mask_act_for_inference(
         "experiment": args.experiment,
         "rgb_key": args.rgb_key,
         "rgb_keys": list(args.rgb_keys),
+        "viewfusion_stats_source": viewfusion_stats_source,
     }
     return model, preprocessor, postprocessor, details
