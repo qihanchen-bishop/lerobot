@@ -32,6 +32,26 @@ from train_lerobot_policy import make_filtered_dataset_view
 VIEWFUS_INFERENCE_STATS_FILENAME = "viewfus_inference_stats.json"
 
 
+def _load_mask_act_state_dict_compatibly(
+    model: MaskACTPolicy,
+    state_dict: dict[str, torch.Tensor],
+) -> list[str]:
+    """Load learned weights strictly while allowing newly derived palette buffers."""
+    incompatible = model.load_state_dict(state_dict, strict=False)
+    allowed_missing = set(getattr(model, "_semantic_palette_buffer_names", ()))
+    missing = set(incompatible.missing_keys)
+    unexpected = set(incompatible.unexpected_keys)
+    invalid_missing = missing - allowed_missing
+    if invalid_missing or unexpected:
+        problems = []
+        if invalid_missing:
+            problems.append(f"missing learned/state keys: {sorted(invalid_missing)}")
+        if unexpected:
+            problems.append(f"unexpected checkpoint keys: {sorted(unexpected)}")
+        raise RuntimeError("Mask-ACT checkpoint is incompatible: " + "; ".join(problems))
+    return sorted(missing)
+
+
 def resolve_mask_act_checkpoint(path: str | Path) -> tuple[Path, Path]:
     requested = Path(path).expanduser().resolve()
     if requested.is_file():
@@ -274,7 +294,7 @@ def load_mask_act_for_inference(
 
     model = make_policy(args, meta, stats=stats)
     state = torch.load(checkpoint_dir / "training_state.pt", map_location="cpu", weights_only=False)
-    model.load_state_dict(state["model"], strict=True)
+    initialized_derived_buffers = _load_mask_act_state_dict_compatibly(model, state["model"])
     model.inference_image_size = args.image_size
     model.to(torch.device(model.config.device))
     model.eval()
@@ -292,5 +312,6 @@ def load_mask_act_for_inference(
         "rgb_key": args.rgb_key,
         "rgb_keys": list(args.rgb_keys),
         "viewfusion_stats_source": viewfusion_stats_source,
+        "initialized_derived_state_buffers": initialized_derived_buffers,
     }
     return model, preprocessor, postprocessor, details

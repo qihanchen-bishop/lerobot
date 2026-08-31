@@ -28,10 +28,13 @@ from tkinter import filedialog, ttk
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "train"
-DEFAULT_EVAL_ROOT = PROJECT_ROOT / "eval" / "object3color2"
+DEFAULT_EVAL_ROOT = PROJECT_ROOT / "eval" / "neweval"
 DEFAULT_CALIBRATION_DIR = Path(__file__).resolve().parents[1] / "calibration" / "robots" / "so_follower"
 DEFAULT_POLICY_PATH = DEFAULT_OUTPUT_ROOT / "1A_3object" / "checkpoint_step_100000"
 DEFAULT_POLICY_TYPE = "mask_act"
+MAX_EPISODE_TIME_S = 30
+DEFAULT_EPISODE_TIME_S = MAX_EPISODE_TIME_S
+DEFAULT_ACT_REPLAN_STEPS = 30
 DEFAULT_DIFFUSION_PREDICTION_STEPS = 64
 DEFAULT_DIFFUSION_INFERENCE_STEPS = 16
 DEFAULT_DIFFUSION_REPLAN_STEPS = 24
@@ -41,14 +44,11 @@ DEFAULT_DIFFUSION_FUSION_HISTORY_WEIGHT = 0.0
 DEFAULT_DIFFUSION_OBSERVATION_WARMUP_FRAMES = 1
 DEFAULT_DIFFUSION_EXECUTION_MODE = "asynchronous"
 DEFAULT_CAMERA_READ_MODE = "wait_new_frame"
-SEGMENTATION_V1_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "seg_v1" / "best.pt"
-SEGMENTATION_V2_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "seg_v2" / "best.pt"
-SEGMENTATION_V3_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "seg_v3" / "best.pt"
 SEGMENTATION_FRONT_V4_R1_MODEL_PATH = (
     Path(__file__).resolve().parent / "tool" / "unet_front_v4_r1" / "best.pt"
 )
-SEGMENTATION_SIDE_V5_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "unet_side" / "best.pt"
-DEFAULT_SEGMENTATION_MODEL_PATH = SEGMENTATION_V1_MODEL_PATH
+SEGMENTATION_SIDE_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "unet_side" / "best.pt"
+DEFAULT_SEGMENTATION_MODEL_PATH = SEGMENTATION_FRONT_V4_R1_MODEL_PATH
 SEGMENTATION_OBJECT_PRESENT_MIN_RATIO = 0.001
 SEGMENTATION_SCREW_OBJECT_PRESENT_MIN_RATIO = 0.0008
 SEGMENTATION_OCCLUDER_COMPLETE_RATIO = 0.50
@@ -56,33 +56,17 @@ SEGMENTATION_VOTE_WINDOW = 7
 SEGMENTATION_VOTE_REQUIRED = 4
 RESULTS_FILENAME = "eval_results.jsonl"
 POLICY_TYPES_WITH_VARIANTS = {"act", "mask_act"}
-DEFAULT_TRIALS_PER_GRID = 10
+DEFAULT_TRIALS_PER_GRID = 2
 DEFAULT_LEFT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E122511-if00"
 DEFAULT_RIGHT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E119029-if00"
 DEFAULT_REALSENSE_SERIAL = "239222303378"
 DEFAULT_FRONT_CAMERA_ID = f"v4l2-serial://{DEFAULT_REALSENSE_SERIAL}/rgb"
 DEFAULT_SIDE_CAMERA_ID = "v4l2-serial://202412231836/rgb"
 V4L2_SERIAL_PREFIX = "v4l2-serial://"
-V5_SEGMENTATION_STRATEGIES = {
-    "newsetup_unetsem_fs",
-    "newsetup_stagev5_rgb_f",
-    "newsetup_aisatgev5_rgb_f",
-}
-
-
 def segmentation_model_paths_for_policy(checkpoint_path: str | Path) -> tuple[Path, Path]:
-    """Select scene- and view-matched segmentation models from the policy run name."""
-    path = Path(checkpoint_path).expanduser()
-    try:
-        relative_path = path.resolve().relative_to(DEFAULT_OUTPUT_ROOT.resolve())
-    except (OSError, ValueError):
-        relative_path = path
-    strategy_name = relative_path.parts[0] if relative_path.parts else ""
-    if strategy_name.lower() in V5_SEGMENTATION_STRATEGIES:
-        return SEGMENTATION_FRONT_V4_R1_MODEL_PATH, SEGMENTATION_SIDE_V5_MODEL_PATH
-    if strategy_name.lower().startswith("newsetup"):
-        return SEGMENTATION_V3_MODEL_PATH, SEGMENTATION_V2_MODEL_PATH
-    return SEGMENTATION_V1_MODEL_PATH, SEGMENTATION_V1_MODEL_PATH
+    """Return the fixed latest segmenter for each camera view."""
+    del checkpoint_path
+    return SEGMENTATION_FRONT_V4_R1_MODEL_PATH, SEGMENTATION_SIDE_MODEL_PATH
 
 
 def segmentation_model_path_for_policy(checkpoint_path: str | Path) -> Path:
@@ -715,6 +699,7 @@ class EvalPolicyApp:
         self.result_saved = True
         self.saving_result = False
         self.active_eval_metadata: dict[str, Any] = {}
+        self.runtime_mismatch_warning_shown = False
         self.active_dataset_root: Path | None = None
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.preview_queue: queue.Queue[
@@ -777,9 +762,11 @@ class EvalPolicyApp:
             "dataset_root": tk.StringVar(value=str(DEFAULT_EVAL_ROOT)),
             "save_subfolder": tk.StringVar(value=""),
             "task": tk.StringVar(value=TASK_CHOICES[0]),
-            "episode_time_s": tk.StringVar(value="25"),
+            "episode_time_s": tk.StringVar(value=str(DEFAULT_EPISODE_TIME_S)),
             "fps": tk.StringVar(value="30"),
             "model_chunk_size": tk.StringVar(value="N/A"),
+            "model_parameter_stats": tk.StringVar(value="Not loaded"),
+            "inference_latency_stats": tk.StringVar(value="No inference yet"),
             "prediction_steps": tk.StringVar(value=""),
             "n_action_steps": tk.StringVar(value=str(DEFAULT_DIFFUSION_REPLAN_STEPS)),
             "num_inference_steps": tk.StringVar(value=str(DEFAULT_DIFFUSION_INFERENCE_STEPS)),
@@ -787,7 +774,7 @@ class EvalPolicyApp:
             "execution_mode": tk.StringVar(value=DEFAULT_DIFFUSION_EXECUTION_MODE),
             "camera_read_mode": tk.StringVar(value=DEFAULT_CAMERA_READ_MODE),
             "segmentation_model_path": tk.StringVar(value=str(DEFAULT_SEGMENTATION_MODEL_PATH)),
-            "segmentation_side_model_path": tk.StringVar(value=str(SEGMENTATION_V1_MODEL_PATH)),
+            "segmentation_side_model_path": tk.StringVar(value=str(SEGMENTATION_SIDE_MODEL_PATH)),
             "segmentation_device": tk.StringVar(value="auto"),
             "fusion_steps": tk.StringVar(value="0"),
             "fusion_history_weight": tk.StringVar(value="0"),
@@ -1183,7 +1170,13 @@ class EvalPolicyApp:
         ttk.Button(top, text="Scan Cameras", command=self.find_cameras).grid(
             row=row, column=2, sticky=tk.W, padx=(16, 8)
         )
-        ttk.Checkbutton(top, text="Include side", variable=self.include_side_camera).grid(row=row, column=3, sticky=tk.W)
+        self.include_side_checkbutton = ttk.Checkbutton(
+            top,
+            text="Include side (from policy)",
+            variable=self.include_side_camera,
+            state=tk.DISABLED,
+        )
+        self.include_side_checkbutton.grid(row=row, column=3, sticky=tk.W)
 
         row += 1
         ttk.Label(top, text="Detected front").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
@@ -1280,7 +1273,9 @@ class EvalPolicyApp:
         )
 
         row += 1
-        ttk.Label(top, text="Episode sec").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
+        ttk.Label(top, text="Episode sec (max 30)").grid(
+            row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
+        )
         ttk.Entry(top, textvariable=self.vars["episode_time_s"], width=12).grid(row=row, column=1, sticky=tk.W)
         ttk.Label(top, text="FPS").grid(row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5)
         ttk.Entry(top, textvariable=self.vars["fps"], width=12).grid(row=row, column=3, sticky=tk.W)
@@ -1294,6 +1289,20 @@ class EvalPolicyApp:
             row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5
         )
         ttk.Entry(top, textvariable=self.vars["prediction_steps"], width=12).grid(
+            row=row, column=3, sticky=tk.W
+        )
+
+        row += 1
+        ttk.Label(top, text="Model parameters").grid(
+            row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
+        )
+        ttk.Label(top, textvariable=self.vars["model_parameter_stats"]).grid(
+            row=row, column=1, sticky=tk.W
+        )
+        ttk.Label(top, text="Inference latency").grid(
+            row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5
+        )
+        ttk.Label(top, textvariable=self.vars["inference_latency_stats"]).grid(
             row=row, column=3, sticky=tk.W
         )
 
@@ -1346,13 +1355,7 @@ class EvalPolicyApp:
             row=row, column=1, sticky=tk.W, pady=5
         )
         ttk.Label(top, text="Camera read").grid(row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5)
-        ttk.Combobox(
-            top,
-            textvariable=self.vars["camera_read_mode"],
-            values=("wait_new_frame", "latest_nonblocking"),
-            state="readonly",
-            width=20,
-        ).grid(row=row, column=3, sticky=tk.W)
+        ttk.Label(top, text="wait_new_frame (fixed)").grid(row=row, column=3, sticky=tk.W)
 
         row += 1
         ttk.Checkbutton(
@@ -1360,7 +1363,7 @@ class EvalPolicyApp:
             text="Front segmentation",
             variable=self.enable_segmentation_preview,
         ).grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
-        ttk.Entry(top, textvariable=self.vars["segmentation_model_path"]).grid(
+        ttk.Entry(top, textvariable=self.vars["segmentation_model_path"], state="readonly").grid(
             row=row, column=1, columnspan=2, sticky=tk.EW, pady=5
         )
         ttk.Entry(top, textvariable=self.vars["segmentation_device"], width=12).grid(
@@ -1371,7 +1374,7 @@ class EvalPolicyApp:
         ttk.Label(top, text="Side segmentation").grid(
             row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
         )
-        ttk.Entry(top, textvariable=self.vars["segmentation_side_model_path"]).grid(
+        ttk.Entry(top, textvariable=self.vars["segmentation_side_model_path"], state="readonly").grid(
             row=row, column=1, columnspan=2, sticky=tk.EW, pady=5
         )
 
@@ -1577,6 +1580,63 @@ class EvalPolicyApp:
 
     def _on_checkpoint_path_changed(self, *_args: Any) -> None:
         self._sync_segmentation_model_for_checkpoint()
+        self._sync_side_camera_for_checkpoint()
+        self.vars["model_parameter_stats"].set("Not loaded")
+        self.vars["inference_latency_stats"].set("No inference yet")
+
+    @staticmethod
+    def _checkpoint_rgb_keys(checkpoint_path: str | Path) -> list[str] | None:
+        current = Path(checkpoint_path).expanduser()
+        if current.is_file():
+            current = current.parent
+        while current != current.parent:
+            mask_config = current / "mask_act_run_config.json"
+            if mask_config.is_file():
+                try:
+                    rgb_keys = json.loads(mask_config.read_text(encoding="utf-8")).get("rgb_keys")
+                except (OSError, json.JSONDecodeError):
+                    return None
+                if isinstance(rgb_keys, list):
+                    return [str(key) for key in rgb_keys]
+                return None
+            policy_config = current / "config.json"
+            if policy_config.is_file():
+                try:
+                    input_features = json.loads(policy_config.read_text(encoding="utf-8")).get(
+                        "input_features"
+                    )
+                except (OSError, json.JSONDecodeError):
+                    return None
+                if isinstance(input_features, dict):
+                    return [
+                        str(key)
+                        for key, feature in input_features.items()
+                        if str(key).startswith("observation.images.")
+                        and isinstance(feature, dict)
+                        and str(feature.get("type", "")).upper() == "VISUAL"
+                    ]
+                return None
+            current = current.parent
+        return None
+
+    def _trained_policy_uses_side_camera(self) -> bool | None:
+        rgb_keys = self._checkpoint_rgb_keys(self.vars["checkpoint_path"].get())
+        if rgb_keys is None:
+            return None
+        return any(key.rsplit(".", 1)[-1] == "side" for key in rgb_keys)
+
+    def _sync_side_camera_for_checkpoint(self, *, required: bool = False) -> bool:
+        trained_with_side = self._trained_policy_uses_side_camera()
+        if trained_with_side is None:
+            if required:
+                raise ValueError(
+                    "Could not determine the policy's trained camera inputs. The checkpoint must "
+                    "provide input_features in config.json or rgb_keys in mask_act_run_config.json."
+                )
+            return bool(self.include_side_camera.get())
+        if bool(self.include_side_camera.get()) != trained_with_side:
+            self.include_side_camera.set(trained_with_side)
+        return trained_with_side
 
     def _sync_segmentation_model_for_checkpoint(self) -> Path:
         front_path, side_path = segmentation_model_paths_for_policy(
@@ -2061,7 +2121,6 @@ class EvalPolicyApp:
             "front_camera_type",
             "front_camera_choice",
             "execution_mode",
-            "camera_read_mode",
             "model_chunk_size",
             "prediction_steps",
             "n_action_steps",
@@ -2073,8 +2132,6 @@ class EvalPolicyApp:
             "ssact_min_execution_steps",
             "ssact_max_execution_steps",
             "ssact_max_action_residual",
-            "segmentation_model_path",
-            "segmentation_side_model_path",
             "segmentation_device",
             "reset_time_s",
             "extra_args",
@@ -2100,6 +2157,9 @@ class EvalPolicyApp:
         for key, var in bool_targets.items():
             if key in config:
                 var.set(bool(config[key]))
+
+        self.vars["camera_read_mode"].set(DEFAULT_CAMERA_READ_MODE)
+        self._sync_side_camera_for_checkpoint()
 
         self._sync_segmentation_model_for_checkpoint()
         if not str(config.get("save_subfolder") or "").strip():
@@ -2262,7 +2322,12 @@ class EvalPolicyApp:
             )
         elif isinstance(prediction_steps, int):
             self.vars["prediction_steps"].set(str(prediction_steps))
-            self.vars["n_action_steps"].set(str(prediction_steps))
+            replan_steps = (
+                min(DEFAULT_ACT_REPLAN_STEPS, prediction_steps)
+                if self.vars["policy_type"].get().strip() == "act"
+                else prediction_steps
+            )
+            self.vars["n_action_steps"].set(str(replan_steps))
             self.vars["fusion_steps"].set("0")
             self.vars["fusion_history_weight"].set("0")
         elif data and self.vars["policy_type"].get().strip() not in {"act", "mask_act", "diffusion"}:
@@ -2308,7 +2373,8 @@ class EvalPolicyApp:
         elif isinstance(chunk_size, int) and isinstance(prediction_steps, int):
             self._append_log(
                 f"[Policy] Model predicts {chunk_size} actions per chunk; "
-                f"checkpoint execute steps={prediction_steps}."
+                f"checkpoint execute steps={prediction_steps}; "
+                f"default replan={self.vars['n_action_steps'].get()}."
             )
 
     def browse_dataset_root(self) -> None:
@@ -2488,11 +2554,82 @@ class EvalPolicyApp:
     def _base_save_root(self) -> Path:
         return Path(self.vars["dataset_root"].get()).expanduser()
 
+    def _uses_partitioned_eval_layout(self, save_root: Path | None = None) -> bool:
+        root = save_root or self._base_save_root()
+        return root.name.lower() == "neweval"
+
+    def _view_layout_name(self) -> str:
+        trained_with_side = self._trained_policy_uses_side_camera()
+        uses_side = bool(self.include_side_camera.get()) if trained_with_side is None else trained_with_side
+        return "dual_view" if uses_side else "single_view"
+
+    def _runtime_configuration_snapshot(self) -> dict[str, Any]:
+        def optional_int(name: str) -> int | None:
+            text = self.vars[name].get().strip()
+            return int(text) if text else None
+
+        return {
+            "policy_type": self.vars["policy_type"].get().strip(),
+            "checkpoint_path": self.vars["checkpoint_path"].get().strip(),
+            "dataset_root": str(self._base_save_root()),
+            "save_subfolder": self._custom_save_subfolder(),
+            "include_side_camera": self._view_layout_name() == "dual_view",
+            "prediction_steps": optional_int("prediction_steps"),
+            "replan_interval_steps": int(self.vars["n_action_steps"].get()),
+            "num_inference_steps": optional_int("num_inference_steps"),
+            "noise_scheduler_type": self.vars["noise_scheduler_type"].get().strip(),
+            "execution_mode": self.vars["execution_mode"].get().strip(),
+            "camera_read_mode": DEFAULT_CAMERA_READ_MODE,
+            "fusion_steps": int(self.vars["fusion_steps"].get()),
+            "fusion_history_weight": float(self.vars["fusion_history_weight"].get()),
+            "use_amp": bool(self.use_amp.get()),
+            "ssact_servo_mode": self.vars["ssact_servo_mode"].get().strip(),
+            "ssact_adaptive_horizon": bool(self.enable_ssact_adaptive_horizon.get()),
+            "ssact_min_execution_steps": int(self.vars["ssact_min_execution_steps"].get()),
+            "ssact_max_execution_steps": int(self.vars["ssact_max_execution_steps"].get()),
+            "ssact_max_action_residual": float(self.vars["ssact_max_action_residual"].get()),
+            "lock_grippers": bool(self.lock_grippers.get()),
+        }
+
+    @staticmethod
+    def _runtime_configuration_dirname(configuration: dict[str, Any]) -> str:
+        execution_mode = {
+            "synchronous": "sync",
+            "asynchronous": "async",
+        }.get(str(configuration["execution_mode"]), str(configuration["execution_mode"]))
+        prediction_steps = configuration.get("prediction_steps")
+        parts = [
+            f"replan-{int(configuration['replan_interval_steps'])}",
+            execution_mode,
+            f"pred-{prediction_steps if prediction_steps is not None else 'checkpoint'}",
+        ]
+        if str(configuration.get("policy_type")) == "diffusion":
+            scheduler = str(configuration.get("noise_scheduler_type") or "checkpoint").lower()
+            inference_steps = configuration.get("num_inference_steps")
+            parts.append(f"{scheduler}-{inference_steps if inference_steps is not None else 'checkpoint'}")
+        history_weight = f"{float(configuration.get('fusion_history_weight', 0.0)):g}".replace(".", "p")
+        parts.append(f"fusion-{int(configuration.get('fusion_steps', 0))}-w{history_weight}")
+        parts.append("amp-on" if configuration.get("use_amp") else "amp-off")
+        if configuration.get("ssact_servo_mode") != "off" or configuration.get("ssact_adaptive_horizon"):
+            parts.append(f"servo-{configuration.get('ssact_servo_mode', 'off')}")
+            if configuration.get("ssact_adaptive_horizon"):
+                parts.append(
+                    f"adaptive-{configuration.get('ssact_min_execution_steps')}-"
+                    f"{configuration.get('ssact_max_execution_steps')}"
+                )
+        return "__".join(parts)
+
+    def _policy_layout_root(self, policy_type: str) -> Path:
+        root = self._base_save_root()
+        if self._uses_partitioned_eval_layout(root):
+            root /= self._view_layout_name()
+        return root / policy_type
+
     def _refresh_save_subfolder_options(self, *_args: Any) -> None:
         if not hasattr(self, "save_subfolder_combo"):
             return
         policy_type = self.vars["policy_type"].get().strip()
-        parent = self._base_save_root() / policy_type
+        parent = self._policy_layout_root(policy_type)
         candidates: list[Path] = []
         try:
             if parent.is_dir():
@@ -2519,9 +2656,9 @@ class EvalPolicyApp:
         except OSError:
             target_checkpoint = Path(checkpoint_text).expanduser()
 
-        parent = self._base_save_root() / policy_type
+        parent = self._policy_layout_root(policy_type)
         try:
-            result_paths = list(parent.glob(f"*/{RESULTS_FILENAME}"))
+            result_paths = list(parent.rglob(RESULTS_FILENAME))
         except OSError:
             return None
 
@@ -2544,7 +2681,14 @@ class EvalPolicyApp:
                     modified = result_path.stat().st_mtime
                 except OSError:
                     modified = 0.0
-                candidate = (timestamp, modified, result_path.parent.name)
+                saved_subfolder = record.get("save_subfolder")
+                if isinstance(saved_subfolder, str) and saved_subfolder.strip():
+                    strategy_folder = saved_subfolder.strip()
+                elif self._uses_partitioned_eval_layout():
+                    strategy_folder = result_path.parent.parent.name
+                else:
+                    strategy_folder = result_path.parent.name
+                candidate = (timestamp, modified, strategy_folder)
                 if latest is None or candidate[:2] > latest[:2]:
                     latest = candidate
         return latest[2] if latest is not None else None
@@ -2652,7 +2796,7 @@ class EvalPolicyApp:
         selected_policy = (policy_type or self.vars["policy_type"].get()).strip()
         if selected_policy not in POLICY_TYPES:
             raise ValueError(f"Unsupported policy type: {selected_policy}")
-        path = self._base_save_root() / selected_policy
+        path = self._policy_layout_root(selected_policy)
         selected_variant = policy_variant
         if selected_variant is None:
             selected_variant = self._selected_policy_variant(selected_policy)
@@ -2666,6 +2810,8 @@ class EvalPolicyApp:
             path /= custom_subfolder
         elif selected_policy in POLICY_TYPES_WITH_VARIANTS and selected_variant:
             path /= selected_variant
+        if self._uses_partitioned_eval_layout():
+            path /= self._runtime_configuration_dirname(self._runtime_configuration_snapshot())
         if create:
             path.mkdir(parents=True, exist_ok=True)
         return path
@@ -2695,7 +2841,16 @@ class EvalPolicyApp:
         policy_variant: str | None = None,
     ) -> list[dict[str, Any]]:
         custom_subfolder = self._custom_save_subfolder()
-        if custom_subfolder:
+        if self._uses_partitioned_eval_layout(save_root):
+            paths = (
+                self._policy_save_parent(
+                    policy_type,
+                    policy_variant=policy_variant,
+                    create=False,
+                )
+                / RESULTS_FILENAME,
+            )
+        elif custom_subfolder:
             paths = (save_root / policy_type / custom_subfolder / RESULTS_FILENAME,)
         elif policy_type in POLICY_TYPES_WITH_VARIANTS and policy_variant:
             paths = (save_root / policy_type / policy_variant / RESULTS_FILENAME,)
@@ -3358,6 +3513,13 @@ class EvalPolicyApp:
             self.vars["status"].set("Connection check is already running.")
             return
 
+        try:
+            self._sync_side_camera_for_checkpoint(required=True)
+        except ValueError as exc:
+            self.vars["status"].set(str(exc))
+            self._alert("Cannot connect", str(exc))
+            return
+
         self.log_text.delete("1.0", tk.END)
         self._append_log("[GUI] Connecting robot and cameras. This connection will stay open.")
         self.connecting = True
@@ -3482,8 +3644,11 @@ class EvalPolicyApp:
         self.last_run = {}
         self.result_saved = True
         self.segmentation_eval_metrics = self._new_segmentation_eval_metrics()
+        self.vars["model_parameter_stats"].set("Loading...")
+        self.vars["inference_latency_stats"].set("Waiting for first chunk")
         save_root = self._base_save_root()
         policy_variant = self._selected_policy_variant()
+        runtime_configuration = self._runtime_configuration_snapshot()
         policy_save_parent = self._policy_save_parent()
         trial_count, _successes = self._current_grid_stats()
         self.active_eval_metadata = {
@@ -3532,7 +3697,17 @@ class EvalPolicyApp:
             "save_subfolder": self._custom_save_subfolder(),
             "target_trials_per_grid": int(self.vars["trials_per_grid"].get()),
             "planned_trial_index": trial_count + 1,
+            "view_layout": self._view_layout_name(),
+            "runtime_configuration": runtime_configuration,
+            "runtime_configuration_folder": self._runtime_configuration_dirname(runtime_configuration),
+            "checkpoint_path": self.vars["checkpoint_path"].get().strip(),
+            "dataset_repo_id": self.vars["dataset_repo_id"].get().strip(),
+            "task": self.vars["task"].get().strip(),
+            "episode_time_s": float(self.vars["episode_time_s"].get()),
+            "segmentation_model_path": self.vars["segmentation_model_path"].get().strip(),
+            "segmentation_side_model_path": self.vars["segmentation_side_model_path"].get().strip(),
         }
+        self.runtime_mismatch_warning_shown = False
         self.connect_button.configure(state=tk.DISABLED)
         self.start_button.configure(state=tk.DISABLED)
         self.stop_button.configure(state=tk.NORMAL)
@@ -3637,19 +3812,22 @@ class EvalPolicyApp:
         if robot is None or not self.connected:
             raise RuntimeError("Robot is not connected.")
 
-        checkpoint = self.vars["checkpoint_path"].get().strip()
-        repo_id = self.vars["dataset_repo_id"].get().strip()
-        task = self.vars["task"].get().strip()
-        fps = int(self.vars["fps"].get())
-        episode_time_s = float(self.vars["episode_time_s"].get())
+        checkpoint = str(self.active_eval_metadata["checkpoint_path"])
+        repo_id = str(self.active_eval_metadata["dataset_repo_id"])
+        task = str(self.active_eval_metadata["task"])
+        fps = int(self.active_eval_metadata["fps"])
+        episode_time_s = float(self.active_eval_metadata["episode_time_s"])
         save_video = bool(self.active_eval_metadata.get("save_video", self.save_video.get()))
-        save_parent = self._save_parent()
+        save_parent = Path(str(self.active_eval_metadata["save_parent"]))
         run_dataset_root = self._make_run_dataset_root(save_parent, repo_id)
         self.active_dataset_root = run_dataset_root
 
         from mask_act_inference import is_mask_act_checkpoint, load_mask_act_for_inference
 
-        mask_act_checkpoint = self.vars["policy_type"].get() == "mask_act" or is_mask_act_checkpoint(checkpoint)
+        runtime_configuration = self.active_eval_metadata["runtime_configuration"]
+        mask_act_checkpoint = runtime_configuration["policy_type"] == "mask_act" or is_mask_act_checkpoint(
+            checkpoint
+        )
         if mask_act_checkpoint:
             policy, preprocessor, postprocessor, details = load_mask_act_for_inference(
                 checkpoint,
@@ -3661,13 +3839,18 @@ class EvalPolicyApp:
                 f"experiment={details['experiment']} rgb={details['rgb_key']} "
                 f"metadata={details['metadata_root']}"
             )
+            if details.get("initialized_derived_state_buffers"):
+                self.log_queue.put(
+                    "[Mask-ACT] Initialized derived compatibility buffer(s) from run config: "
+                    + ", ".join(details["initialized_derived_state_buffers"])
+                )
             if details["experiment"].upper() == "SSACT-1":
                 ssact_runtime_config = {
-                    "mode": self.vars["ssact_servo_mode"].get(),
-                    "adaptive_horizon": self.enable_ssact_adaptive_horizon.get(),
-                    "minimum_execution_steps": int(self.vars["ssact_min_execution_steps"].get()),
-                    "maximum_execution_steps": int(self.vars["ssact_max_execution_steps"].get()),
-                    "maximum_action_residual": float(self.vars["ssact_max_action_residual"].get()),
+                    "mode": runtime_configuration["ssact_servo_mode"],
+                    "adaptive_horizon": runtime_configuration["ssact_adaptive_horizon"],
+                    "minimum_execution_steps": runtime_configuration["ssact_min_execution_steps"],
+                    "maximum_execution_steps": runtime_configuration["ssact_max_execution_steps"],
+                    "maximum_action_residual": runtime_configuration["ssact_max_action_residual"],
                 }
                 policy.configure_ssact_runtime(ssact_runtime_config)
                 self.log_queue.put(
@@ -3744,12 +3927,60 @@ class EvalPolicyApp:
                 policy_state_names,
             )
         sensor_dataset_features = dataset_features
+        policy_rgb_keys = (
+            list(details["rgb_keys"])
+            if mask_act_checkpoint
+            else [
+                key
+                for key in policy_cfg.input_features
+                if key.startswith("observation.images.") and key in sensor_dataset_features
+            ]
+        )
+        decision_recording_features, decision_recording_sources = (
+            self._policy_decision_recording_features(sensor_dataset_features, policy_rgb_keys)
+        )
+        segmentation_recording_features: dict[str, dict[str, Any]] = {}
+        segmentation_recording_views: dict[str, str] = {}
+        if mask_act_checkpoint:
+            segmentation_recording_features, segmentation_recording_views = (
+                self._policy_segmentation_recording_features(sensor_dataset_features, policy_rgb_keys)
+            )
         semantic_recording_features = self._policy_semantic_recording_features(
             sensor_dataset_features,
             policy_cfg.input_features,
         )
+        auxiliary_recording_features = {
+            **decision_recording_features,
+            **segmentation_recording_features,
+            **semantic_recording_features,
+        }
+        if auxiliary_recording_features:
+            dataset_features = {**sensor_dataset_features, **auxiliary_recording_features}
+        if decision_recording_features:
+            decision_keys = sorted(decision_recording_features)
+            self.active_eval_metadata.update(
+                {
+                    "policy_decision_rgb_recording_keys": decision_keys,
+                    "policy_decision_rgb_alignment": "chunk_trigger_frame_held_until_next_chunk_inference",
+                }
+            )
+            self.log_queue.put(
+                "[RECORD] Saving RGB frames that trigger chunk inference: " + ", ".join(decision_keys)
+            )
+        if segmentation_recording_features:
+            segmentation_keys = sorted(segmentation_recording_features)
+            self.active_eval_metadata.update(
+                {
+                    "policy_segmentation_recording_keys": segmentation_keys,
+                    "policy_segmentation_alignment": "latest_chunk_segmentation_held_until_next_chunk_inference",
+                    "policy_segmentation_representation": "palette_rgb_from_model_probability_maps",
+                }
+            )
+            self.log_queue.put(
+                "[RECORD] Saving policy segmentation generated at chunk inference: "
+                + ", ".join(segmentation_keys)
+            )
         if semantic_recording_features:
-            dataset_features = {**sensor_dataset_features, **semantic_recording_features}
             semantic_keys = sorted(semantic_recording_features)
             self.active_eval_metadata.update(
                 {
@@ -3790,7 +4021,7 @@ class EvalPolicyApp:
                 image_writer_processes=0,
                 image_writer_threads=max(
                     1,
-                    4 * (len(robot.cameras) + len(semantic_recording_features)),
+                    4 * (len(robot.cameras) + len(auxiliary_recording_features)),
                 ),
                 batch_encoding_size=1_000_000 if save_video else 1,
                 vcodec="h264",
@@ -3798,7 +4029,7 @@ class EvalPolicyApp:
             evaluation_metadata = {
                 **self.active_eval_metadata,
                 "created_at": datetime.now().isoformat(timespec="seconds"),
-                "policy_type": self.vars["policy_type"].get(),
+                "policy_type": runtime_configuration["policy_type"],
                 "policy_path": checkpoint,
                 "task": task,
                 "dataset_repo_id": repo_id,
@@ -3819,11 +4050,21 @@ class EvalPolicyApp:
                         "rename_observations_processor": {"rename_map": {}},
                     },
                 )
+            model_statistics = self._model_parameter_statistics(policy)
+            self.active_eval_metadata["model_statistics"] = model_statistics
+            self.log_queue.put("__MODEL_STATS__|" + json.dumps(model_statistics))
+            self.log_queue.put(
+                "[MODEL] "
+                f"parameters={model_statistics['parameter_count']:,}, "
+                f"trainable={model_statistics['trainable_parameter_count']:,}, "
+                f"parameter_memory={model_statistics['parameter_bytes'] / (1024**2):.1f} MiB, "
+                f"buffers={model_statistics['buffer_bytes'] / (1024**2):.1f} MiB."
+            )
             policy.reset()
             preprocessor.reset()
             postprocessor.reset()
-            fusion_steps = int(self.vars["fusion_steps"].get())
-            execution_mode = self.vars["execution_mode"].get()
+            fusion_steps = int(runtime_configuration["fusion_steps"])
+            execution_mode = str(runtime_configuration["execution_mode"])
             predict_chunk = getattr(policy, "predict_action_chunk", None)
             is_diffusion_policy = all(
                 hasattr(policy.config, attr)
@@ -3834,7 +4075,7 @@ class EvalPolicyApp:
                 if is_diffusion_policy
                 else int(getattr(policy.config, "chunk_size", policy.config.n_action_steps))
             )
-            replan_steps = int(self.vars["n_action_steps"].get())
+            replan_steps = int(runtime_configuration["replan_interval_steps"])
             use_chunk_planner = (
                 callable(predict_chunk)
                 and (hasattr(policy.config, "chunk_size") or is_diffusion_policy)
@@ -3848,7 +4089,7 @@ class EvalPolicyApp:
                 ActionChunkFusionPlanner(
                     replan_steps=replan_steps,
                     fusion_steps=fusion_steps,
-                    initial_history_weight=float(self.vars["fusion_history_weight"].get()),
+                    initial_history_weight=float(runtime_configuration["fusion_history_weight"]),
                 )
                 if use_chunk_planner
                 else None
@@ -3861,7 +4102,7 @@ class EvalPolicyApp:
             self.log_queue.put(
                 f"Captured policy-start reset pose with {len(self.initial_joint_action)} joint target(s)."
             )
-            if self.lock_grippers.get():
+            if runtime_configuration["lock_grippers"]:
                 gripper_keys = self._gripper_keys(robot.action_features)
                 state_names = dataset.features.get("observation.state", {}).get("names", [])
                 if any(self._is_gripper_key(str(name)) for name in state_names):
@@ -3881,7 +4122,7 @@ class EvalPolicyApp:
             )
             self.log_queue.put(
                 f"[CONTROL] execution_mode={execution_mode}, "
-                f"camera_read_mode={self.vars['camera_read_mode'].get()}, target_fps={fps}."
+                f"camera_read_mode={runtime_configuration['camera_read_mode']}, target_fps={fps}."
             )
 
             encoding_context = nullcontext()
@@ -3894,6 +4135,89 @@ class EvalPolicyApp:
                 observation_history: deque[dict[str, Any]] = deque(
                     maxlen=int(policy.config.n_obs_steps) if is_diffusion_policy else 1
                 )
+                decision_recording_frame: dict[str, Any] = {}
+                segmentation_recording_frame: dict[str, Any] = {}
+                inference_count = 0
+                inference_total_s = 0.0
+
+                def record_inference_latency(elapsed_s: float) -> None:
+                    nonlocal inference_count, inference_total_s
+                    inference_count += 1
+                    inference_total_s += elapsed_s
+                    statistics = {
+                        "count": inference_count,
+                        "last_ms": elapsed_s * 1000.0,
+                        "average_ms": inference_total_s * 1000.0 / inference_count,
+                    }
+                    self.active_eval_metadata["inference_latency_statistics"] = statistics
+                    self.log_queue.put("__INFERENCE_STATS__|" + json.dumps(statistics))
+
+                def record_decision_observation(observation: dict[str, Any]) -> None:
+                    import numpy as np
+
+                    for recording_key, source_key in decision_recording_sources.items():
+                        value = observation.get(source_key)
+                        if value is not None:
+                            decision_recording_frame[recording_key] = np.ascontiguousarray(
+                                np.asarray(value).copy()
+                            )
+
+                def record_latest_policy_segmentation() -> None:
+                    if not segmentation_recording_features:
+                        return
+                    import cv2
+                    import numpy as np
+
+                    latest_masks = getattr(policy, "latest_inference_mask_preview", None)
+                    model_masks = latest_masks() if callable(latest_masks) else {}
+                    overlays, _summaries = self._render_model_mask_previews(model_masks)
+                    for recording_key, view in segmentation_recording_views.items():
+                        overlay = overlays.get(view)
+                        if overlay is None:
+                            continue
+                        source_recording_key = next(
+                            (
+                                key
+                                for key, source_key in decision_recording_sources.items()
+                                if source_key.rsplit(".", 1)[-1] == view
+                            ),
+                            None,
+                        )
+                        source = decision_recording_frame.get(source_recording_key or "")
+                        array = np.asarray(overlay, dtype=np.uint8)
+                        if source is not None and array.shape[:2] != np.asarray(source).shape[:2]:
+                            source_height, source_width = np.asarray(source).shape[:2]
+                            array = cv2.resize(
+                                array,
+                                (source_width, source_height),
+                                interpolation=cv2.INTER_NEAREST,
+                            )
+                        segmentation_recording_frame[recording_key] = np.ascontiguousarray(array)
+
+                def held_auxiliary_recording_frame(observation: dict[str, Any]) -> dict[str, Any]:
+                    import numpy as np
+
+                    held = dict(decision_recording_frame)
+                    for recording_key, source_key in decision_recording_sources.items():
+                        if recording_key not in held and source_key in observation:
+                            held[recording_key] = np.ascontiguousarray(
+                                np.asarray(observation[source_key]).copy()
+                            )
+                    held.update(segmentation_recording_frame)
+                    for recording_key, view in segmentation_recording_views.items():
+                        if recording_key in held:
+                            continue
+                        source_key = next(
+                            (
+                                key
+                                for key in policy_rgb_keys
+                                if key.rsplit(".", 1)[-1] == view and key in observation
+                            ),
+                            None,
+                        )
+                        if source_key is not None:
+                            held[recording_key] = np.zeros_like(np.asarray(observation[source_key]))
+                    return held
                 if is_diffusion_policy:
                     warmup_frames = max(
                         int(policy.config.n_obs_steps),
@@ -3997,9 +4321,12 @@ class EvalPolicyApp:
                         else:
                             predicted_chunk = predict_chunk(prepared_observations[-1])
                         predicted_chunk = postprocessor(predicted_chunk)
+                        record_latest_policy_segmentation()
                     if policy_device.type == "cuda":
                         torch.cuda.synchronize(policy_device)
-                    return predicted_chunk, time.perf_counter() - pipeline_started
+                    pipeline_s = time.perf_counter() - pipeline_started
+                    record_inference_latency(pipeline_s)
+                    return predicted_chunk, pipeline_s
 
                 def publish_ssact_runtime_report(pipeline_s: float) -> dict[str, Any]:
                     latest_report = getattr(policy, "latest_ssact_control_report", None)
@@ -4075,7 +4402,7 @@ class EvalPolicyApp:
                         "elapsed_s": max(time.perf_counter() - start_t, 0.0),
                         "pipeline_ms": pipeline_s * 1000.0,
                     }
-                    if self.enable_ssact_adaptive_horizon.get() and planner is not None:
+                    if runtime_configuration["ssact_adaptive_horizon"] and planner is not None:
                         planner.set_replan_steps(int(report["execution_steps"]))
                     self._put_ssact_status(report)
                     with (run_dataset_root / "ssact_runtime.jsonl").open("a", encoding="utf-8") as stream:
@@ -4143,6 +4470,20 @@ class EvalPolicyApp:
                     observation_history.append(copy(policy_observation_frame))
                     observation_ready = time.perf_counter()
                     if planner is None:
+                        action_queue = getattr(policy, "_action_queue", None)
+                        diffusion_queues = getattr(policy, "_queues", {})
+                        will_infer_chunk = (
+                            len(action_queue) == 0
+                            if action_queue is not None
+                            else len(diffusion_queues.get(ACTION, ())) == 0
+                            if diffusion_queues
+                            else True
+                        )
+                        if will_infer_chunk:
+                            record_decision_observation(observation_frame)
+                            if policy_device.type == "cuda":
+                                torch.cuda.synchronize(policy_device)
+                            inference_started = time.perf_counter()
                         action_values = predict_action(
                             observation=policy_observation_frame,
                             policy=policy,
@@ -4153,8 +4494,14 @@ class EvalPolicyApp:
                             task=task,
                             robot_type=robot.robot_type,
                         )
+                        if will_infer_chunk:
+                            if policy_device.type == "cuda":
+                                torch.cuda.synchronize(policy_device)
+                            record_inference_latency(time.perf_counter() - inference_started)
+                            record_latest_policy_segmentation()
                     elif execution_mode == "synchronous":
                         if planner.needs_replan:
+                            record_decision_observation(observation_frame)
                             new_chunk, pipeline_s = predict_chunk_async(observation_snapshot())
                             publish_ssact_runtime_report(pipeline_s)
                             fused_steps = planner.update(new_chunk)
@@ -4170,6 +4517,7 @@ class EvalPolicyApp:
                                 self.log_queue.put("[REPLAN] Action buffer exhausted; waiting for inference.")
                                 install_pending_replan(wait=True)
                             else:
+                                record_decision_observation(observation_frame)
                                 new_chunk, inference_s = predict_chunk_async(observation_snapshot())
                                 planner.update(new_chunk)
                                 self.log_queue.put(
@@ -4179,6 +4527,7 @@ class EvalPolicyApp:
                         if planner.needs_replan and pending_replan is None:
                             if replan_executor is None:
                                 raise RuntimeError("Asynchronous replanning executor is unavailable.")
+                            record_decision_observation(observation_frame)
                             pending_replan = (
                                 replan_executor.submit(predict_chunk_async, observation_snapshot()),
                                 control_step,
@@ -4196,7 +4545,7 @@ class EvalPolicyApp:
                     )
                     self._fill_missing_action_values(action_dict, dataset.features, raw_obs)
                     robot_action_to_send = robot_action_processor((action_dict, raw_obs))
-                    if self.lock_grippers.get():
+                    if runtime_configuration["lock_grippers"]:
                         robot_action_to_send = self._without_gripper_actions(robot_action_to_send)
                         for key in self._gripper_keys(action_dict):
                             if key in raw_obs:
@@ -4214,9 +4563,11 @@ class EvalPolicyApp:
                         policy,
                         semantic_recording_features,
                     )
+                    auxiliary_frame = held_auxiliary_recording_frame(observation_frame)
                     dataset.add_frame(
                         {
                             **observation_frame,
+                            **auxiliary_frame,
                             **semantic_frame,
                             **action_frame,
                             "task": task,
@@ -4251,6 +4602,14 @@ class EvalPolicyApp:
                     precise_sleep(max(1 / fps - dt_s, 0.0))
                     timestamp = time.perf_counter() - start_t
 
+                final_evaluation_metadata = {
+                    **evaluation_metadata,
+                    **self.active_eval_metadata,
+                }
+                (run_dataset_root / "evaluation_metadata.json").write_text(
+                    json.dumps(final_evaluation_metadata, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
                 dataset.save_episode()
                 self.log_queue.put("Policy episode data saved. Robot remains connected.")
         finally:
@@ -4261,11 +4620,22 @@ class EvalPolicyApp:
 
     def _validate_eval_settings(self) -> None:
         self._sync_segmentation_model_for_checkpoint()
+        trained_with_side = self._sync_side_camera_for_checkpoint(required=True)
+        self.vars["camera_read_mode"].set(DEFAULT_CAMERA_READ_MODE)
         checkpoint = self.vars["checkpoint_path"].get().strip()
         if not checkpoint:
             raise ValueError("Select a pretrained_model or Mask-ACT checkpoint directory.")
         if not Path(checkpoint).expanduser().exists():
             raise ValueError(f"Checkpoint path does not exist: {checkpoint}")
+        if self.connected and self.robot is not None:
+            connected_with_side = "side" in getattr(self.robot, "cameras", {})
+            if connected_with_side != trained_with_side:
+                expected = "front + side" if trained_with_side else "front only"
+                connected = "front + side" if connected_with_side else "front only"
+                raise ValueError(
+                    f"The selected policy was trained for {expected}, but the current connection has "
+                    f"{connected}. Disconnect and run Check Connect again after switching policies."
+                )
         if self.vars["policy_type"].get().strip() == "mask_act" and not self._selected_policy_variant():
             raise ValueError(
                 "Could not determine the Mask-ACT experiment from mask_act_run_config.json."
@@ -4279,14 +4649,16 @@ class EvalPolicyApp:
         trials_per_grid = int(self.vars["trials_per_grid"].get())
         if trials_per_grid <= 0:
             raise ValueError("Trials per cell must be greater than zero.")
-        float(self.vars["episode_time_s"].get())
+        episode_time_s = float(self.vars["episode_time_s"].get())
+        if episode_time_s <= 0 or episode_time_s > MAX_EPISODE_TIME_S:
+            raise ValueError(
+                f"Episode sec must be greater than zero and no more than {MAX_EPISODE_TIME_S}."
+            )
         fps = int(self.vars["fps"].get())
         if fps <= 0:
             raise ValueError("FPS must be greater than zero.")
         if self.vars["execution_mode"].get() not in {"synchronous", "asynchronous"}:
             raise ValueError("Execution mode must be synchronous or asynchronous.")
-        if self.vars["camera_read_mode"].get() not in {"wait_new_frame", "latest_nonblocking"}:
-            raise ValueError("Camera read mode must be wait_new_frame or latest_nonblocking.")
         if self.enable_segmentation_preview.get():
             segmentation_paths = {
                 "front": Path(self.vars["segmentation_model_path"].get()).expanduser(),
@@ -4340,8 +4712,11 @@ class EvalPolicyApp:
             raise ValueError("Reset sec must be greater than zero.")
 
     def _apply_action_step_override(self, policy_cfg: Any) -> None:
-        requested_replan = int(self.vars["n_action_steps"].get())
-        fusion_steps = int(self.vars["fusion_steps"].get())
+        runtime_configuration = self.active_eval_metadata.get("runtime_configuration")
+        if not isinstance(runtime_configuration, dict):
+            runtime_configuration = self._runtime_configuration_snapshot()
+        requested_replan = int(runtime_configuration["replan_interval_steps"])
+        fusion_steps = int(runtime_configuration["fusion_steps"])
         is_diffusion = all(
             hasattr(policy_cfg, attr)
             for attr in ("horizon", "n_obs_steps", "noise_scheduler_type", "num_inference_steps")
@@ -4351,9 +4726,11 @@ class EvalPolicyApp:
             horizon = int(policy_cfg.horizon)
             n_obs_steps = int(policy_cfg.n_obs_steps)
             max_prediction_steps = horizon - n_obs_steps + 1
-            prediction_text = self.vars["prediction_steps"].get().strip()
+            configured_prediction_steps = runtime_configuration.get("prediction_steps")
             prediction_steps = (
-                int(prediction_text) if prediction_text else int(policy_cfg.n_action_steps)
+                int(configured_prediction_steps)
+                if configured_prediction_steps is not None
+                else int(policy_cfg.n_action_steps)
             )
             if prediction_steps < 1 or prediction_steps > max_prediction_steps:
                 raise ValueError(
@@ -4372,26 +4749,26 @@ class EvalPolicyApp:
                     f"= {max_fusion_steps}; got {fusion_steps}."
                 )
 
-            inference_steps_text = self.vars["num_inference_steps"].get().strip()
-            if inference_steps_text:
-                inference_steps = int(inference_steps_text)
+            configured_inference_steps = runtime_configuration.get("num_inference_steps")
+            if configured_inference_steps is not None:
+                inference_steps = int(configured_inference_steps)
                 if inference_steps > int(policy_cfg.num_train_timesteps):
                     raise ValueError(
                         "Diffusion inference steps cannot exceed num_train_timesteps="
                         f"{policy_cfg.num_train_timesteps}; got {inference_steps}."
                     )
                 policy_cfg.num_inference_steps = inference_steps
-            scheduler = self.vars["noise_scheduler_type"].get()
+            scheduler = str(runtime_configuration["noise_scheduler_type"])
             if scheduler != "checkpoint":
                 policy_cfg.noise_scheduler_type = scheduler
             policy_cfg.n_action_steps = prediction_steps
-            policy_cfg.use_amp = self.use_amp.get()
+            policy_cfg.use_amp = bool(runtime_configuration["use_amp"])
             self.vars["model_chunk_size"].set(str(horizon))
             self.vars["prediction_steps"].set(str(prediction_steps))
             self.log_queue.put(
                 f"[Diffusion] horizon={horizon}, prediction_steps={prediction_steps}, "
                 f"replan_interval={requested_replan} "
-                f"({requested_replan / max(int(self.vars['fps'].get()), 1):.3f}s), "
+                f"({requested_replan / max(int(self.active_eval_metadata.get('fps', 1)), 1):.3f}s), "
                 f"inference_steps={policy_cfg.num_inference_steps}, "
                 f"scheduler={policy_cfg.noise_scheduler_type}, AMP={policy_cfg.use_amp}, "
                 f"fusion_steps={fusion_steps}."
@@ -4399,7 +4776,7 @@ class EvalPolicyApp:
             return
 
         if not hasattr(policy_cfg, "chunk_size") or not hasattr(policy_cfg, "n_action_steps"):
-            if int(self.vars["fusion_steps"].get()) > 0:
+            if fusion_steps > 0:
                 raise ValueError(
                     f"{type(policy_cfg).__name__} does not expose chunk_size/n_action_steps, "
                     "so action-chunk fusion cannot be enabled for this policy."
@@ -4409,12 +4786,12 @@ class EvalPolicyApp:
                     f"{type(policy_cfg).__name__} does not expose action chunks; set replan interval to 1."
                 )
             if hasattr(policy_cfg, "use_amp"):
-                policy_cfg.use_amp = self.use_amp.get()
+                policy_cfg.use_amp = bool(runtime_configuration["use_amp"])
             self.vars["model_chunk_size"].set("N/A")
             self.vars["prediction_steps"].set("1")
             self.log_queue.put(
                 f"[Policy] {type(policy_cfg).__name__} uses single-step action execution; "
-                f"replan_interval=1, AMP={getattr(policy_cfg, 'use_amp', self.use_amp.get())}."
+                f"replan_interval=1, AMP={getattr(policy_cfg, 'use_amp', runtime_configuration['use_amp'])}."
             )
             return
         chunk_size = int(policy_cfg.chunk_size)
@@ -4436,14 +4813,14 @@ class EvalPolicyApp:
         ):
             raise ValueError("ACT policies using temporal ensembling require replan interval = 1.")
         policy_cfg.n_action_steps = requested_replan
-        policy_cfg.use_amp = self.use_amp.get()
+        policy_cfg.use_amp = bool(runtime_configuration["use_amp"])
         self.vars["model_chunk_size"].set(str(chunk_size))
         self.vars["prediction_steps"].set(str(chunk_size))
         self.log_queue.put(
             f"[Policy] chunk_size={chunk_size}, replan_interval={requested_replan}; "
-            f"replanning every {requested_replan / max(int(self.vars['fps'].get()), 1):.3f}s; "
+            f"replanning every {requested_replan / max(int(self.active_eval_metadata.get('fps', 1)), 1):.3f}s; "
             f"fusion_steps={fusion_steps}, "
-            f"initial_history_weight={float(self.vars['fusion_history_weight'].get()):.3f}."
+            f"initial_history_weight={float(runtime_configuration['fusion_history_weight']):.3f}."
         )
 
     def _make_robot(self) -> LocalBimanualSOFollower | Any:
@@ -4772,38 +5149,7 @@ class EvalPolicyApp:
         return serial
 
     def _get_eval_observation(self, robot: Any) -> dict[str, Any]:
-        """Read arm state synchronously and optionally peek the latest camera frame without waiting."""
-        if self.vars["camera_read_mode"].get() != "latest_nonblocking":
-            return robot.get_observation()
-
-        def read_camera(camera: Any) -> Any:
-            read_latest = getattr(camera, "read_latest", None)
-            if callable(read_latest):
-                max_age_ms = max(int(3000 / max(int(self.vars["fps"].get()), 1)), 100)
-                return read_latest(max_age_ms=max_age_ms)
-            return camera.async_read()
-
-        def read_arm(arm: Any) -> dict[str, Any]:
-            positions = arm.bus.sync_read("Present_Position")
-            observation = {f"{motor}.pos": value for motor, value in positions.items()}
-            for camera_key, camera in arm.cameras.items():
-                observation[camera_key] = read_camera(camera)
-            return observation
-
-        if hasattr(robot, "left_arm") and hasattr(robot, "right_arm"):
-            left_positions = robot.left_arm.bus.sync_read("Present_Position")
-            right_positions = robot.right_arm.bus.sync_read("Present_Position")
-            camera_obs = {
-                camera_key: read_camera(camera)
-                for camera_key, camera in getattr(robot, "cameras", {}).items()
-            }
-            return {
-                **{f"left_{motor}.pos": value for motor, value in left_positions.items()},
-                **{f"right_{motor}.pos": value for motor, value in right_positions.items()},
-                **camera_obs,
-            }
-        if hasattr(robot, "bus") and hasattr(robot, "cameras"):
-            return read_arm(robot)
+        """Read arm state and wait for each camera's latest unconsumed frame."""
         return robot.get_observation()
 
     def _policy_observation_frame(
@@ -5242,11 +5588,60 @@ class EvalPolicyApp:
         return {key: value for key, value in action.items() if not cls._is_gripper_key(key)}
 
     @staticmethod
+    def _model_parameter_statistics(model: Any) -> dict[str, int]:
+        parameters = list(model.parameters())
+        buffers = list(model.buffers())
+        return {
+            "parameter_count": sum(parameter.numel() for parameter in parameters),
+            "trainable_parameter_count": sum(
+                parameter.numel() for parameter in parameters if parameter.requires_grad
+            ),
+            "parameter_bytes": sum(
+                parameter.numel() * parameter.element_size() for parameter in parameters
+            ),
+            "buffer_bytes": sum(buffer.numel() * buffer.element_size() for buffer in buffers),
+        }
+
+    @staticmethod
     def _video_features_to_images(features: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
         return {
             key: ({**feature, "dtype": "image"} if feature.get("dtype") == "video" else dict(feature))
             for key, feature in features.items()
         }
+
+    @staticmethod
+    def _policy_decision_recording_features(
+        dataset_features: dict[str, dict[str, Any]],
+        rgb_keys: list[str],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        """Create held-video features for RGB frames that trigger action-chunk inference."""
+        features: dict[str, dict[str, Any]] = {}
+        source_keys: dict[str, str] = {}
+        for rgb_key in rgb_keys:
+            source_feature = dataset_features.get(rgb_key)
+            if not isinstance(source_feature, dict) or source_feature.get("dtype") not in {"image", "video"}:
+                continue
+            recording_key = f"{rgb_key}_policy_input"
+            features[recording_key] = dict(source_feature)
+            source_keys[recording_key] = rgb_key
+        return features, source_keys
+
+    @staticmethod
+    def _policy_segmentation_recording_features(
+        dataset_features: dict[str, dict[str, Any]],
+        rgb_keys: list[str],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        """Create held-video features for the segmentation produced at chunk inference."""
+        features: dict[str, dict[str, Any]] = {}
+        source_views: dict[str, str] = {}
+        for rgb_key in rgb_keys:
+            source_feature = dataset_features.get(rgb_key)
+            if not isinstance(source_feature, dict) or source_feature.get("dtype") not in {"image", "video"}:
+                continue
+            recording_key = f"{rgb_key}_policy_segmentation"
+            features[recording_key] = dict(source_feature)
+            source_views[recording_key] = rgb_key.rsplit(".", 1)[-1]
+        return features, source_views
 
     @staticmethod
     def _policy_semantic_recording_features(
@@ -5569,12 +5964,67 @@ class EvalPolicyApp:
         self.log_queue.put(f"__PROCESS_DONE__|{return_code}")
 
     def _tick(self) -> None:
+        if self.eval_running and not self.runtime_mismatch_warning_shown:
+            started_configuration = self.active_eval_metadata.get("runtime_configuration")
+            if isinstance(started_configuration, dict):
+                try:
+                    current_configuration = self._runtime_configuration_snapshot()
+                except (TypeError, ValueError):
+                    current_configuration = {"invalid_gui_value": True}
+                changed = [
+                    key
+                    for key in sorted(set(started_configuration) | set(current_configuration))
+                    if started_configuration.get(key) != current_configuration.get(key)
+                ]
+                if changed:
+                    self.runtime_mismatch_warning_shown = True
+                    changed_text = ", ".join(changed)
+                    self._append_log(
+                        "[CONFIG] Runtime fields changed after Start and were ignored for this run: "
+                        + changed_text
+                    )
+                    self._alert(
+                        "Run configuration mismatch",
+                        "The running evaluation keeps the configuration captured at Start. "
+                        "Your edited values will apply to the next run and will be stored in a different "
+                        f"configuration folder. Changed fields: {changed_text}",
+                    )
+
         while True:
             try:
                 message = self.log_queue.get_nowait()
             except queue.Empty:
                 break
-            if message.startswith("__PROCESS_DONE__|"):
+            if message.startswith("__MODEL_STATS__|"):
+                statistics = json.loads(message.split("|", 1)[1])
+                parameter_count = int(statistics["parameter_count"])
+                trainable_count = int(statistics["trainable_parameter_count"])
+                parameter_mib = float(statistics["parameter_bytes"]) / (1024**2)
+                count_text = (
+                    f"{parameter_count / 1_000_000_000:.2f}B"
+                    if parameter_count >= 1_000_000_000
+                    else f"{parameter_count / 1_000_000:.1f}M"
+                    if parameter_count >= 1_000_000
+                    else f"{parameter_count / 1_000:.1f}K"
+                    if parameter_count >= 1_000
+                    else str(parameter_count)
+                )
+                trainable_suffix = (
+                    ""
+                    if trainable_count == parameter_count
+                    else f", {trainable_count / 1_000_000:.1f}M trainable"
+                )
+                self.vars["model_parameter_stats"].set(
+                    f"{count_text} params, {parameter_mib:.1f} MiB{trainable_suffix}"
+                )
+            elif message.startswith("__INFERENCE_STATS__|"):
+                statistics = json.loads(message.split("|", 1)[1])
+                self.vars["inference_latency_stats"].set(
+                    f"avg {float(statistics['average_ms']):.1f} ms | "
+                    f"last {float(statistics['last_ms']):.1f} ms | "
+                    f"n={int(statistics['count'])}"
+                )
+            elif message.startswith("__PROCESS_DONE__|"):
                 return_code = int(message.split("|", 1)[1])
                 self._handle_process_done(return_code)
             elif message.startswith("__CONNECT_DONE__|"):
@@ -6315,7 +6765,12 @@ class EvalPolicyApp:
             grid["grid_cols"] = grid["grid_size"]
         grid_cell = str(self.last_run["grid_cell"])
         task = str(self.last_run["task"])
-        prior_records = self._result_records(save_root, policy_type, policy_variant)
+        prior_records = [
+            record
+            for record in self._read_jsonl_records(save_parent / RESULTS_FILENAME)
+            if record.get("policy_type") == policy_type
+            and self._record_matches_policy_variant(record, policy_type, policy_variant)
+        ]
         prior_count, _prior_successes = self._grid_stats_from_records(
             prior_records,
             task=task,
