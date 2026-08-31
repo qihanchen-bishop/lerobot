@@ -41,6 +41,12 @@ Experiments:
       the corresponding RGB views with gated camera and modality identity embeddings.
   UNET-SEM-V3-F-NOEMB: A frozen seven-class front-only TinyUNet produces one soft semantic RGB
       stream beside front RGB. The two streams share ACT's backbone and use no identity embeddings.
+  UNET-SEM-V5: Frozen view-specific TinyUNets produce a seven-class front semantic map and a
+      five-class side semantic map. ACT receives both semantic maps and both RGB views through its
+      shared image backbone, without camera or modality embeddings.
+  STAGE-V5-*: Front-derived expose/separate/transport/restore/done supervision trains a temporal
+      stage head. The four F/FS and RGB/UNETSEM variants isolate view count and semantic visual input;
+      every variant predicts its stage online from the frozen front segmenter at deployment.
   3:  ACT sees only the pooled RGB encoder latent. U-Net mask decoder is kept as an auxiliary task.
 """
 
@@ -114,13 +120,31 @@ CANONICAL_SEMANTIC_MASK_KEYS = [
     "observation.images.right_arm",
 ]
 DEFAULT_MASK_KEYS = CANONICAL_SEMANTIC_MASK_KEYS
-STAGE_AWARE_EXPERIMENTS = {"SSACT-3"}
+STAGE_V5_EXPERIMENTS = {
+    "STAGE-V5-F-RGB",
+    "STAGE-V5-FS-RGB",
+    "STAGE-V5-F-UNETSEM",
+    "STAGE-V5-FS-UNETSEM",
+}
+STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS = {
+    "STAGE-V5-F-UNETSEM",
+    "STAGE-V5-FS-UNETSEM",
+}
+STAGE_V5_RGB_ONLY_EXPERIMENTS = STAGE_V5_EXPERIMENTS - STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS
+UNET_SEM_V5_ONLY_EXPERIMENTS = {"UNET-SEM-V5", "UNET-SEM-V5-FS"}
+UNET_SEM_V5_EXPERIMENTS = {*UNET_SEM_V5_ONLY_EXPERIMENTS, *STAGE_V5_EXPERIMENTS}
+STAGE_AWARE_EXPERIMENTS = {"SSACT-3", *STAGE_V5_EXPERIMENTS}
 VIEW_FUSION_EXPERIMENTS = {"VIEWFUS-V1"}
-FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM", "UNET-SEM-V3-F-NOEMB"}
+FROZEN_SEMANTIC_EXPERIMENTS = {
+    "UNET-SEM",
+    "UNET-SEM-V3-F-NOEMB",
+    *UNET_SEM_V5_EXPERIMENTS,
+}
 IDENTITY_EMBEDDED_FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM"}
 FRONT_ONLY_FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM-V3-F-NOEMB"}
+ASYMMETRIC_SEMANTIC_EXPERIMENTS = UNET_SEM_V5_EXPERIMENTS
 VIEWFUS_FUSED_FRONT_KEY = "observation.images.front_fused_semantic"
-SEMANTIC_FEATURE_FUSION_EXPERIMENTS = {"SEM-1-V2", *STAGE_AWARE_EXPERIMENTS}
+SEMANTIC_FEATURE_FUSION_EXPERIMENTS = {"SEM-1-V2", "SSACT-3"}
 SEMANTIC_EXPERIMENTS = {
     "SEM-1",
     "SEM-1-N",
@@ -132,7 +156,11 @@ SEMANTIC_EXPERIMENTS = {
     "VIEWFUS-V1",
     *FROZEN_SEMANTIC_EXPERIMENTS,
 }
-DYNAMIC_SEMANTIC_CLASS_EXPERIMENTS = {"SEM-1-N", "UNET-SEM-V3-F-NOEMB"}
+DYNAMIC_SEMANTIC_CLASS_EXPERIMENTS = {
+    "SEM-1-N",
+    "UNET-SEM-V3-F-NOEMB",
+    *UNET_SEM_V5_EXPERIMENTS,
+}
 ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS = {"ASEM-1"}
 PREDICTIVE_SEMANTIC_EXPERIMENTS = {"SSACT-1"}
 PHASE_CONDITIONED_EXPERIMENTS = {"SSACT-1", *STAGE_AWARE_EXPERIMENTS}
@@ -532,6 +560,7 @@ class MaskActRunConfig:
     n_action_steps: int
     pretrained_backbone_weights: str | None
     pretrained_segmentation_checkpoint: str | None
+    pretrained_segmentation_checkpoints: list[str] | None
     identity_embedding_gate_init: float
     canonical_mask_definition: list[str]
     no_gripper: bool
@@ -579,6 +608,7 @@ class MaskActRunConfig:
     stage_relation_loss_weight: float
     stage_attention_regularization_weight: float
     stage_feature_dim: int | None
+    stage_rgb_keys: list[str] | None
     seed: int
 
 
@@ -844,7 +874,12 @@ def _mask_suffix_for_rgb(mask_key: str, rgb_key: str) -> str | None:
     return None
 
 
-def build_mask_layout(rgb_keys: list[str], mask_keys: list[str]) -> tuple[list[str], dict[str, tuple[int, int]]]:
+def build_mask_layout(
+    rgb_keys: list[str],
+    mask_keys: list[str],
+    *,
+    require_shared_suffixes: bool = True,
+) -> tuple[list[str], dict[str, tuple[int, int]]]:
     """Map each target mask key to (rgb view index, shared semantic output index)."""
 
     if len(rgb_keys) == 1:
@@ -871,22 +906,64 @@ def build_mask_layout(rgb_keys: list[str], mask_keys: list[str]) -> tuple[list[s
         if suffix not in suffixes:
             suffixes.append(suffix)
 
-    missing_pairs = []
-    for rgb_key in rgb_keys:
-        for suffix in suffixes:
-            expected = f"{rgb_key}_{suffix}"
-            if expected not in mask_keys:
-                missing_pairs.append(expected)
-    if missing_pairs:
-        raise ValueError(
-            "Multi-view MaskACT expects the same semantic mask suffixes for every RGB view. "
-            f"Missing: {missing_pairs}"
-        )
+    if require_shared_suffixes:
+        missing_pairs = []
+        for rgb_key in rgb_keys:
+            for suffix in suffixes:
+                expected = f"{rgb_key}_{suffix}"
+                if expected not in mask_keys:
+                    missing_pairs.append(expected)
+        if missing_pairs:
+            raise ValueError(
+                "Multi-view MaskACT expects the same semantic mask suffixes for every RGB view. "
+                f"Missing: {missing_pairs}"
+            )
 
     suffix_to_idx = {suffix: idx for idx, suffix in enumerate(suffixes)}
     return suffixes, {
         key: (view_idx, suffix_to_idx[suffix]) for key, (view_idx, suffix) in key_to_view_suffix.items()
     }
+
+
+def build_mask_layout_for_experiment(
+    experiment: str,
+    rgb_keys: list[str],
+    mask_keys: list[str],
+) -> tuple[list[str], dict[str, tuple[int, int]]]:
+    return build_mask_layout(
+        rgb_keys,
+        mask_keys,
+        require_shared_suffixes=experiment.upper() not in ASYMMETRIC_SEMANTIC_EXPERIMENTS,
+    )
+
+
+def semantic_suffixes_by_view(
+    rgb_keys: list[str],
+    mask_keys: list[str],
+) -> list[list[str]]:
+    if len(rgb_keys) == 1 and not any(
+        _mask_suffix_for_rgb(key, rgb_keys[0]) is not None for key in mask_keys
+    ):
+        # Preserve legacy single-view binary-mask experiments whose target keys
+        # are independent feature names rather than '<rgb-key>_<semantic>'.
+        return [list(mask_keys)]
+    per_view: list[list[str]] = [[] for _ in rgb_keys]
+    for key in mask_keys:
+        matches = [
+            (view_idx, suffix)
+            for view_idx, rgb_key in enumerate(rgb_keys)
+            if (suffix := _mask_suffix_for_rgb(key, rgb_key)) is not None
+        ]
+        if len(matches) != 1:
+            raise ValueError(f"Could not assign semantic mask key '{key}' to one RGB view.")
+        view_idx, suffix = matches[0]
+        if suffix in per_view[view_idx]:
+            raise ValueError(f"Duplicate semantic suffix '{suffix}' for RGB view '{rgb_keys[view_idx]}'.")
+        per_view[view_idx].append(suffix)
+    if any(not suffixes for suffixes in per_view):
+        missing = [rgb_keys[idx] for idx, suffixes in enumerate(per_view) if not suffixes]
+        raise ValueError(f"Every RGB view needs at least one semantic class; missing {missing}.")
+    return per_view
 
 
 def find_semantic_mask_index(mask_keys: list[str], semantic_name: str) -> int:
@@ -951,6 +1028,8 @@ class MaskACTPolicy(nn.Module):
         stage_attention_regularization_weight: float,
         pretrained_backbone_weights: str | None,
         pretrained_segmentation_checkpoint: str | Path | None,
+        pretrained_segmentation_checkpoints: list[str | Path] | None,
+        stage_rgb_keys: list[str] | None,
         mask_quality_weighting: str = "hard",
         mask_quality_full_score: float = 0.95,
         mask_quality_weight_gamma: float = 1.0,
@@ -962,7 +1041,17 @@ class MaskACTPolicy(nn.Module):
         self.rgb_keys = rgb_keys
         self.rgb_key = rgb_keys[0]
         self.mask_keys = mask_keys
-        self.mask_suffixes, self.mask_key_map = build_mask_layout(rgb_keys, mask_keys)
+        self.mask_suffixes, self.mask_key_map = build_mask_layout_for_experiment(
+            self.experiment, rgb_keys, mask_keys
+        )
+        self.view_mask_suffixes = semantic_suffixes_by_view(rgb_keys, mask_keys)
+        self.mask_key_local_map = {
+            key: (
+                view_idx,
+                self.view_mask_suffixes[view_idx].index(self.mask_suffixes[global_suffix_idx]),
+            )
+            for key, (view_idx, global_suffix_idx) in self.mask_key_map.items()
+        }
         self.stats = stats
         self.latent_dim = latent_dim
         self.seg_loss_weight = seg_loss_weight
@@ -990,6 +1079,13 @@ class MaskACTPolicy(nn.Module):
         self.phase_teacher_forcing_steps = phase_teacher_forcing_steps
         self.phase_teacher_forcing_ramp_steps = phase_teacher_forcing_ramp_steps
         self.stage_feature_dim = stage_feature_dim
+        self.stage_rgb_keys = list(stage_rgb_keys or rgb_keys)
+        missing_stage_views = [key for key in self.stage_rgb_keys if key not in self.rgb_keys]
+        if missing_stage_views:
+            raise ValueError(
+                f"Stage RGB keys {missing_stage_views} are not policy RGB inputs {self.rgb_keys}."
+            )
+        self.stage_view_indices = [self.rgb_keys.index(key) for key in self.stage_rgb_keys]
         self.stage_conditioning_mode = stage_conditioning_mode
         self.stage_predicted_input_warmup_steps = stage_predicted_input_warmup_steps
         self.stage_predicted_input_ramp_steps = stage_predicted_input_ramp_steps
@@ -1108,14 +1204,39 @@ class MaskACTPolicy(nn.Module):
             len(self.mask_suffixes) + 1 if self.uses_semantic_maps() else len(self.mask_suffixes)
         )
         self.pretrained_segmenter = None
+        self.pretrained_segmenters = None
         if self.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
-            if pretrained_segmentation_checkpoint is None:
-                raise ValueError(f"{self.experiment} requires a pretrained segmentation checkpoint.")
-            expected_labels = ("background", *self.mask_suffixes)
-            self.pretrained_segmenter = FrozenTinyUNetSegmenter(
-                pretrained_segmentation_checkpoint,
-                expected_labels=expected_labels,
-            )
+            if self.experiment in UNET_SEM_V5_EXPERIMENTS:
+                if not pretrained_segmentation_checkpoints:
+                    raise ValueError(
+                        f"{self.experiment} requires one pretrained segmentation checkpoint per RGB view."
+                    )
+                if len(pretrained_segmentation_checkpoints) != len(self.rgb_keys):
+                    raise ValueError(
+                        f"{self.experiment} has {len(self.rgb_keys)} RGB views but received "
+                        f"{len(pretrained_segmentation_checkpoints)} segmentation checkpoints."
+                    )
+                self.pretrained_segmenters = nn.ModuleList(
+                    [
+                        FrozenTinyUNetSegmenter(
+                            checkpoint,
+                            expected_labels=("background", *suffixes),
+                        )
+                        for checkpoint, suffixes in zip(
+                            pretrained_segmentation_checkpoints,
+                            self.view_mask_suffixes,
+                            strict=True,
+                        )
+                    ]
+                )
+            else:
+                if pretrained_segmentation_checkpoint is None:
+                    raise ValueError(f"{self.experiment} requires a pretrained segmentation checkpoint.")
+                expected_labels = ("background", *self.mask_suffixes)
+                self.pretrained_segmenter = FrozenTinyUNetSegmenter(
+                    pretrained_segmentation_checkpoint,
+                    expected_labels=expected_labels,
+                )
             self.seg_net = None
         else:
             self.seg_net = UNetSegNet(
@@ -1159,6 +1280,13 @@ class MaskACTPolicy(nn.Module):
             class_weights = [SEMANTIC_CLASS_WEIGHT_BY_NAME["background"]]
             class_weights.extend(SEMANTIC_CLASS_WEIGHT_BY_NAME[suffix] for suffix in self.mask_suffixes)
             self.register_buffer("semantic_palette", torch.tensor(palette, dtype=torch.float32))
+            self._semantic_palette_buffer_names: list[str] = []
+            for view_idx, suffixes in enumerate(self.view_mask_suffixes):
+                name = f"semantic_palette_view_{view_idx}"
+                view_palette = [palette_by_class["background"]]
+                view_palette.extend(palette_by_class[suffix] for suffix in suffixes)
+                self.register_buffer(name, torch.tensor(view_palette, dtype=torch.float32))
+                self._semantic_palette_buffer_names.append(name)
             self.register_buffer("semantic_class_weights", torch.tensor(class_weights, dtype=torch.float32))
             self.register_buffer("semantic_visual_mean", torch.tensor(IMAGENET_VISUAL_MEAN).view(1, 3, 1, 1))
             self.register_buffer("semantic_visual_std", torch.tensor(IMAGENET_VISUAL_STD).view(1, 3, 1, 1))
@@ -1211,7 +1339,7 @@ class MaskACTPolicy(nn.Module):
             )
         if self.experiment in STAGE_AWARE_EXPERIMENTS:
             self.semantic_state_extractor = SoftSemanticStateExtractor(include_confidence=True)
-            view_names = [key.rsplit(".", 1)[-1] for key in self.rgb_keys]
+            view_names = [key.rsplit(".", 1)[-1] for key in self.stage_rgb_keys]
             self.semantic_state_names = self.semantic_state_extractor.feature_names(view_names)
             if len(self.semantic_state_names) != self.stage_feature_dim:
                 raise ValueError(
@@ -1432,7 +1560,7 @@ class MaskACTPolicy(nn.Module):
         return torch.cat(
             [
                 logits_by_view[view_idx][:, suffix_idx : suffix_idx + 1]
-                for view_idx, suffix_idx in (self.mask_key_map[key] for key in self.mask_keys)
+                for view_idx, suffix_idx in (self.mask_key_local_map[key] for key in self.mask_keys)
             ],
             dim=1,
         )
@@ -1555,7 +1683,7 @@ class MaskACTPolicy(nn.Module):
                     stage_context=stage_context,
                     stage_confidence=stage_confidence,
                 )
-            else:
+            elif self.experiment not in STAGE_V5_RGB_ONLY_EXPERIMENTS:
                 semantic_maps = self.semantic_rgb_maps(probabilities_for_act)
                 self._prepared_inference_semantic_input = {
                     semantic_image_key(rgb_key): (
@@ -1750,7 +1878,10 @@ class MaskACTPolicy(nn.Module):
     def semantic_states_from_probabilities(self, probabilities_by_view: list[Tensor]) -> Tensor:
         if self.semantic_state_extractor is None:
             raise RuntimeError("Structured semantic states are not enabled for this experiment.")
-        state = self.semantic_state_extractor(self.semantic_control_probabilities(probabilities_by_view))
+        view_indices = self.stage_view_indices if self.experiment in STAGE_AWARE_EXPERIMENTS else None
+        state = self.semantic_state_extractor(
+            self.semantic_control_probabilities(probabilities_by_view, view_indices=view_indices)
+        )
         return self.apply_semantic_state_reliability(state)
 
     def apply_semantic_state_reliability(self, state: Tensor) -> Tensor:
@@ -1782,13 +1913,23 @@ class MaskACTPolicy(nn.Module):
         gate_tensor = torch.stack(state_gates).to(device=state.device, dtype=state.dtype)
         return state * gate_tensor
 
-    def semantic_control_probabilities(self, probabilities_by_view: list[Tensor]) -> Tensor:
+    def semantic_control_probabilities(
+        self,
+        probabilities_by_view: list[Tensor],
+        *,
+        view_indices: list[int] | None = None,
+    ) -> Tensor:
         control_order = ("occluder", "object", "region", "tool")
-        class_indices = [self.mask_suffixes.index(name) + 1 for name in control_order]
-        return torch.stack(
-            [probabilities[:, class_indices] for probabilities in probabilities_by_view],
-            dim=1,
-        )
+        selected = list(range(len(probabilities_by_view))) if view_indices is None else view_indices
+        control_views = []
+        for view_idx in selected:
+            suffixes = self.view_mask_suffixes[view_idx]
+            missing = [name for name in control_order if name not in suffixes]
+            if missing:
+                raise ValueError(f"View {self.rgb_keys[view_idx]} lacks stage classes {missing}.")
+            class_indices = [suffixes.index(name) + 1 for name in control_order]
+            control_views.append(probabilities_by_view[view_idx][:, class_indices])
+        return torch.stack(control_views, dim=1)
 
     def phase_features_from_probabilities(self, probabilities_by_view: list[Tensor]) -> Tensor:
         if self.phase_feature_extractor is None:
@@ -1838,10 +1979,16 @@ class MaskACTPolicy(nn.Module):
         ]
 
     def semantic_rgb_maps(self, probabilities_by_view: list[Tensor]) -> list[Tensor]:
-        return [
-            torch.einsum("bkhw,kc->bchw", probabilities, self.semantic_palette)
-            for probabilities in probabilities_by_view
-        ]
+        maps = []
+        for view_idx, probabilities in enumerate(probabilities_by_view):
+            palette = getattr(self, self._semantic_palette_buffer_names[view_idx])
+            if probabilities.shape[1] != palette.shape[0]:
+                raise ValueError(
+                    f"View {self.rgb_keys[view_idx]} probabilities have {probabilities.shape[1]} classes, "
+                    f"but its palette has {palette.shape[0]}."
+                )
+            maps.append(torch.einsum("bkhw,kc->bchw", probabilities, palette))
+        return maps
 
     def semantic_probabilities_for_act(self, probabilities_by_view: list[Tensor]) -> list[Tensor]:
         """Apply static view/class reliability without changing segmentation supervision."""
@@ -1865,7 +2012,7 @@ class MaskACTPolicy(nn.Module):
         return torch.cat(
             [
                 probabilities_by_view[view_idx][:, suffix_idx + 1 : suffix_idx + 2]
-                for view_idx, suffix_idx in (self.mask_key_map[key] for key in self.mask_keys)
+                for view_idx, suffix_idx in (self.mask_key_local_map[key] for key in self.mask_keys)
             ],
             dim=1,
         )
@@ -1953,9 +2100,15 @@ class MaskACTPolicy(nn.Module):
 
     def predict_view_logits_and_latent_from_rgbs(self, rgbs: list[Tensor]) -> tuple[list[Tensor], Tensor]:
         if self.uses_frozen_semantic_segmenter():
-            if self.pretrained_segmenter is None:
-                raise RuntimeError(f"{self.experiment} pretrained segmenter is missing.")
-            probabilities_by_view = [self.pretrained_segmenter(rgb) for rgb in rgbs]
+            if self.pretrained_segmenters is not None:
+                probabilities_by_view = [
+                    segmenter(rgb)
+                    for segmenter, rgb in zip(self.pretrained_segmenters, rgbs, strict=True)
+                ]
+            else:
+                if self.pretrained_segmenter is None:
+                    raise RuntimeError(f"{self.experiment} pretrained segmenter is missing.")
+                probabilities_by_view = [self.pretrained_segmenter(rgb) for rgb in rgbs]
             logits_by_view = [probabilities.clamp_min(1e-8).log() for probabilities in probabilities_by_view]
             empty_latent = rgbs[0].new_zeros((rgbs[0].shape[0], 0))
             return logits_by_view, empty_latent
@@ -2234,7 +2387,11 @@ class MaskACTPolicy(nn.Module):
                     + self.stage_transition_loss_weight * stage_loss_terms["transition"]
                     + self.stage_relation_loss_weight * stage_loss_terms["relation"]
                 )
-                attention_regularization = self.semantic_adapter.attention_regularization()
+                attention_regularization = (
+                    self.semantic_adapter.attention_regularization()
+                    if isinstance(self.semantic_adapter, PhaseConditionedSemanticAdapter)
+                    else stage_total_loss.new_zeros(())
+                )
                 stage_total_loss = (
                     stage_total_loss
                     + self.stage_attention_regularization_weight * attention_regularization
@@ -2334,7 +2491,7 @@ class MaskACTPolicy(nn.Module):
                     "semantic_fusion_scale": semantic_fusion_scale,
                     "semantic_residual_rms": float(residual_rms.cpu()),
                 }
-            else:
+            elif self.experiment not in STAGE_V5_RGB_ONLY_EXPERIMENTS:
                 semantic_maps = self.semantic_rgb_maps(probabilities_for_act)
                 if (
                     self.experiment not in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS
@@ -2661,6 +2818,12 @@ def parse_args() -> argparse.Namespace:
             "VIEWFUS-V1",
             "UNET-SEM",
             "UNET-SEM-V3-F-NOEMB",
+            "UNET-SEM-V5",
+            "UNET-SEM-V5-FS",
+            "STAGE-V5-F-RGB",
+            "STAGE-V5-FS-RGB",
+            "STAGE-V5-F-UNETSEM",
+            "STAGE-V5-FS-UNETSEM",
         ],
         required=True,
     )
@@ -2872,6 +3035,16 @@ def parse_args() -> argparse.Namespace:
         help="Frozen five-class TinyUNet checkpoint required by UNET-SEM.",
     )
     parser.add_argument(
+        "--pretrained-segmentation-checkpoints",
+        type=Path,
+        nargs="+",
+        default=None,
+        help=(
+            "View-aligned frozen TinyUNet checkpoints for UNET-SEM-V5 and STAGE-V5. "
+            "Supply one path for each ordered --rgb-keys entry."
+        ),
+    )
+    parser.add_argument(
         "--identity-embedding-gate-init",
         type=float,
         default=0.01,
@@ -2984,7 +3157,7 @@ def normalize_dataset_keys(args: argparse.Namespace, source_root: Path) -> None:
             f"Available image keys: {image_keys}"
         )
 
-    build_mask_layout(args.rgb_keys, list(args.mask_target_keys))
+    build_mask_layout_for_experiment(args.experiment, args.rgb_keys, list(args.mask_target_keys))
 
     if list(args.mask_target_keys) == CANONICAL_SEMANTIC_MASK_KEYS:
         return
@@ -3031,6 +3204,10 @@ def reshape_visual_stats_for_channel_first(
 def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     experiment = args.experiment.upper()
     semantic_keys = [semantic_image_key(rgb_key) for rgb_key in args.rgb_keys]
+    if experiment in STAGE_V5_RGB_ONLY_EXPERIMENTS:
+        return list(args.rgb_keys)
+    if experiment in {*UNET_SEM_V5_ONLY_EXPERIMENTS, *STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS}:
+        return [*semantic_keys, *args.rgb_keys]
     if experiment in {"SEM-1", "SEM-1-N", "ASEM-1", "SSACT-1", *FROZEN_SEMANTIC_EXPERIMENTS}:
         return [*semantic_keys, *args.rgb_keys]
     if experiment in {"SEM-1-V2", "SSACT-3"}:
@@ -3217,6 +3394,7 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         phase_teacher_forcing_steps=getattr(args, "phase_teacher_forcing_steps", 10_000),
         phase_teacher_forcing_ramp_steps=getattr(args, "phase_teacher_forcing_ramp_steps", 20_000),
         stage_feature_dim=getattr(args, "stage_feature_dim", None),
+        stage_rgb_keys=getattr(args, "stage_rgb_keys", None),
         stage_conditioning_mode=getattr(args, "stage_conditioning_mode", "attention-film"),
         stage_predicted_input_warmup_steps=getattr(
             args, "stage_predicted_input_warmup_steps", 20_000
@@ -3232,6 +3410,7 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         ),
         pretrained_backbone_weights=args.pretrained_backbone_weights,
         pretrained_segmentation_checkpoint=getattr(args, "pretrained_segmentation_checkpoint", None),
+        pretrained_segmentation_checkpoints=getattr(args, "pretrained_segmentation_checkpoints", None),
         mask_quality_weighting=getattr(args, "mask_quality_weighting", "hard"),
         mask_quality_full_score=getattr(args, "mask_quality_full_score", 0.95),
         mask_quality_weight_gamma=getattr(args, "mask_quality_weight_gamma", 1.0),
@@ -3307,6 +3486,7 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         stage_relation_loss_weight=args.stage_relation_loss_weight,
         stage_attention_regularization_weight=args.stage_attention_regularization_weight,
         stage_feature_dim=args.stage_feature_dim,
+        stage_rgb_keys=args.stage_rgb_keys,
         seed=args.seed,
         chunk_size=args.chunk_size,
         n_action_steps=args.n_action_steps,
@@ -3314,6 +3494,11 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         pretrained_segmentation_checkpoint=(
             str(args.pretrained_segmentation_checkpoint)
             if args.pretrained_segmentation_checkpoint is not None
+            else None
+        ),
+        pretrained_segmentation_checkpoints=(
+            [str(path) for path in args.pretrained_segmentation_checkpoints]
+            if args.pretrained_segmentation_checkpoints is not None
             else None
         ),
         identity_embedding_gate_init=args.identity_embedding_gate_init,
@@ -3342,14 +3527,33 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
             }
         if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
             camera_ids, modality_ids = act_identity_ids_for_experiment(args)
-            mask_suffixes, _ = build_mask_layout(list(args.rgb_keys), list(args.mask_target_keys))
+            mask_suffixes, _ = build_mask_layout_for_experiment(
+                args.experiment, list(args.rgb_keys), list(args.mask_target_keys)
+            )
             identity_embeddings_enabled = (
                 args.experiment.upper() in IDENTITY_EMBEDDED_FROZEN_SEMANTIC_EXPERIMENTS
             )
             payload["frozen_semantic_input"] = {
-                "segmentation_checkpoint": str(args.pretrained_segmentation_checkpoint),
+                "segmentation_checkpoint": (
+                    str(args.pretrained_segmentation_checkpoint)
+                    if args.pretrained_segmentation_checkpoint is not None
+                    else None
+                ),
+                "segmentation_checkpoints": (
+                    [str(path) for path in args.pretrained_segmentation_checkpoints]
+                    if args.pretrained_segmentation_checkpoints is not None
+                    else None
+                ),
                 "segmentation_trainable": False,
-                "representation": f"{len(mask_suffixes) + 1}_class_softmax_to_semantic_rgb",
+                "representation": "view_specific_softmax_to_semantic_rgb",
+                "semantic_classes_by_view": {
+                    key: ["background", *suffixes]
+                    for key, suffixes in zip(
+                        args.rgb_keys,
+                        semantic_suffixes_by_view(args.rgb_keys, args.mask_target_keys),
+                        strict=True,
+                    )
+                },
                 "shared_visual_backbone": True,
                 "image_camera_ids": camera_ids,
                 "image_modality_ids": modality_ids,
@@ -3384,7 +3588,9 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
             with open(quality_summary_path) as quality_summary_file:
                 payload["mask_quality_summary"] = json.load(quality_summary_file)
         if args.experiment in SEMANTIC_EXPERIMENTS:
-            mask_suffixes, _ = build_mask_layout(list(args.rgb_keys), list(args.mask_target_keys))
+            mask_suffixes, _ = build_mask_layout_for_experiment(
+                args.experiment, list(args.rgb_keys), list(args.mask_target_keys)
+            )
             palette_by_class = semantic_palette_for_experiment(args.experiment)
             payload["semantic_classes"] = ["background", *mask_suffixes]
             payload["semantic_palette_rgb"] = {
@@ -3441,9 +3647,10 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
                 payload["relation_names"] = list(STAGE_RELATION_NAMES)
                 payload["semantic_state_names"] = list(
                     SoftSemanticStateExtractor(include_confidence=True).feature_names(
-                        [key.rsplit(".", 1)[-1] for key in args.rgb_keys]
+                        [key.rsplit(".", 1)[-1] for key in args.stage_rgb_keys]
                     )
                 )
+                payload["stage_rgb_keys"] = list(args.stage_rgb_keys)
                 stage_summary_path = args.stage_supervision.with_suffix(".json")
                 if not stage_summary_path.is_file():
                     raise FileNotFoundError(
@@ -3541,10 +3748,11 @@ def save_mask_preview(checkpoint_dir: Path, step: int, model: MaskACTPolicy, raw
         for view_idx, rgb_key in enumerate(model.rgb_keys):
             view_name = rgb_key.rsplit(".", 1)[-1]
             hard_prediction = probabilities_by_view[view_idx].argmax(dim=1)
-            hard_map = model.semantic_palette[hard_prediction].permute(0, 3, 1, 2)
+            view_palette = getattr(model, model._semantic_palette_buffer_names[view_idx])
+            hard_map = view_palette[hard_prediction].permute(0, 3, 1, 2)
             tiles.append(make_labeled_tile(raw_batch[rgb_key][0], f"rgb {view_name}"))
             if targets_by_view is not None:
-                gt_map = model.semantic_palette[targets_by_view[view_idx]].permute(0, 3, 1, 2)
+                gt_map = view_palette[targets_by_view[view_idx]].permute(0, 3, 1, 2)
                 tiles.append(make_labeled_tile(gt_map[0], f"gt semantic {view_name}"))
             tiles.extend(
                 [
@@ -3723,26 +3931,60 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             raise ValueError(
                 f"{args.experiment} requires exactly ['observation.images.front']; got {args.rgb_keys}."
             )
-    if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
-        if args.pretrained_segmentation_checkpoint is None:
+    if args.experiment.upper() in UNET_SEM_V5_EXPERIMENTS:
+        expected_views = 1 if "-F-" in args.experiment.upper() else 2
+        if args.experiment.upper() in UNET_SEM_V5_ONLY_EXPERIMENTS:
+            expected_views = 2
+        if len(args.rgb_keys) != expected_views:
             raise ValueError(
-                f"{args.experiment} requires --pretrained-segmentation-checkpoint."
+                f"{args.experiment} requires {expected_views} ordered RGB view(s); got {args.rgb_keys}."
             )
-        args.pretrained_segmentation_checkpoint = (
-            args.pretrained_segmentation_checkpoint.expanduser().resolve()
-        )
-        if not args.pretrained_segmentation_checkpoint.is_file():
-            raise FileNotFoundError(
-                f"Pretrained segmentation checkpoint not found: {args.pretrained_segmentation_checkpoint}"
+        if args.rgb_keys[0] != "observation.images.front":
+            raise ValueError(
+                f"{args.experiment} requires observation.images.front as its first/primary view; "
+                f"got {args.rgb_keys}."
             )
+        if expected_views == 2 and args.rgb_keys[1] != "observation.images.side":
+            raise ValueError(
+                f"{args.experiment} requires observation.images.side as its second view; got {args.rgb_keys}."
+            )
+    if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
+        if args.experiment.upper() in UNET_SEM_V5_EXPERIMENTS:
+            if not args.pretrained_segmentation_checkpoints:
+                raise ValueError(
+                    f"{args.experiment} requires --pretrained-segmentation-checkpoints."
+                )
+            args.pretrained_segmentation_checkpoints = [
+                path.expanduser().resolve() for path in args.pretrained_segmentation_checkpoints
+            ]
+            missing = [path for path in args.pretrained_segmentation_checkpoints if not path.is_file()]
+            if missing:
+                raise FileNotFoundError(f"Pretrained segmentation checkpoints not found: {missing}")
+            if len(args.pretrained_segmentation_checkpoints) != len(args.rgb_keys):
+                raise ValueError(
+                    f"{args.experiment} requires one segmentation checkpoint per RGB view; "
+                    f"got {len(args.pretrained_segmentation_checkpoints)} for {len(args.rgb_keys)} views."
+                )
+        else:
+            if args.pretrained_segmentation_checkpoint is None:
+                raise ValueError(
+                    f"{args.experiment} requires --pretrained-segmentation-checkpoint."
+                )
+            args.pretrained_segmentation_checkpoint = (
+                args.pretrained_segmentation_checkpoint.expanduser().resolve()
+            )
+            if not args.pretrained_segmentation_checkpoint.is_file():
+                raise FileNotFoundError(
+                    f"Pretrained segmentation checkpoint not found: {args.pretrained_segmentation_checkpoint}"
+                )
         if args.identity_embedding_gate_init < 0:
             raise ValueError("--identity-embedding-gate-init must be non-negative.")
     load_viewfusion_homography(args)
-    mask_suffixes, _ = build_mask_layout(list(args.rgb_keys), list(args.mask_target_keys))
-    if (
-        args.experiment in (PREDICTIVE_SEMANTIC_EXPERIMENTS | STAGE_AWARE_EXPERIMENTS)
-        and mask_suffixes != list(SEMANTIC_CLASSES)
-    ):
+    mask_suffixes, _ = build_mask_layout_for_experiment(
+        args.experiment, list(args.rgb_keys), list(args.mask_target_keys)
+    )
+    fixed_stage_layout_experiments = PREDICTIVE_SEMANTIC_EXPERIMENTS | {"SSACT-3"}
+    if args.experiment in fixed_stage_layout_experiments and mask_suffixes != list(SEMANTIC_CLASSES):
         raise ValueError(
             f"{args.experiment} mask order must be {list(SEMANTIC_CLASSES)} so offline states align; "
             f"got {mask_suffixes}."
@@ -3794,7 +4036,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         raise ValueError("--phase-labels is currently only used by SSACT-1.")
     if args.experiment in STAGE_AWARE_EXPERIMENTS and args.stage_supervision is None:
         raise ValueError(
-            "SSACT-3 requires --stage-supervision from mycode/generate_stage_supervision.py."
+            f"{args.experiment} requires --stage-supervision from mycode/generate_stage_supervision.py."
         )
     if args.stage_supervision is not None and args.experiment not in STAGE_AWARE_EXPERIMENTS:
         raise ValueError("--stage-supervision is currently only used by SSACT-3.")
@@ -3835,20 +4077,27 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             history_length=args.phase_history_length,
             history_stride=args.phase_history_stride,
         )
-        if stage_store.num_views != len(args.rgb_keys):
-            raise ValueError(
-                f"Stage supervision has {stage_store.num_views} views but training uses "
-                f"{len(args.rgb_keys)}."
-            )
         cached_rgb_keys = stage_store.rgb_keys.astype(str).tolist()
-        if cached_rgb_keys != list(args.rgb_keys):
-            raise ValueError(
-                f"Stage supervision RGB keys {cached_rgb_keys} do not match training keys "
-                f"{list(args.rgb_keys)}."
-            )
+        if args.experiment == "SSACT-3":
+            if cached_rgb_keys != list(args.rgb_keys):
+                raise ValueError(
+                    f"Stage supervision RGB keys {cached_rgb_keys} do not match training keys "
+                    f"{list(args.rgb_keys)}."
+                )
+        else:
+            if cached_rgb_keys != ["observation.images.front"]:
+                raise ValueError(
+                    f"{args.experiment} requires front-only stage supervision; got {cached_rgb_keys}."
+                )
+            if any(key not in args.rgb_keys for key in cached_rgb_keys):
+                raise ValueError(
+                    f"Stage supervision views {cached_rgb_keys} are not available in {args.rgb_keys}."
+                )
+        args.stage_rgb_keys = cached_rgb_keys
         args.stage_feature_dim = stage_store.feature_dim
     else:
         args.stage_feature_dim = None
+        args.stage_rgb_keys = None
 
     image_keys_in_view = sorted(
         {
@@ -3972,12 +4221,25 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             f"minimum embedded quality score={semantic_state_store.minimum_quality_score:g}."
         )
     if args.experiment in SEMANTIC_EXPERIMENTS:
-        print(f"Semantic classes: {['background', *build_mask_layout(args.rgb_keys, args.mask_target_keys)[0]]}")
+        semantic_suffixes, _ = build_mask_layout_for_experiment(
+            args.experiment, args.rgb_keys, args.mask_target_keys
+        )
+        print(f"Semantic classes: {['background', *semantic_suffixes]}")
         if args.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
             camera_ids, modality_ids = act_identity_ids_for_experiment(args)
+            segmentation_sources = (
+                args.pretrained_segmentation_checkpoints
+                if args.pretrained_segmentation_checkpoints is not None
+                else [args.pretrained_segmentation_checkpoint]
+            )
+            semantic_input_note = (
+                "Semantic maps are used only by the stage head; ACT receives RGB plus phase probabilities."
+                if args.experiment in STAGE_V5_RGB_ONLY_EXPERIMENTS
+                else "Soft semantic RGB maps and RGB share ACT ResNet18."
+            )
             print(
-                f"Frozen segmentation: {args.pretrained_segmentation_checkpoint}; no segmentation "
-                "parameters or losses are trained. Soft semantic RGB maps and RGB share ACT ResNet18."
+                f"Frozen segmentation: {segmentation_sources}; no segmentation "
+                f"parameters or losses are trained. {semantic_input_note}"
             )
             if args.experiment in IDENTITY_EMBEDDED_FROZEN_SEMANTIC_EXPERIMENTS:
                 print(
@@ -4037,9 +4299,15 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 f"view/class reliability={args.phase_feature_reliability}."
             )
         if args.experiment in STAGE_AWARE_EXPERIMENTS:
+            conditioning_description = (
+                "phase_probability_env_token"
+                if args.experiment in STAGE_V5_EXPERIMENTS
+                else args.stage_conditioning_mode
+            )
             print(
                 "Stage model: event-derived expose/separate/transport/restore/done supervision; "
-                f"conditioning={args.stage_conditioning_mode}; history={args.phase_history_length}x"
+                f"conditioning={conditioning_description}; stage_views={args.stage_rgb_keys}; "
+                f"history={args.phase_history_length}x"
                 f"{args.phase_history_stride}; predicted-input warmup/ramp="
                 f"{args.stage_predicted_input_warmup_steps}/{args.stage_predicted_input_ramp_steps}; "
                 f"phase teacher forcing={args.phase_teacher_forcing_steps} + "

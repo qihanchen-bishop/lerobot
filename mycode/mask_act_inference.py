@@ -21,6 +21,7 @@ from train_mask_act_policy import (
     SEMANTIC_EXPERIMENTS,
     VIEW_FUSION_EXPERIMENTS,
     VIEWFUS_FUSED_FRONT_KEY,
+    UNET_SEM_V5_EXPERIMENTS,
     act_image_keys_for_experiment,
     make_policy,
     reshape_visual_stats_for_channel_first,
@@ -188,20 +189,43 @@ def load_mask_act_for_inference(
     # Loading the checkpoint replaces these weights, so avoid an unnecessary network download.
     args.pretrained_backbone_weights = None
     if str(args.experiment).upper() in FROZEN_SEMANTIC_EXPERIMENTS:
-        configured_segmenter = Path(args.pretrained_segmentation_checkpoint).expanduser()
-        if not configured_segmenter.is_file():
-            segmenter_version = (
-                "seg_v3"
-                if str(args.experiment).upper() == "UNET-SEM-V3-F-NOEMB"
-                else "seg_v2"
-            )
-            bundled_segmenter = project_root / "mycode" / "tool" / segmenter_version / "best.pt"
-            if not bundled_segmenter.is_file():
-                raise FileNotFoundError(
-                    "Frozen semantic segmentation checkpoint is unavailable at both the recorded path "
-                    f"({configured_segmenter}) and bundled path ({bundled_segmenter})."
+        if str(args.experiment).upper() in UNET_SEM_V5_EXPERIMENTS:
+            configured = [
+                Path(path).expanduser()
+                for path in getattr(args, "pretrained_segmentation_checkpoints", []) or []
+            ]
+            if len(configured) != len(args.rgb_keys) or any(not path.is_file() for path in configured):
+                model_root = metadata_root / "models"
+                fallback_by_view = {
+                    "observation.images.front": model_root / "unet_front_v4_r1" / "best.pt",
+                    "observation.images.side": model_root / "unet_side" / "best.pt",
+                }
+                configured = [fallback_by_view[key] for key in args.rgb_keys]
+                missing = [path for path in configured if not path.is_file()]
+                if missing:
+                    raise FileNotFoundError(
+                        "Frozen view-specific segmentation checkpoints are unavailable at the recorded "
+                        f"paths and dataset model package; missing {missing}."
+                    )
+            args.pretrained_segmentation_checkpoints = [str(path) for path in configured]
+        else:
+            configured_segmenter = Path(args.pretrained_segmentation_checkpoint).expanduser()
+            if configured_segmenter.is_file():
+                configured_segmenter = configured_segmenter.resolve()
+            else:
+                segmenter_version = (
+                    "seg_v3"
+                    if str(args.experiment).upper() == "UNET-SEM-V3-F-NOEMB"
+                    else "seg_v2"
                 )
-            args.pretrained_segmentation_checkpoint = str(bundled_segmenter)
+                bundled_segmenter = project_root / "mycode" / "tool" / segmenter_version / "best.pt"
+                if not bundled_segmenter.is_file():
+                    raise FileNotFoundError(
+                        "Frozen semantic segmentation checkpoint is unavailable at both the recorded path "
+                        f"({configured_segmenter}) and bundled path ({bundled_segmenter})."
+                    )
+                configured_segmenter = bundled_segmenter
+            args.pretrained_segmentation_checkpoint = str(configured_segmenter)
 
     meta = LeRobotDatasetMetadata(args.repo_id, root=metadata_root)
     if run_cfg.get("no_gripper"):
