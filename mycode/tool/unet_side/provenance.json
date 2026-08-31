@@ -1,0 +1,34 @@
+{
+  "dataset_root": "/data/qihan/sam2/segdata/final/bettersetup_v5",
+  "dataset_revision": "side_screw_ep065_r6",
+  "image_keys": [
+    "observation.images.side"
+  ],
+  "labels": [
+    "background",
+    "occluder",
+    "object",
+    "region",
+    "tool"
+  ],
+  "best_epoch": 30,
+  "validation_episodes": [
+    1,
+    10,
+    15,
+    19,
+    26,
+    32,
+    40,
+    42,
+    45,
+    47,
+    58,
+    66,
+    67,
+    72
+  ],
+  "validation_samples": 2819,
+  "split": "episode-disjoint deterministic split",
+  "parameter_count": 104037
+}

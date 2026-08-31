@@ -1,0 +1,64 @@
+{
+  "architecture": "TinyUNet depthwise-separable",
+  "width": 32,
+  "labels": [
+    "background",
+    "occluder",
+    "object",
+    "region",
+    "tool"
+  ],
+  "class_ids": {
+    "background": 0,
+    "occluder": 1,
+    "object": 2,
+    "region": 3,
+    "tool": 4
+  },
+  "palette_rgb": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      64,
+      160,
+      255
+    ],
+    [
+      255,
+      105,
+      97
+    ],
+    [
+      119,
+      221,
+      119
+    ],
+    [
+      255,
+      209,
+      102
+    ]
+  ],
+  "input_size_wh": [
+    480,
+    270
+  ],
+  "input_color": "RGB",
+  "input_scale": "uint8 / 255",
+  "normalization_mean": [
+    0.48500001430511475,
+    0.4560000002384186,
+    0.4059999883174896
+  ],
+  "normalization_std": [
+    0.2290000021457672,
+    0.2240000069141388,
+    0.22499999403953552
+  ],
+  "output": "NCHW logits; argmax over channel gives uint8 class id",
+  "source_checkpoint": "best.pt",
+  "torchscript": "unet_side_torchscript.pt"
+}

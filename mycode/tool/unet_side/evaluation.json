@@ -1,0 +1,119 @@
+{
+  "miou": 0.9692895484526185,
+  "foreground_miou": 0.9636445504194027,
+  "pixel_accuracy": 0.9943637092218149,
+  "per_class": {
+    "background": {
+      "iou": 0.9918695405854818,
+      "precision": 0.9979475359668691,
+      "recall": 0.9938970543083128,
+      "dice": 0.9959181767435791,
+      "ground_truth_pixels": 248245532,
+      "predicted_pixels": 247237950
+    },
+    "occluder": {
+      "iou": 0.9836469162317403,
+      "precision": 0.9876685623047984,
+      "recall": 0.995877512869059,
+      "dice": 0.9917560511225834,
+      "ground_truth_pixels": 105508880,
+      "predicted_pixels": 106385811
+    },
+    "object": {
+      "iou": 0.9289218976982846,
+      "precision": 0.9523735898981517,
+      "recall": 0.9741759099723601,
+      "dice": 0.9631513840002903,
+      "ground_truth_pixels": 1498562,
+      "predicted_pixels": 1532868
+    },
+    "region": {
+      "iou": 0.9859560334884994,
+      "precision": 0.9900958501968321,
+      "recall": 0.9957771226468497,
+      "dice": 0.9929283598052111,
+      "ground_truth_pixels": 7066272,
+      "predicted_pixels": 7106819
+    },
+    "tool": {
+      "iou": 0.9560533542590863,
+      "precision": 0.9686753804541286,
+      "recall": 0.9865541087222153,
+      "dice": 0.9775330025404344,
+      "ground_truth_pixels": 3023154,
+      "predicted_pixels": 3078952
+    }
+  },
+  "confusion_matrix_rows_gt_columns_pred": [
+    [
+      246730503,
+      1309640,
+      56350,
+      56021,
+      93018
+    ],
+    [
+      434121,
+      105073921,
+      511,
+      17,
+      310
+    ],
+    [
+      20744,
+      1180,
+      1459863,
+      14057,
+      2718
+    ],
+    [
+      15447,
+      0,
+      13992,
+      7036432,
+      401
+    ],
+    [
+      37135,
+      1070,
+      2152,
+      292,
+      2982505
+    ]
+  ],
+  "checkpoint": "/data/qihan/sam2/segdata/temp/bettersetup_v5/unet_side_train/best.pt",
+  "checkpoint_epoch": 30,
+  "dataset_root": "/data/qihan/sam2/segdata/final/bettersetup_v5",
+  "image_key": [
+    "observation.images.side"
+  ],
+  "image_size_wh": [
+    480,
+    270
+  ],
+  "frame_stride": 3,
+  "training_samples": 15118,
+  "validation_samples": 2819,
+  "validation_episodes": [
+    1,
+    10,
+    15,
+    19,
+    26,
+    32,
+    40,
+    42,
+    45,
+    47,
+    58,
+    66,
+    67,
+    72
+  ],
+  "split": "episode-disjoint deterministic split",
+  "torchscript_export_test": {
+    "max_abs_logit_difference": 0.0,
+    "argmax_pixel_agreement": 1.0,
+    "passed": true
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+  "input_shape": [
+    1,
+    3,
+    270,
+    480
+  ],
+  "iterations": 300,
+  "mean_latency_ms": 1.2234384869225323,
+  "throughput_fps_batch1": 817.3684338764141
+}

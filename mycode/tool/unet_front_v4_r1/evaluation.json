@@ -1,0 +1,163 @@
+{
+  "miou": 0.9648751387409752,
+  "foreground_miou": 0.9646257214895161,
+  "pixel_accuracy": 0.9865270223220738,
+  "per_class": {
+    "background": {
+      "iou": 0.9663716422497289,
+      "precision": 0.9846953484732416,
+      "recall": 0.9811077380924352,
+      "dice": 0.982898269570346,
+      "ground_truth_pixels": 135491558,
+      "predicted_pixels": 134997912
+    },
+    "occluder": {
+      "iou": 0.989811559984326,
+      "precision": 0.99523561546881,
+      "recall": 0.9945240310848756,
+      "dice": 0.9948796960372699,
+      "ground_truth_pixels": 138064699,
+      "predicted_pixels": 137965984
+    },
+    "object": {
+      "iou": 0.937411070105196,
+      "precision": 0.9594947460846162,
+      "recall": 0.9760357192439465,
+      "dice": 0.9676945533859236,
+      "ground_truth_pixels": 1030033,
+      "predicted_pixels": 1047790
+    },
+    "region": {
+      "iou": 0.9930654487976295,
+      "precision": 0.9957585169903108,
+      "recall": 0.997283971717637,
+      "dice": 0.9965206605701012,
+      "ground_truth_pixels": 28260015,
+      "predicted_pixels": 28303308
+    },
+    "tool": {
+      "iou": 0.9623915955784109,
+      "precision": 0.9694842050113042,
+      "recall": 0.9924556023114711,
+      "dice": 0.9808354232119996,
+      "ground_truth_pixels": 4377818,
+      "predicted_pixels": 4481548
+    },
+    "leftarm": {
+      "iou": 0.9684928887877982,
+      "precision": 0.9805304512837216,
+      "recall": 0.9874827037617391,
+      "dice": 0.9839942976722644,
+      "ground_truth_pixels": 13358396,
+      "predicted_pixels": 13453111
+    },
+    "rightarm": {
+      "iou": 0.936581765683736,
+      "precision": 0.9636824520803756,
+      "recall": 0.9708490735263572,
+      "dice": 0.9672524881520438,
+      "ground_truth_pixels": 44759881,
+      "predicted_pixels": 45092747
+    }
+  },
+  "confusion_matrix_rows_gt_columns_pred": [
+    [
+      132931816,
+      590920,
+      18809,
+      89735,
+      122063,
+      252235,
+      1485980
+    ],
+    [
+      597842,
+      137308661,
+      8,
+      0,
+      6682,
+      9070,
+      142436
+    ],
+    [
+      8061,
+      53,
+      1005349,
+      13076,
+      2641,
+      4,
+      849
+    ],
+    [
+      45501,
+      14,
+      22092,
+      28183260,
+      1993,
+      0,
+      7155
+    ],
+    [
+      26377,
+      3863,
+      1165,
+      615,
+      4344790,
+      0,
+      1008
+    ],
+    [
+      166739,
+      240,
+      2,
+      0,
+      0,
+      13191185,
+      230
+    ],
+    [
+      1221576,
+      62233,
+      365,
+      16622,
+      3379,
+      617,
+      43455089
+    ]
+  ],
+  "checkpoint": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_r1/candidate_ep040.pt",
+  "checkpoint_epoch": 40,
+  "dataset_root": "/data/qihan/sam2/segdata/final/bettersetup_v4",
+  "image_key": [
+    "observation.images.front"
+  ],
+  "image_size_wh": [
+    480,
+    270
+  ],
+  "frame_stride": 3,
+  "training_samples": 15118,
+  "validation_samples": 2819,
+  "validation_episodes": [
+    1,
+    10,
+    15,
+    19,
+    26,
+    32,
+    40,
+    42,
+    45,
+    47,
+    58,
+    66,
+    67,
+    72
+  ],
+  "split": "episode-disjoint deterministic split",
+  "torchscript_export_test": {
+    "max_abs_logit_difference": 0.0,
+    "argmax_pixel_agreement": 1.0,
+    "passed": true
+  }
+}

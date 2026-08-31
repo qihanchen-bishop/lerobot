@@ -1,0 +1,226 @@
+[
+  {
+    "preview": "preview_000_ep001_f00255.png",
+    "validation_sample_index": 85,
+    "episode": 1,
+    "frame": 255,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-001/00255.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-001/00255.png"
+  },
+  {
+    "preview": "preview_001_ep010_f00192.png",
+    "validation_sample_index": 319,
+    "episode": 10,
+    "frame": 192,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-010/00192.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-010/00192.png"
+  },
+  {
+    "preview": "preview_002_ep015_f00210.png",
+    "validation_sample_index": 518,
+    "episode": 15,
+    "frame": 210,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-015/00210.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-015/00210.png"
+  },
+  {
+    "preview": "preview_003_ep019_f00180.png",
+    "validation_sample_index": 718,
+    "episode": 19,
+    "frame": 180,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-019/00180.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-019/00180.png"
+  },
+  {
+    "preview": "preview_004_ep026_f00186.png",
+    "validation_sample_index": 902,
+    "episode": 26,
+    "frame": 186,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-026/00186.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-026/00186.png"
+  },
+  {
+    "preview": "preview_005_ep032_f00228.png",
+    "validation_sample_index": 1102,
+    "episode": 32,
+    "frame": 228,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-032/00228.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-032/00228.png"
+  },
+  {
+    "preview": "preview_006_ep040_f00180.png",
+    "validation_sample_index": 1314,
+    "episode": 40,
+    "frame": 180,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-040/00180.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-040/00180.png"
+  },
+  {
+    "preview": "preview_007_ep042_f00180.png",
+    "validation_sample_index": 1496,
+    "episode": 42,
+    "frame": 180,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-042/00180.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-042/00180.png"
+  },
+  {
+    "preview": "preview_008_ep045_f00231.png",
+    "validation_sample_index": 1694,
+    "episode": 45,
+    "frame": 231,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-045/00231.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-045/00231.png"
+  },
+  {
+    "preview": "preview_009_ep047_f00198.png",
+    "validation_sample_index": 1916,
+    "episode": 47,
+    "frame": 198,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-047/00198.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-047/00198.png"
+  },
+  {
+    "preview": "preview_010_ep058_f00183.png",
+    "validation_sample_index": 2111,
+    "episode": 58,
+    "frame": 183,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-058/00183.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-058/00183.png"
+  },
+  {
+    "preview": "preview_011_ep066_f00204.png",
+    "validation_sample_index": 2303,
+    "episode": 66,
+    "frame": 204,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-066/00204.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-066/00204.png"
+  },
+  {
+    "preview": "preview_012_ep067_f00204.png",
+    "validation_sample_index": 2508,
+    "episode": 67,
+    "frame": 204,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-067/00204.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-067/00204.png"
+  },
+  {
+    "preview": "preview_013_ep072_f00174.png",
+    "validation_sample_index": 2703,
+    "episode": 72,
+    "frame": 174,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-072/00174.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-072/00174.png"
+  },
+  {
+    "preview": "preview_014_ep001_f00510.png",
+    "validation_sample_index": 170,
+    "episode": 1,
+    "frame": 510,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-001/00510.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-001/00510.png"
+  },
+  {
+    "preview": "preview_015_ep010_f00384.png",
+    "validation_sample_index": 383,
+    "episode": 10,
+    "frame": 384,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-010/00384.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-010/00384.png"
+  },
+  {
+    "preview": "preview_016_ep015_f00420.png",
+    "validation_sample_index": 588,
+    "episode": 15,
+    "frame": 420,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-015/00420.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-015/00420.png"
+  },
+  {
+    "preview": "preview_017_ep019_f00363.png",
+    "validation_sample_index": 779,
+    "episode": 19,
+    "frame": 363,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-019/00363.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-019/00363.png"
+  },
+  {
+    "preview": "preview_018_ep026_f00372.png",
+    "validation_sample_index": 964,
+    "episode": 26,
+    "frame": 372,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-026/00372.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-026/00372.png"
+  },
+  {
+    "preview": "preview_019_ep032_f00456.png",
+    "validation_sample_index": 1178,
+    "episode": 32,
+    "frame": 456,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-032/00456.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-032/00456.png"
+  },
+  {
+    "preview": "preview_020_ep040_f00363.png",
+    "validation_sample_index": 1375,
+    "episode": 40,
+    "frame": 363,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-040/00363.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-040/00363.png"
+  },
+  {
+    "preview": "preview_021_ep042_f00360.png",
+    "validation_sample_index": 1556,
+    "episode": 42,
+    "frame": 360,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-042/00360.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-042/00360.png"
+  },
+  {
+    "preview": "preview_022_ep045_f00465.png",
+    "validation_sample_index": 1772,
+    "episode": 45,
+    "frame": 465,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-045/00465.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-045/00465.png"
+  },
+  {
+    "preview": "preview_023_ep047_f00399.png",
+    "validation_sample_index": 1983,
+    "episode": 47,
+    "frame": 399,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-047/00399.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-047/00399.png"
+  },
+  {
+    "preview": "preview_024_ep058_f00369.png",
+    "validation_sample_index": 2173,
+    "episode": 58,
+    "frame": 369,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-058/00369.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-058/00369.png"
+  },
+  {
+    "preview": "preview_025_ep066_f00408.png",
+    "validation_sample_index": 2371,
+    "episode": 66,
+    "frame": 408,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-066/00408.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-066/00408.png"
+  },
+  {
+    "preview": "preview_026_ep067_f00408.png",
+    "validation_sample_index": 2576,
+    "episode": 67,
+    "frame": 408,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-067/00408.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-067/00408.png"
+  },
+  {
+    "preview": "preview_027_ep072_f00348.png",
+    "validation_sample_index": 2761,
+    "episode": 72,
+    "frame": 348,
+    "image_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/images/val/observation.images.front/file-072/00348.jpg",
+    "mask_path": "/data/qihan/sam2/segdata/temp/bettersetup_v4/unet_front_v4_cache_r1/masks/val/observation.images.front/file-072/00348.png"
+  }
+]

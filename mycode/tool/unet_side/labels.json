@@ -1,0 +1,9 @@
+{
+  "labels": [
+    "background",
+    "occluder",
+    "object",
+    "region",
+    "tool"
+  ]
+}
