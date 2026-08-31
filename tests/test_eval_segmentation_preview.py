@@ -44,6 +44,20 @@ class EvalSegmentationPreviewTest(unittest.TestCase):
         self.assertEqual(front_path.parent.name, "seg_v3")
         self.assertEqual(side_path.parent.name, "seg_v2")
 
+    def test_v5_strategies_route_to_latest_view_specific_models(self):
+        for strategy in (
+            "newsetup_UnetSem_FS",
+            "newsetup_Stagev5_Rgb_F",
+            "newsetup_AISatgev5_RGB_F",
+        ):
+            with self.subTest(strategy=strategy):
+                checkpoint = PROJECT_ROOT / f"outputs/train/{strategy}/checkpoint_step_100000"
+
+                front_path, side_path = segmentation_model_paths_for_policy(checkpoint)
+
+                self.assertEqual(front_path.parent.name, "unet_front_v4_r1")
+                self.assertEqual(side_path.parent.name, "unet_side")
+
     def test_view_specific_preview_models_preserve_checkpoint_classes(self):
         cases = (
             (

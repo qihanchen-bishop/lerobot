@@ -196,16 +196,31 @@ def load_mask_act_for_inference(
             ]
             if len(configured) != len(args.rgb_keys) or any(not path.is_file() for path in configured):
                 model_root = metadata_root / "models"
-                fallback_by_view = {
-                    "observation.images.front": model_root / "unet_front_v4_r1" / "best.pt",
-                    "observation.images.side": model_root / "unet_side" / "best.pt",
+                fallback_candidates_by_view = {
+                    "observation.images.front": (
+                        model_root / "unet_front_v4_r1" / "best.pt",
+                        project_root / "mycode" / "tool" / "unet_front_v4_r1" / "best.pt",
+                    ),
+                    "observation.images.side": (
+                        model_root / "unet_side" / "best.pt",
+                        project_root / "mycode" / "tool" / "unet_side" / "best.pt",
+                    ),
                 }
-                configured = [fallback_by_view[key] for key in args.rgb_keys]
-                missing = [path for path in configured if not path.is_file()]
-                if missing:
+                configured = [
+                    next(
+                        (path.resolve() for path in fallback_candidates_by_view[key] if path.is_file()),
+                        fallback_candidates_by_view[key][-1],
+                    )
+                    for key in args.rgb_keys
+                ]
+                missing_views = [
+                    key for key, path in zip(args.rgb_keys, configured, strict=True) if not path.is_file()
+                ]
+                if missing_views:
                     raise FileNotFoundError(
                         "Frozen view-specific segmentation checkpoints are unavailable at the recorded "
-                        f"paths and dataset model package; missing {missing}."
+                        "paths, dataset model package, and bundled project model package; missing views "
+                        f"{missing_views}."
                     )
             args.pretrained_segmentation_checkpoints = [str(path) for path in configured]
         else:

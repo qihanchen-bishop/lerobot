@@ -44,6 +44,10 @@ DEFAULT_CAMERA_READ_MODE = "wait_new_frame"
 SEGMENTATION_V1_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "seg_v1" / "best.pt"
 SEGMENTATION_V2_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "seg_v2" / "best.pt"
 SEGMENTATION_V3_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "seg_v3" / "best.pt"
+SEGMENTATION_FRONT_V4_R1_MODEL_PATH = (
+    Path(__file__).resolve().parent / "tool" / "unet_front_v4_r1" / "best.pt"
+)
+SEGMENTATION_SIDE_V5_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "unet_side" / "best.pt"
 DEFAULT_SEGMENTATION_MODEL_PATH = SEGMENTATION_V1_MODEL_PATH
 SEGMENTATION_OBJECT_PRESENT_MIN_RATIO = 0.001
 SEGMENTATION_SCREW_OBJECT_PRESENT_MIN_RATIO = 0.0008
@@ -59,6 +63,11 @@ DEFAULT_REALSENSE_SERIAL = "239222303378"
 DEFAULT_FRONT_CAMERA_ID = f"v4l2-serial://{DEFAULT_REALSENSE_SERIAL}/rgb"
 DEFAULT_SIDE_CAMERA_ID = "v4l2-serial://202412231836/rgb"
 V4L2_SERIAL_PREFIX = "v4l2-serial://"
+V5_SEGMENTATION_STRATEGIES = {
+    "newsetup_unetsem_fs",
+    "newsetup_stagev5_rgb_f",
+    "newsetup_aisatgev5_rgb_f",
+}
 
 
 def segmentation_model_paths_for_policy(checkpoint_path: str | Path) -> tuple[Path, Path]:
@@ -69,6 +78,8 @@ def segmentation_model_paths_for_policy(checkpoint_path: str | Path) -> tuple[Pa
     except (OSError, ValueError):
         relative_path = path
     strategy_name = relative_path.parts[0] if relative_path.parts else ""
+    if strategy_name.lower() in V5_SEGMENTATION_STRATEGIES:
+        return SEGMENTATION_FRONT_V4_R1_MODEL_PATH, SEGMENTATION_SIDE_V5_MODEL_PATH
     if strategy_name.lower().startswith("newsetup"):
         return SEGMENTATION_V3_MODEL_PATH, SEGMENTATION_V2_MODEL_PATH
     return SEGMENTATION_V1_MODEL_PATH, SEGMENTATION_V1_MODEL_PATH
