@@ -131,8 +131,26 @@ STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS = {
     "STAGE-V5-FS-UNETSEM",
 }
 STAGE_V5_RGB_ONLY_EXPERIMENTS = STAGE_V5_EXPERIMENTS - STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS
+SIMPLE_STAGE_V5_EXPERIMENTS = {
+    "STAGE-SIMPLE-V5-F-RGB",
+    "STAGE-SIMPLE-V5-FS-RGB",
+    "STAGE-SIMPLE-V5-F-UNETSEM",
+    "STAGE-SIMPLE-V5-FS-UNETSEM",
+}
+SIMPLE_STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS = {
+    "STAGE-SIMPLE-V5-F-UNETSEM",
+    "STAGE-SIMPLE-V5-FS-UNETSEM",
+}
+SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS = (
+    SIMPLE_STAGE_V5_EXPERIMENTS - SIMPLE_STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS
+)
+SIMPLE_STAGE_NAMES = ("expose", "separate", "transport", "restore")
 UNET_SEM_V5_ONLY_EXPERIMENTS = {"UNET-SEM-V5", "UNET-SEM-V5-FS"}
-UNET_SEM_V5_EXPERIMENTS = {*UNET_SEM_V5_ONLY_EXPERIMENTS, *STAGE_V5_EXPERIMENTS}
+UNET_SEM_V5_EXPERIMENTS = {
+    *UNET_SEM_V5_ONLY_EXPERIMENTS,
+    *STAGE_V5_EXPERIMENTS,
+    *SIMPLE_STAGE_V5_EXPERIMENTS,
+}
 STAGE_AWARE_EXPERIMENTS = {"SSACT-3", *STAGE_V5_EXPERIMENTS}
 VIEW_FUSION_EXPERIMENTS = {"VIEWFUS-V1"}
 FROZEN_SEMANTIC_EXPERIMENTS = {
@@ -219,6 +237,59 @@ warnings.filterwarnings(
 
 def mask_quality_filename(mask_key: str) -> str:
     return mask_key.replace("/", "__").replace(".", "_") + ".npz"
+
+
+def simple_stage_probabilities(
+    probabilities: Tensor,
+    class_names: list[str] | tuple[str, ...],
+    *,
+    object_visible_ratio: float = 0.0003,
+    inside_region_ring_ratio: float = 0.95,
+) -> Tensor:
+    """Compute a four-stage one-hot token from one front segmentation frame."""
+
+    required = ("occluder", "object", "region")
+    missing = [name for name in required if name not in class_names]
+    if missing:
+        raise ValueError(f"Simple stage computation is missing semantic classes: {missing}.")
+    if probabilities.ndim != 4 or probabilities.shape[1] != len(class_names) + 1:
+        raise ValueError(
+            "Expected probabilities shaped (B, background + classes, H, W); "
+            f"got {tuple(probabilities.shape)} for classes {list(class_names)}."
+        )
+
+    labels = probabilities.detach().argmax(dim=1)
+    class_index = {name: class_names.index(name) + 1 for name in required}
+    occluder = labels == class_index["occluder"]
+    obj = labels == class_index["object"]
+    region = labels == class_index["region"]
+
+    visible = obj.float().mean(dim=(-2, -1)) >= object_visible_ratio
+    adjacent_occluder = (
+        F.max_pool2d(occluder.float().unsqueeze(1), kernel_size=3, stride=1, padding=1)[:, 0]
+        .bool()
+        .logical_and(obj)
+        .flatten(1)
+        .any(dim=1)
+    )
+
+    object_ring = (
+        F.max_pool2d(obj.float().unsqueeze(1), kernel_size=3, stride=1, padding=1)[:, 0]
+        .bool()
+        .logical_and(~obj)
+    )
+    ring_pixels = object_ring.flatten(1).sum(dim=1)
+    region_ring_ratio = (
+        object_ring.logical_and(region).flatten(1).sum(dim=1).float()
+        / ring_pixels.clamp_min(1).float()
+    )
+    inside_region = visible & (ring_pixels > 0) & (region_ring_ratio >= inside_region_ring_ratio)
+
+    stage = torch.full_like(ring_pixels, SIMPLE_STAGE_NAMES.index("transport"), dtype=torch.long)
+    stage = torch.where(adjacent_occluder, SIMPLE_STAGE_NAMES.index("separate"), stage)
+    stage = torch.where(inside_region, SIMPLE_STAGE_NAMES.index("restore"), stage)
+    stage = torch.where(~visible, SIMPLE_STAGE_NAMES.index("expose"), stage)
+    return F.one_hot(stage, num_classes=len(SIMPLE_STAGE_NAMES)).to(dtype=probabilities.dtype)
 
 
 def semantic_palette_for_experiment(experiment: str) -> dict[str, tuple[float, float, float]]:
@@ -1610,6 +1681,15 @@ class MaskACTPolicy(nn.Module):
                 _, phase_probabilities = self.predict_phase_from_history(self._phase_inference_history)
                 self._latest_phase_probabilities = phase_probabilities
                 act_batch[OBS_ENV_STATE] = phase_probabilities
+            elif self.experiment in SIMPLE_STAGE_V5_EXPERIMENTS:
+                phase_probabilities = simple_stage_probabilities(
+                    probabilities_by_view[0], self.view_mask_suffixes[0]
+                )
+                self._latest_phase_probabilities = phase_probabilities
+                self._latest_stage_outputs = {
+                    "phase_probabilities": phase_probabilities.detach().cpu(),
+                }
+                act_batch[OBS_ENV_STATE] = phase_probabilities
             elif self.experiment in STAGE_AWARE_EXPERIMENTS:
                 current_stage_features = self.semantic_states_from_probabilities(probabilities_by_view)
                 if (
@@ -2425,6 +2505,18 @@ class MaskACTPolicy(nn.Module):
                     "stage_condition_confidence": float(stage_confidence.mean().detach().cpu()),
                     **stage_metric_logs,
                 }
+            elif self.experiment in SIMPLE_STAGE_V5_EXPERIMENTS:
+                stage_phase_condition = simple_stage_probabilities(
+                    probabilities_by_view[0], self.view_mask_suffixes[0]
+                )
+                act_batch[OBS_ENV_STATE] = stage_phase_condition
+                stage_index = stage_phase_condition.argmax(dim=-1)
+                stage_logs = {
+                    f"simple_stage_{name}_ratio": float(
+                        (stage_index == index).float().mean().detach().cpu()
+                    )
+                    for index, name in enumerate(SIMPLE_STAGE_NAMES)
+                }
             semantic_fusion_logs = {}
             probabilities_for_act = self.semantic_probabilities_for_act(probabilities_by_view)
             viewfusion_loss = None
@@ -2491,7 +2583,10 @@ class MaskACTPolicy(nn.Module):
                     "semantic_fusion_scale": semantic_fusion_scale,
                     "semantic_residual_rms": float(residual_rms.cpu()),
                 }
-            elif self.experiment not in STAGE_V5_RGB_ONLY_EXPERIMENTS:
+            elif self.experiment not in {
+                *STAGE_V5_RGB_ONLY_EXPERIMENTS,
+                *SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS,
+            }:
                 semantic_maps = self.semantic_rgb_maps(probabilities_for_act)
                 if (
                     self.experiment not in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS
@@ -2824,6 +2919,10 @@ def parse_args() -> argparse.Namespace:
             "STAGE-V5-FS-RGB",
             "STAGE-V5-F-UNETSEM",
             "STAGE-V5-FS-UNETSEM",
+            "STAGE-SIMPLE-V5-F-RGB",
+            "STAGE-SIMPLE-V5-FS-RGB",
+            "STAGE-SIMPLE-V5-F-UNETSEM",
+            "STAGE-SIMPLE-V5-FS-UNETSEM",
         ],
         required=True,
     )
@@ -3204,9 +3303,13 @@ def reshape_visual_stats_for_channel_first(
 def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     experiment = args.experiment.upper()
     semantic_keys = [semantic_image_key(rgb_key) for rgb_key in args.rgb_keys]
-    if experiment in STAGE_V5_RGB_ONLY_EXPERIMENTS:
+    if experiment in {*STAGE_V5_RGB_ONLY_EXPERIMENTS, *SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS}:
         return list(args.rgb_keys)
-    if experiment in {*UNET_SEM_V5_ONLY_EXPERIMENTS, *STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS}:
+    if experiment in {
+        *UNET_SEM_V5_ONLY_EXPERIMENTS,
+        *STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS,
+        *SIMPLE_STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS,
+    }:
         return [*semantic_keys, *args.rgb_keys]
     if experiment in {"SEM-1", "SEM-1-N", "ASEM-1", "SSACT-1", *FROZEN_SEMANTIC_EXPERIMENTS}:
         return [*semantic_keys, *args.rgb_keys]
@@ -3252,7 +3355,7 @@ def act_uses_semantic_env_state(experiment: str) -> bool:
 
 
 def act_uses_phase_env_state(experiment: str) -> bool:
-    return experiment.upper() in PHASE_CONDITIONED_EXPERIMENTS
+    return experiment.upper() in {*PHASE_CONDITIONED_EXPERIMENTS, *SIMPLE_STAGE_V5_EXPERIMENTS}
 
 
 def act_uses_metric_env_state(experiment: str) -> bool:
@@ -3314,7 +3417,8 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
             shape=(args.latent_dim * (len(args.rgb_keys) + len(args.mask_target_keys)),),
         )
     if act_uses_phase_env_state(args.experiment):
-        input_features[OBS_ENV_STATE] = PolicyFeature(type=FeatureType.ENV, shape=(5,))
+        phase_dim = 4 if args.experiment.upper() in SIMPLE_STAGE_V5_EXPERIMENTS else 5
+        input_features[OBS_ENV_STATE] = PolicyFeature(type=FeatureType.ENV, shape=(phase_dim,))
 
     viewfusion_homography = getattr(args, "viewfusion_homography", None)
     if viewfusion_homography is not None and args.image_size is not None:
@@ -3525,6 +3629,17 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
                 "camera_id_meanings": {"0": "front", "1": "side"},
                 "modality_id_meanings": {"0": "rgb", "1": "semantic_rgb"},
             }
+        if args.experiment.upper() in SIMPLE_STAGE_V5_EXPERIMENTS:
+            payload["simple_stage_input"] = {
+                "source_view": "observation.images.front",
+                "phase_names": list(SIMPLE_STAGE_NAMES),
+                "representation": "deterministic_current_frame_one_hot",
+                "object_visible_ratio": 0.0003,
+                "adjacency": "one_pixel_object_occluder",
+                "inside_region_ring_ratio": 0.95,
+                "learned_stage_model": False,
+                "temporal_state_machine": False,
+            }
         if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
             camera_ids, modality_ids = act_identity_ids_for_experiment(args)
             mask_suffixes, _ = build_mask_layout_for_experiment(
@@ -3545,7 +3660,11 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
                     else None
                 ),
                 "segmentation_trainable": False,
-                "representation": "view_specific_softmax_to_semantic_rgb",
+                "representation": (
+                    "phase_only_no_semantic_image"
+                    if args.experiment.upper() in SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS
+                    else "view_specific_softmax_to_semantic_rgb"
+                ),
                 "semantic_classes_by_view": {
                     key: ["background", *suffixes]
                     for key, suffixes in zip(
@@ -4111,8 +4230,8 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 [VIEWFUS_FUSED_FRONT_KEY]
                 if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS
                 else []
-            ),
-        }
+                ),
+            }
     )
     view_root = args.view_root or (args.output_dir.parent / "dataset_views" / args.output_dir.name)
     filtered_root = make_filtered_dataset_view(
@@ -4215,6 +4334,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             f"Stage supervision: {stage_store.path}; history={stage_store.history_length}x"
             f"{stage_store.history_stride} frames; feature_dim={stage_store.feature_dim}."
         )
+    if args.experiment in SIMPLE_STAGE_V5_EXPERIMENTS:
+        print(
+            "Simple stage input: current front U-Net frame -> "
+            "expose/separate/transport/restore one-hot; no learned stage head or temporal FSM."
+        )
     if semantic_state_store is not None:
         print(
             f"Offline semantic states: {semantic_state_store.path}; future mask video decoding disabled; "
@@ -4233,9 +4357,13 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 else [args.pretrained_segmentation_checkpoint]
             )
             semantic_input_note = (
-                "Semantic maps are used only by the stage head; ACT receives RGB plus phase probabilities."
-                if args.experiment in STAGE_V5_RGB_ONLY_EXPERIMENTS
-                else "Soft semantic RGB maps and RGB share ACT ResNet18."
+                "Semantic maps only compute the stage token; ACT receives RGB plus the four-way stage."
+                if args.experiment in SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS
+                else (
+                    "Semantic maps are used only by the stage head; ACT receives RGB plus phase probabilities."
+                    if args.experiment in STAGE_V5_RGB_ONLY_EXPERIMENTS
+                    else "Soft semantic RGB maps and RGB share ACT ResNet18."
+                )
             )
             print(
                 f"Frozen segmentation: {segmentation_sources}; no segmentation "

@@ -17,9 +17,8 @@ DRY_RUN="${DRY_RUN:-0}"
 
 FRONT_MODEL="$DATASET_ROOT/models/unet_front_v4_r1/best.pt"
 SIDE_MODEL="$DATASET_ROOT/models/unet_side/best.pt"
-STAGE_SUPERVISION="$DATASET_ROOT/stage_supervision_v5_front.npz"
 
-for required_path in "$PYTHON_BIN" "$FRONT_MODEL" "$SIDE_MODEL" "$STAGE_SUPERVISION"; do
+for required_path in "$PYTHON_BIN" "$FRONT_MODEL" "$SIDE_MODEL"; do
     if [[ ! -e "$required_path" ]]; then
         echo "Required path not found: $required_path" >&2
         exit 1
@@ -62,17 +61,6 @@ COMMON_ARGS=(
     --device "$DEVICE" --num-workers "$NUM_WORKERS" --video-backend pyav
     --rebuild-view
 )
-STAGE_ARGS=(
-    --stage-supervision "$STAGE_SUPERVISION"
-    --phase-history-length 16 --phase-history-stride 4 --phase-hidden-dim 128
-    --phase-teacher-forcing-steps 10000 --phase-teacher-forcing-ramp-steps 20000
-    --stage-conditioning-mode none
-    --stage-predicted-input-warmup-steps 0 --stage-predicted-input-ramp-steps 10000
-    --stage-phase-loss-weight 0.20 --stage-event-loss-weight 0.10
-    --stage-progress-loss-weight 0.10 --stage-transition-loss-weight 0.10
-    --stage-relation-loss-weight 0.10 --stage-attention-regularization-weight 0.0
-)
-
 latest_checkpoint() {
     local output_dir=$1
     local checkpoints=("$output_dir"/checkpoint_step_*/training_state.pt)
@@ -117,18 +105,16 @@ run_experiment UNET-SEM-V5-FS "$OUTPUT_ROOT/UNET-SEM-v5-front-side-bettersetup-v
     --mask-target-keys "${FRONT_MASK_KEYS[@]}" "${SIDE_MASK_KEYS[@]}" \
     --pretrained-segmentation-checkpoints "$FRONT_MODEL" "$SIDE_MODEL"
 
-run_experiment STAGE-V5-F-RGB "$OUTPUT_ROOT/STAGE-v5-front-RGB-bettersetup-v5" \
-    --experiment STAGE-V5-F-RGB \
+run_experiment STAGE-SIMPLE-V5-F-RGB "$OUTPUT_ROOT/STAGE-SIMPLE-v5-front-RGB-bettersetup-v5" \
+    --experiment STAGE-SIMPLE-V5-F-RGB \
     --rgb-keys observation.images.front \
     --mask-target-keys "${FRONT_MASK_KEYS[@]}" \
-    --pretrained-segmentation-checkpoints "$FRONT_MODEL" \
-    "${STAGE_ARGS[@]}"
+    --pretrained-segmentation-checkpoints "$FRONT_MODEL"
 
-run_experiment STAGE-V5-F-UNETSEM "$OUTPUT_ROOT/STAGE-v5-front-UNETSEM-bettersetup-v5" \
-    --experiment STAGE-V5-F-UNETSEM \
+run_experiment STAGE-SIMPLE-V5-F-UNETSEM "$OUTPUT_ROOT/STAGE-SIMPLE-v5-front-UNETSEM-bettersetup-v5" \
+    --experiment STAGE-SIMPLE-V5-F-UNETSEM \
     --rgb-keys observation.images.front \
     --mask-target-keys "${FRONT_MASK_KEYS[@]}" \
-    --pretrained-segmentation-checkpoints "$FRONT_MODEL" \
-    "${STAGE_ARGS[@]}"
+    --pretrained-segmentation-checkpoints "$FRONT_MODEL"
 
 echo "[$(date --iso-8601=seconds)] Queue completed."

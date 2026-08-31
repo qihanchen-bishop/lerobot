@@ -17,9 +17,8 @@ DRY_RUN="${DRY_RUN:-0}"
 
 FRONT_MODEL="$DATASET_ROOT/models/unet_front_v4_r1/best.pt"
 SIDE_MODEL="$DATASET_ROOT/models/unet_side/best.pt"
-STAGE_SUPERVISION="$DATASET_ROOT/stage_supervision_v5_front.npz"
 
-for required_path in "$PYTHON_BIN" "$FRONT_MODEL" "$SIDE_MODEL" "$STAGE_SUPERVISION"; do
+for required_path in "$PYTHON_BIN" "$FRONT_MODEL" "$SIDE_MODEL"; do
     if [[ ! -e "$required_path" ]]; then
         echo "Required path not found: $required_path" >&2
         exit 1
@@ -56,16 +55,8 @@ COMMON_ARGS=(
     --rgb-keys observation.images.front observation.images.side
     --state-keys observation.state --mask-target-keys "${MASK_KEYS[@]}"
     --pretrained-segmentation-checkpoints "$FRONT_MODEL" "$SIDE_MODEL"
-    --stage-supervision "$STAGE_SUPERVISION"
     --steps "$STEPS" --seed 1000 --batch-size "$BATCH_SIZE"
     --chunk-size 60 --n-action-steps 60 --action-loss-weight 1.0
-    --phase-history-length 16 --phase-history-stride 4 --phase-hidden-dim 128
-    --phase-teacher-forcing-steps 10000 --phase-teacher-forcing-ramp-steps 20000
-    --stage-conditioning-mode none
-    --stage-predicted-input-warmup-steps 0 --stage-predicted-input-ramp-steps 10000
-    --stage-phase-loss-weight 0.20 --stage-event-loss-weight 0.10
-    --stage-progress-loss-weight 0.10 --stage-transition-loss-weight 0.10
-    --stage-relation-loss-weight 0.10 --stage-attention-regularization-weight 0.0
     --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1
     --device "$DEVICE" --num-workers "$NUM_WORKERS" --video-backend pyav
     --rebuild-view
@@ -110,13 +101,13 @@ echo "Queue log: $LOG_FILE"
 echo "Device: $DEVICE"
 
 run_experiment \
-    STAGE-V5-FS-RGB \
-    STAGE-V5-FS-RGB \
-    "$OUTPUT_ROOT/STAGE-v5-front-side-RGB-bettersetup-v5"
+    STAGE-SIMPLE-V5-FS-RGB \
+    STAGE-SIMPLE-V5-FS-RGB \
+    "$OUTPUT_ROOT/STAGE-SIMPLE-v5-front-side-RGB-bettersetup-v5"
 
 run_experiment \
-    STAGE-V5-FS-UNETSEM \
-    STAGE-V5-FS-UNETSEM \
-    "$OUTPUT_ROOT/STAGE-v5-front-side-UNETSEM-bettersetup-v5"
+    STAGE-SIMPLE-V5-FS-UNETSEM \
+    STAGE-SIMPLE-V5-FS-UNETSEM \
+    "$OUTPUT_ROOT/STAGE-SIMPLE-v5-front-side-UNETSEM-bettersetup-v5"
 
 echo "[$(date --iso-8601=seconds)] Queue completed."
