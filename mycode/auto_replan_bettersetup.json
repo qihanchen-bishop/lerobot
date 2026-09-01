@@ -1,0 +1,38 @@
+{
+  "calibration_dataset": "data/bettersetup",
+  "dataset_fps": 30,
+  "statistics_source": "directly recomputed from all 90 data/chunk-000 parquet files; meta/stats.json quantiles were not used",
+  "algorithm": "first step in [30,60] where cumulative RMS joint delta normalized by direct-parquet q90-q10 reaches movement_budget",
+  "minimum_steps": 30,
+  "maximum_steps": 60,
+  "reference_steps": 45,
+  "movement_budget": 0.43685246291582724,
+  "action_names": [
+    "left_shoulder_pan.pos",
+    "left_shoulder_lift.pos",
+    "left_elbow_flex.pos",
+    "left_wrist_flex.pos",
+    "left_wrist_roll.pos",
+    "right_shoulder_pan.pos",
+    "right_shoulder_lift.pos",
+    "right_elbow_flex.pos",
+    "right_wrist_flex.pos",
+    "right_wrist_roll.pos"
+  ],
+  "action_scales_q90_minus_q10": [
+    20.42253541946411,
+    82.28379440307617,
+    107.55314445495605,
+    27.937461853027344,
+    16.70606756210327,
+    47.95640468597412,
+    105.66512966156006,
+    94.86597013473511,
+    48.95105171203613,
+    40.48830223083496
+  ],
+  "training_window_stride": 5,
+  "training_windows": 9722,
+  "selected_steps_mean": 46.04566961530549,
+  "selected_steps_median": 45.5
+}

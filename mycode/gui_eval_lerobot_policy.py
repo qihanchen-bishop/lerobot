@@ -35,6 +35,9 @@ DEFAULT_POLICY_TYPE = "mask_act"
 MAX_EPISODE_TIME_S = 30
 DEFAULT_EPISODE_TIME_S = MAX_EPISODE_TIME_S
 DEFAULT_ACT_REPLAN_STEPS = 30
+AUTO_REPLAN_CALIBRATION_PATH = Path(__file__).resolve().parent / "auto_replan_bettersetup.json"
+AUTO_REPLAN_MIN_STEPS = 30
+AUTO_REPLAN_MAX_STEPS = 60
 DEFAULT_DIFFUSION_PREDICTION_STEPS = 64
 DEFAULT_DIFFUSION_INFERENCE_STEPS = 16
 DEFAULT_DIFFUSION_REPLAN_STEPS = 24
@@ -767,6 +770,7 @@ class EvalPolicyApp:
             "model_chunk_size": tk.StringVar(value="N/A"),
             "model_parameter_stats": tk.StringVar(value="Not loaded"),
             "inference_latency_stats": tk.StringVar(value="No inference yet"),
+            "auto_replan_status": tk.StringVar(value="Off"),
             "prediction_steps": tk.StringVar(value=""),
             "n_action_steps": tk.StringVar(value=str(DEFAULT_DIFFUSION_REPLAN_STEPS)),
             "num_inference_steps": tk.StringVar(value=str(DEFAULT_DIFFUSION_INFERENCE_STEPS)),
@@ -812,6 +816,7 @@ class EvalPolicyApp:
         self.use_amp = tk.BooleanVar(value=True)
         self.enable_segmentation_preview = tk.BooleanVar(value=True)
         self.enable_ssact_adaptive_horizon = tk.BooleanVar(value=False)
+        self.enable_auto_replan = tk.BooleanVar(value=False)
         self.camera_options: dict[str, tuple[str, str]] = {}
 
         self._build_ui()
@@ -1328,6 +1333,16 @@ class EvalPolicyApp:
             variable=self.vars["execution_mode"],
             value="asynchronous",
         ).pack(side=tk.LEFT, padx=(12, 0))
+
+        row += 1
+        ttk.Checkbutton(
+            top,
+            text=f"Auto replan from action magnitude ({AUTO_REPLAN_MIN_STEPS}-{AUTO_REPLAN_MAX_STEPS})",
+            variable=self.enable_auto_replan,
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=(0, 8), pady=5)
+        ttk.Label(top, textvariable=self.vars["auto_replan_status"]).grid(
+            row=row, column=2, columnspan=2, sticky=tk.W, padx=(16, 0), pady=5
+        )
 
         row += 1
         ttk.Label(top, text="Diffusion inference steps").grid(
@@ -2059,9 +2074,52 @@ class EvalPolicyApp:
         self.main_canvas.yview_scroll(units, "units")
         return "break"
 
+    @staticmethod
+    def _visible_newsetup_run_name(checkpoint_path: str | Path) -> str | None:
+        embedding_markers = (
+            "_ce",
+            "viewfus",
+            "view_fus",
+            "embedding",
+            "camera_embed",
+        )
+        try:
+            relative = Path(checkpoint_path).expanduser().resolve().relative_to(
+                DEFAULT_OUTPUT_ROOT.resolve()
+            )
+        except (OSError, ValueError):
+            return None
+        if not relative.parts:
+            return None
+        run_name = relative.parts[0]
+        normalized = run_name.lower()
+        if not normalized.startswith("newsetup") or any(
+            marker in normalized for marker in embedding_markers
+        ):
+            return None
+        return run_name
+
+    @classmethod
+    def _newsetup_config_presets(cls, config_dir: Path) -> dict[str, Path]:
+        presets: dict[str, Path] = {}
+        for path in sorted(config_dir.glob("*.json")):
+            try:
+                config = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            checkpoint = config.get("checkpoint_path")
+            policy_type = config.get("policy_type")
+            if not isinstance(checkpoint, str) or not checkpoint.strip() or policy_type not in POLICY_TYPES:
+                continue
+            if cls._visible_newsetup_run_name(checkpoint) is None:
+                continue
+            label = str(config.get("preset_name") or path.stem).strip()
+            if label:
+                presets[label] = path
+        return presets
+
     def refresh_config_presets(self) -> None:
-        config_paths = sorted(Path(__file__).resolve().parent.glob("*.json"))
-        self.config_preset_paths = {path.stem: path for path in config_paths}
+        self.config_preset_paths = self._newsetup_config_presets(Path(__file__).resolve().parent)
         values = list(self.config_preset_paths)
         if hasattr(self, "config_preset_combo"):
             self.config_preset_combo.configure(values=values)
@@ -2092,6 +2150,8 @@ class EvalPolicyApp:
         self._append_log(f"[CONFIG] Loaded {path}")
 
     def _apply_config_preset(self, config: dict[str, Any]) -> None:
+        # Older presets predate this opt-in feature and must continue to use fixed replanning.
+        self.enable_auto_replan.set(bool(config.get("enable_auto_replan", False)))
         string_keys = (
             "policy_type",
             "checkpoint_path",
@@ -2153,6 +2213,7 @@ class EvalPolicyApp:
             "save_video": self.save_video,
             "enable_realsense": self.enable_realsense,
             "enable_ssact_adaptive_horizon": self.enable_ssact_adaptive_horizon,
+            "enable_auto_replan": self.enable_auto_replan,
         }
         for key, var in bool_targets.items():
             if key in config:
@@ -2197,7 +2258,7 @@ class EvalPolicyApp:
     def refresh_checkpoints(self) -> None:
         options: list[CheckpointOption] = []
         for path in sorted(DEFAULT_OUTPUT_ROOT.glob("**/pretrained_model")):
-            if not path.is_dir():
+            if not path.is_dir() or self._visible_newsetup_run_name(path) is None:
                 continue
             policy_type = self._infer_policy_type(path)
             try:
@@ -2210,6 +2271,8 @@ class EvalPolicyApp:
 
         for state_path in sorted(DEFAULT_OUTPUT_ROOT.glob("**/checkpoint_step_*/training_state.pt")):
             checkpoint_dir = state_path.parent
+            if self._visible_newsetup_run_name(checkpoint_dir) is None:
+                continue
             try:
                 rel = checkpoint_dir.relative_to(PROJECT_ROOT)
             except ValueError:
@@ -2576,6 +2639,10 @@ class EvalPolicyApp:
             "include_side_camera": self._view_layout_name() == "dual_view",
             "prediction_steps": optional_int("prediction_steps"),
             "replan_interval_steps": int(self.vars["n_action_steps"].get()),
+            "auto_replan": bool(self.enable_auto_replan.get()),
+            "auto_replan_min_steps": AUTO_REPLAN_MIN_STEPS,
+            "auto_replan_max_steps": AUTO_REPLAN_MAX_STEPS,
+            "auto_replan_calibration_path": str(AUTO_REPLAN_CALIBRATION_PATH),
             "num_inference_steps": optional_int("num_inference_steps"),
             "noise_scheduler_type": self.vars["noise_scheduler_type"].get().strip(),
             "execution_mode": self.vars["execution_mode"].get().strip(),
@@ -2599,7 +2666,9 @@ class EvalPolicyApp:
         }.get(str(configuration["execution_mode"]), str(configuration["execution_mode"]))
         prediction_steps = configuration.get("prediction_steps")
         parts = [
-            f"replan-{int(configuration['replan_interval_steps'])}",
+            "autoreplan"
+            if configuration.get("auto_replan")
+            else f"replan-{int(configuration['replan_interval_steps'])}",
             execution_mode,
             f"pred-{prediction_steps if prediction_steps is not None else 'checkpoint'}",
         ]
@@ -3646,6 +3715,9 @@ class EvalPolicyApp:
         self.segmentation_eval_metrics = self._new_segmentation_eval_metrics()
         self.vars["model_parameter_stats"].set("Loading...")
         self.vars["inference_latency_stats"].set("Waiting for first chunk")
+        self.vars["auto_replan_status"].set(
+            "Waiting for first chunk" if self.enable_auto_replan.get() else "Off"
+        )
         save_root = self._base_save_root()
         policy_variant = self._selected_policy_variant()
         runtime_configuration = self._runtime_configuration_snapshot()
@@ -3667,6 +3739,10 @@ class EvalPolicyApp:
                 else None
             ),
             "replan_interval_steps": int(self.vars["n_action_steps"].get()),
+            "auto_replan": self.enable_auto_replan.get(),
+            "auto_replan_min_steps": AUTO_REPLAN_MIN_STEPS,
+            "auto_replan_max_steps": AUTO_REPLAN_MAX_STEPS,
+            "auto_replan_calibration_path": str(AUTO_REPLAN_CALIBRATION_PATH),
             "num_inference_steps": (
                 int(self.vars["num_inference_steps"].get())
                 if self.vars["num_inference_steps"].get().strip()
@@ -3802,7 +3878,7 @@ class EvalPolicyApp:
 
         import torch
 
-        from action_chunk_fusion import ActionChunkFusionPlanner
+        from action_chunk_fusion import ActionChunkFusionPlanner, ActionMagnitudeReplanScheduler
         from lerobot.policies.utils import prepare_observation_for_inference
         from lerobot.utils.control_utils import predict_action
         from lerobot.utils.robot_utils import precise_sleep
@@ -4065,6 +4141,7 @@ class EvalPolicyApp:
             postprocessor.reset()
             fusion_steps = int(runtime_configuration["fusion_steps"])
             execution_mode = str(runtime_configuration["execution_mode"])
+            auto_replan_enabled = bool(runtime_configuration["auto_replan"])
             predict_chunk = getattr(policy, "predict_action_chunk", None)
             is_diffusion_policy = all(
                 hasattr(policy.config, attr)
@@ -4083,6 +4160,7 @@ class EvalPolicyApp:
                     execution_mode == "asynchronous"
                     or fusion_steps > 0
                     or replan_steps < predicted_steps
+                    or auto_replan_enabled
                 )
             )
             planner = (
@@ -4094,6 +4172,36 @@ class EvalPolicyApp:
                 if use_chunk_planner
                 else None
             )
+            auto_replan_scheduler = None
+            auto_replan_reports: list[dict[str, Any]] = []
+            if auto_replan_enabled:
+                calibration = json.loads(AUTO_REPLAN_CALIBRATION_PATH.read_text(encoding="utf-8"))
+                calibrated_names = list(calibration["action_names"])
+                missing_names = [name for name in calibrated_names if name not in policy_action_names]
+                unexpected_names = [
+                    name
+                    for name in policy_action_names
+                    if name not in calibrated_names and not self._is_gripper_key(name)
+                ]
+                if missing_names or unexpected_names:
+                    raise ValueError(
+                        "Auto-replan calibration does not match policy actions. "
+                        f"Missing={missing_names}, unexpected={unexpected_names}."
+                    )
+                action_indices = tuple(policy_action_names.index(name) for name in calibrated_names)
+                auto_replan_scheduler = ActionMagnitudeReplanScheduler(
+                    min_steps=int(calibration["minimum_steps"]),
+                    max_steps=int(calibration["maximum_steps"]),
+                    movement_budget=float(calibration["movement_budget"]),
+                    action_scales=tuple(float(value) for value in calibration["action_scales_q90_minus_q10"]),
+                    action_indices=action_indices,
+                )
+                self.active_eval_metadata["auto_replan_calibration"] = calibration
+                self.log_queue.put(
+                    "[AUTOREPLAN] Enabled using bettersetup calibration: "
+                    f"steps={auto_replan_scheduler.min_steps}..{auto_replan_scheduler.max_steps}, "
+                    f"movement_budget={auto_replan_scheduler.movement_budget:.4f}."
+                )
             if planner is not None and execution_mode == "asynchronous":
                 replan_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="policy-replan")
             policy_device = get_safe_torch_device(policy.config.device)
@@ -4328,6 +4436,32 @@ class EvalPolicyApp:
                     record_inference_latency(pipeline_s)
                     return predicted_chunk, pipeline_s
 
+                def apply_auto_replan(action_chunk: torch.Tensor, source: str) -> dict[str, Any] | None:
+                    if auto_replan_scheduler is None or planner is None:
+                        return None
+                    report = {
+                        **auto_replan_scheduler.select(action_chunk),
+                        "control_step": control_step,
+                        "elapsed_s": max(time.perf_counter() - start_t, 0.0),
+                        "source": source,
+                    }
+                    planner.set_replan_steps(int(report["selected_steps"]))
+                    auto_replan_reports.append(report)
+                    with (run_dataset_root / "auto_replan_runtime.jsonl").open(
+                        "a", encoding="utf-8"
+                    ) as stream:
+                        stream.write(json.dumps(report, ensure_ascii=False) + "\n")
+                    self.log_queue.put("__AUTO_REPLAN__|" + json.dumps(report))
+                    self.log_queue.put(
+                        "[AUTOREPLAN] "
+                        f"K={report['selected_steps']}, "
+                        f"motion30={report['cumulative_motion_at_min']:.4f}, "
+                        f"motionK={report['cumulative_motion_at_selected']:.4f}, "
+                        f"motionMax={report['cumulative_motion_at_max']:.4f}, "
+                        f"budget={report['movement_budget']:.4f}, source={source}."
+                    )
+                    return report
+
                 def publish_ssact_runtime_report(pipeline_s: float) -> dict[str, Any]:
                     latest_report = getattr(policy, "latest_ssact_control_report", None)
                     report = latest_report() if callable(latest_report) else {}
@@ -4439,6 +4573,7 @@ class EvalPolicyApp:
                             f"{chunk_steps} steps."
                         )
                     aligned_chunk = new_chunk[..., elapsed_steps:, :]
+                    apply_auto_replan(aligned_chunk, "asynchronous")
                     fused_steps = planner.update(aligned_chunk) if planner is not None else 0
                     pending_replan = None
                     self.log_queue.put(
@@ -4504,6 +4639,7 @@ class EvalPolicyApp:
                             record_decision_observation(observation_frame)
                             new_chunk, pipeline_s = predict_chunk_async(observation_snapshot())
                             publish_ssact_runtime_report(pipeline_s)
+                            apply_auto_replan(new_chunk, "synchronous")
                             fused_steps = planner.update(new_chunk)
                             self.log_queue.put(
                                 f"[REPLAN] synchronous_pipeline={pipeline_s * 1000:.1f} ms, "
@@ -4519,6 +4655,7 @@ class EvalPolicyApp:
                             else:
                                 record_decision_observation(observation_frame)
                                 new_chunk, inference_s = predict_chunk_async(observation_snapshot())
+                                apply_auto_replan(new_chunk, "asynchronous_initial")
                                 planner.update(new_chunk)
                                 self.log_queue.put(
                                     f"[REPLAN] initial inference={inference_s * 1000:.1f} ms, "
@@ -4602,6 +4739,15 @@ class EvalPolicyApp:
                     precise_sleep(max(1 / fps - dt_s, 0.0))
                     timestamp = time.perf_counter() - start_t
 
+                if auto_replan_reports:
+                    selected_steps = [int(report["selected_steps"]) for report in auto_replan_reports]
+                    self.active_eval_metadata["auto_replan_statistics"] = {
+                        "count": len(selected_steps),
+                        "minimum_selected_steps": min(selected_steps),
+                        "maximum_selected_steps": max(selected_steps),
+                        "average_selected_steps": sum(selected_steps) / len(selected_steps),
+                        "selected_steps": selected_steps,
+                    }
                 final_evaluation_metadata = {
                     **evaluation_metadata,
                     **self.active_eval_metadata,
@@ -4703,6 +4849,13 @@ class EvalPolicyApp:
             raise ValueError("SSACT maximum action residual must be non-negative.")
         variant = self._selected_policy_variant()
         ssact_requested = ssact_mode != "off" or self.enable_ssact_adaptive_horizon.get()
+        if self.enable_auto_replan.get():
+            if not AUTO_REPLAN_CALIBRATION_PATH.is_file():
+                raise ValueError(f"Auto-replan calibration does not exist: {AUTO_REPLAN_CALIBRATION_PATH}")
+            if fusion_steps > 0:
+                raise ValueError("Auto replan currently requires fusion steps = 0.")
+            if self.enable_ssact_adaptive_horizon.get():
+                raise ValueError("Auto replan and SSACT adaptive execution length cannot both be enabled.")
         if ssact_requested and variant != "SSACT-1":
             raise ValueError("SSACT runtime control can only be enabled with an SSACT-1 checkpoint.")
         if ssact_requested and self.vars["execution_mode"].get() != "synchronous":
@@ -4716,6 +4869,7 @@ class EvalPolicyApp:
         if not isinstance(runtime_configuration, dict):
             runtime_configuration = self._runtime_configuration_snapshot()
         requested_replan = int(runtime_configuration["replan_interval_steps"])
+        auto_replan_enabled = bool(runtime_configuration.get("auto_replan"))
         fusion_steps = int(runtime_configuration["fusion_steps"])
         is_diffusion = all(
             hasattr(policy_cfg, attr)
@@ -4737,12 +4891,13 @@ class EvalPolicyApp:
                     "Diffusion prediction steps must be between 1 and "
                     f"horizon - n_obs_steps + 1 = {max_prediction_steps}; got {prediction_steps}."
                 )
-            if requested_replan > prediction_steps:
+            effective_max_replan = AUTO_REPLAN_MAX_STEPS if auto_replan_enabled else requested_replan
+            if effective_max_replan > prediction_steps:
                 raise ValueError(
                     f"Replan interval cannot exceed prediction steps={prediction_steps}; "
-                    f"got {requested_replan}."
+                    f"got {effective_max_replan}."
                 )
-            max_fusion_steps = prediction_steps - requested_replan
+            max_fusion_steps = prediction_steps - effective_max_replan
             if fusion_steps > max_fusion_steps:
                 raise ValueError(
                     "Fusion steps cannot exceed prediction_steps - replan_interval "
@@ -4765,10 +4920,16 @@ class EvalPolicyApp:
             policy_cfg.use_amp = bool(runtime_configuration["use_amp"])
             self.vars["model_chunk_size"].set(str(horizon))
             self.vars["prediction_steps"].set(str(prediction_steps))
+            fps = max(int(self.active_eval_metadata.get("fps", 1)), 1)
+            diffusion_replan = (
+                f"auto {AUTO_REPLAN_MIN_STEPS}..{AUTO_REPLAN_MAX_STEPS} "
+                f"({AUTO_REPLAN_MIN_STEPS / fps:.3f}..{AUTO_REPLAN_MAX_STEPS / fps:.3f}s)"
+                if auto_replan_enabled
+                else f"{requested_replan} ({requested_replan / fps:.3f}s)"
+            )
             self.log_queue.put(
                 f"[Diffusion] horizon={horizon}, prediction_steps={prediction_steps}, "
-                f"replan_interval={requested_replan} "
-                f"({requested_replan / max(int(self.active_eval_metadata.get('fps', 1)), 1):.3f}s), "
+                f"replan_interval={diffusion_replan}, "
                 f"inference_steps={policy_cfg.num_inference_steps}, "
                 f"scheduler={policy_cfg.noise_scheduler_type}, AMP={policy_cfg.use_amp}, "
                 f"fusion_steps={fusion_steps}."
@@ -4776,6 +4937,8 @@ class EvalPolicyApp:
             return
 
         if not hasattr(policy_cfg, "chunk_size") or not hasattr(policy_cfg, "n_action_steps"):
+            if auto_replan_enabled:
+                raise ValueError("Auto replan requires a policy that predicts action chunks.")
             if fusion_steps > 0:
                 raise ValueError(
                     f"{type(policy_cfg).__name__} does not expose chunk_size/n_action_steps, "
@@ -4795,30 +4958,41 @@ class EvalPolicyApp:
             )
             return
         chunk_size = int(policy_cfg.chunk_size)
-        if requested_replan < 1 or requested_replan > chunk_size:
+        effective_max_replan = AUTO_REPLAN_MAX_STEPS if auto_replan_enabled else requested_replan
+        if requested_replan < 1 or effective_max_replan > chunk_size:
             raise ValueError(
                 f"Replan interval must be between 1 and model chunk_size={chunk_size}; "
-                f"got {requested_replan}."
+                f"got {effective_max_replan}."
             )
-        max_fusion_steps = chunk_size - requested_replan
+        max_fusion_steps = chunk_size - effective_max_replan
         if fusion_steps > max_fusion_steps:
             raise ValueError(
                 f"Fusion steps cannot exceed the aligned historical remainder "
                 f"(chunk_size - replan_steps = {max_fusion_steps}); got {fusion_steps}."
             )
+        if auto_replan_enabled and getattr(policy_cfg, "temporal_ensemble_coeff", None) is not None:
+            raise ValueError("Auto replan cannot be combined with ACT temporal ensembling.")
         if (
             fusion_steps == 0
             and getattr(policy_cfg, "temporal_ensemble_coeff", None) is not None
             and requested_replan != 1
         ):
             raise ValueError("ACT policies using temporal ensembling require replan interval = 1.")
-        policy_cfg.n_action_steps = requested_replan
+        policy_cfg.n_action_steps = chunk_size if auto_replan_enabled else requested_replan
         policy_cfg.use_amp = bool(runtime_configuration["use_amp"])
         self.vars["model_chunk_size"].set(str(chunk_size))
         self.vars["prediction_steps"].set(str(chunk_size))
+        fps = max(int(self.active_eval_metadata.get("fps", 1)), 1)
+        replan_timing = (
+            f"dynamic ({AUTO_REPLAN_MIN_STEPS / fps:.3f}..{AUTO_REPLAN_MAX_STEPS / fps:.3f}s)"
+            if auto_replan_enabled
+            else f"{requested_replan / fps:.3f}s"
+        )
         self.log_queue.put(
-            f"[Policy] chunk_size={chunk_size}, replan_interval={requested_replan}; "
-            f"replanning every {requested_replan / max(int(self.active_eval_metadata.get('fps', 1)), 1):.3f}s; "
+            f"[Policy] chunk_size={chunk_size}, "
+            f"replan_interval="
+            f"{'auto 30..60' if auto_replan_enabled else requested_replan}; "
+            f"replanning every {replan_timing}; "
             f"fusion_steps={fusion_steps}, "
             f"initial_history_weight={float(runtime_configuration['fusion_history_weight']):.3f}."
         )
@@ -6023,6 +6197,12 @@ class EvalPolicyApp:
                     f"avg {float(statistics['average_ms']):.1f} ms | "
                     f"last {float(statistics['last_ms']):.1f} ms | "
                     f"n={int(statistics['count'])}"
+                )
+            elif message.startswith("__AUTO_REPLAN__|"):
+                report = json.loads(message.split("|", 1)[1])
+                self.vars["auto_replan_status"].set(
+                    f"Current K={int(report['selected_steps'])} | "
+                    f"motion={float(report['cumulative_motion_at_selected']):.3f}"
                 )
             elif message.startswith("__PROCESS_DONE__|"):
                 return_code = int(message.split("|", 1)[1])

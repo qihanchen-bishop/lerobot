@@ -1,7 +1,11 @@
 import pytest
 import torch
 
-from mycode.action_chunk_fusion import ActionChunkFusionPlanner, fuse_action_chunks
+from mycode.action_chunk_fusion import (
+    ActionChunkFusionPlanner,
+    ActionMagnitudeReplanScheduler,
+    fuse_action_chunks,
+)
 
 
 def test_fuse_action_chunks_aligns_history_and_decays_weight_to_zero():
@@ -55,3 +59,36 @@ def test_planner_accepts_a_runtime_execution_length_update():
 
     assert planner.pop_action().item() == 0.0
     assert planner.needs_replan
+
+
+def test_action_magnitude_scheduler_replans_earlier_for_larger_motion():
+    scheduler = ActionMagnitudeReplanScheduler(
+        min_steps=30,
+        max_steps=60,
+        movement_budget=0.5,
+        action_scales=(1.0,),
+    )
+    large_motion = torch.arange(60, dtype=torch.float32).unsqueeze(-1) * 0.02
+    small_motion = torch.arange(60, dtype=torch.float32).unsqueeze(-1) * 0.005
+
+    large_report = scheduler.select(large_motion)
+    small_report = scheduler.select(small_motion)
+
+    assert large_report["selected_steps"] == 30
+    assert small_report["selected_steps"] == 60
+    assert large_report["cumulative_motion_at_max"] > small_report["cumulative_motion_at_max"]
+
+
+def test_action_magnitude_scheduler_uses_calibrated_action_indices():
+    scheduler = ActionMagnitudeReplanScheduler(
+        min_steps=2,
+        max_steps=4,
+        movement_budget=0.5,
+        action_scales=(1.0,),
+        action_indices=(1,),
+    )
+    chunk = torch.tensor([[100.0, 0.0], [200.0, 0.1], [300.0, 0.6], [400.0, 0.7]])
+
+    report = scheduler.select(chunk)
+
+    assert report["selected_steps"] == 3

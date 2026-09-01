@@ -188,6 +188,7 @@ class EvalSegmentationPreviewTest(unittest.TestCase):
         app.include_side_camera = StubVariable(False)
         app.use_amp = StubVariable(False)
         app.enable_ssact_adaptive_horizon = StubVariable(False)
+        app.enable_auto_replan = StubVariable(False)
         app.lock_grippers = StubVariable(False)
 
         path = app._policy_save_parent("act", policy_variant="ACT-SINGLE-FRONT", create=False)
@@ -234,6 +235,52 @@ class EvalSegmentationPreviewTest(unittest.TestCase):
         self.assertEqual(
             folder,
             "replan-24__async__pred-64__ddim-16__fusion-0-w0__amp-on",
+        )
+
+    def test_auto_replan_runtime_folder_replaces_fixed_interval_name(self):
+        folder = EvalPolicyApp._runtime_configuration_dirname(
+            {
+                "policy_type": "act",
+                "replan_interval_steps": 30,
+                "auto_replan": True,
+                "prediction_steps": 60,
+                "execution_mode": "synchronous",
+                "fusion_steps": 0,
+                "fusion_history_weight": 0.0,
+                "use_amp": False,
+                "ssact_servo_mode": "off",
+                "ssact_adaptive_horizon": False,
+            }
+        )
+
+        self.assertEqual(folder, "autoreplan__sync__pred-60__fusion-0-w0__amp-off")
+
+    def test_config_presets_only_show_newsetup_non_embedding_runs(self):
+        presets = EvalPolicyApp._newsetup_config_presets(PROJECT_ROOT / "mycode")
+
+        for name in ("SS5_RGB_F", "SS5_U_F", "SS5_U_FS", "AI5_RGB_F"):
+            self.assertIn(name, presets)
+        self.assertIn("ACT_NEWSETUP", presets)
+        self.assertNotIn("ACT", presets)
+        self.assertFalse(any("CE" in name or "VIEWFUS" in name for name in presets))
+        self.assertNotIn("auto_replan_bettersetup", presets)
+
+    def test_checkpoint_visibility_uses_the_same_newsetup_filter(self):
+        self.assertEqual(
+            EvalPolicyApp._visible_newsetup_run_name(
+                PROJECT_ROOT / "outputs/train/newsetup_Stagev5_U_FS/checkpoint_step_100000"
+            ),
+            "newsetup_Stagev5_U_FS",
+        )
+        self.assertIsNone(
+            EvalPolicyApp._visible_newsetup_run_name(
+                PROJECT_ROOT / "outputs/train/1A_3object/checkpoint_step_100000"
+            )
+        )
+        self.assertIsNone(
+            EvalPolicyApp._visible_newsetup_run_name(
+                PROJECT_ROOT / "outputs/train/newsetup_CE_gated/100000/pretrained_model"
+            )
         )
 
     def test_decision_and_segmentation_recording_features_follow_rgb_views(self):
