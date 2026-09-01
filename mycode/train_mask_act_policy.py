@@ -88,7 +88,10 @@ from lerobot.utils.constants import OBS_ENV_STATE, OBS_STATE
 
 from train_lerobot_policy import ensure_device_is_usable, make_filtered_dataset_view
 from training_artifacts import plot_training_curves, tee_output
-from pretrained_semantic_segmenter import FrozenTinyUNetSegmenter
+from pretrained_semantic_segmenter import (
+    ActionSupervisedTinyUNetSegmenter,
+    FrozenTinyUNetSegmenter,
+)
 from semantic_servo import (
     ActionConditionedSemanticDynamics,
     PhaseHistoryModel,
@@ -146,10 +149,15 @@ SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS = (
 )
 SIMPLE_STAGE_NAMES = ("expose", "separate", "transport", "restore")
 UNET_SEM_V5_ONLY_EXPERIMENTS = {"UNET-SEM-V5", "UNET-SEM-V5-FS"}
+ACTIONSEM_EXPERIMENTS = {"ACTIONSEM-F", "ACTIONSEM-FS"}
 UNET_SEM_V5_EXPERIMENTS = {
     *UNET_SEM_V5_ONLY_EXPERIMENTS,
     *STAGE_V5_EXPERIMENTS,
     *SIMPLE_STAGE_V5_EXPERIMENTS,
+}
+VIEW_SPECIFIC_PRETRAINED_SEGMENTER_EXPERIMENTS = {
+    *UNET_SEM_V5_EXPERIMENTS,
+    *ACTIONSEM_EXPERIMENTS,
 }
 STAGE_AWARE_EXPERIMENTS = {"SSACT-3", *STAGE_V5_EXPERIMENTS}
 VIEW_FUSION_EXPERIMENTS = {"VIEWFUS-V1"}
@@ -160,7 +168,7 @@ FROZEN_SEMANTIC_EXPERIMENTS = {
 }
 IDENTITY_EMBEDDED_FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM"}
 FRONT_ONLY_FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM-V3-F-NOEMB"}
-ASYMMETRIC_SEMANTIC_EXPERIMENTS = UNET_SEM_V5_EXPERIMENTS
+ASYMMETRIC_SEMANTIC_EXPERIMENTS = {*UNET_SEM_V5_EXPERIMENTS, *ACTIONSEM_EXPERIMENTS}
 VIEWFUS_FUSED_FRONT_KEY = "observation.images.front_fused_semantic"
 SEMANTIC_FEATURE_FUSION_EXPERIMENTS = {"SEM-1-V2", "SSACT-3"}
 SEMANTIC_EXPERIMENTS = {
@@ -172,14 +180,16 @@ SEMANTIC_EXPERIMENTS = {
     "SSACT-3",
     "SEM-2",
     "VIEWFUS-V1",
+    *ACTIONSEM_EXPERIMENTS,
     *FROZEN_SEMANTIC_EXPERIMENTS,
 }
 DYNAMIC_SEMANTIC_CLASS_EXPERIMENTS = {
     "SEM-1-N",
     "UNET-SEM-V3-F-NOEMB",
+    *ACTIONSEM_EXPERIMENTS,
     *UNET_SEM_V5_EXPERIMENTS,
 }
-ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS = {"ASEM-1"}
+ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS = {"ASEM-1", *ACTIONSEM_EXPERIMENTS}
 PREDICTIVE_SEMANTIC_EXPERIMENTS = {"SSACT-1"}
 PHASE_CONDITIONED_EXPERIMENTS = {"SSACT-1", *STAGE_AWARE_EXPERIMENTS}
 SEMANTIC_CLASSES = ("occluder", "object", "region", "tool")
@@ -1170,7 +1180,7 @@ class MaskACTPolicy(nn.Module):
         self.mask_quality_full_score = mask_quality_full_score
         self.mask_quality_weight_gamma = mask_quality_weight_gamma
         self._training_step = 0
-        self._asem_backward_losses: tuple[Tensor, Tensor, float] | None = None
+        self._asem_backward_losses: tuple[Tensor, list[Tensor], float] | None = None
         self.bce = nn.BCEWithLogitsLoss()
         self._latest_inference_mask_preview: dict[str, Tensor] = {}
         self._prepared_inference_semantic_input: dict[str, Tensor] = {}
@@ -1276,7 +1286,31 @@ class MaskACTPolicy(nn.Module):
         )
         self.pretrained_segmenter = None
         self.pretrained_segmenters = None
-        if self.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
+        if self.experiment in ACTIONSEM_EXPERIMENTS:
+            if not pretrained_segmentation_checkpoints:
+                raise ValueError(
+                    f"{self.experiment} requires one pretrained segmentation checkpoint per RGB view."
+                )
+            if len(pretrained_segmentation_checkpoints) != len(self.rgb_keys):
+                raise ValueError(
+                    f"{self.experiment} has {len(self.rgb_keys)} RGB views but received "
+                    f"{len(pretrained_segmentation_checkpoints)} segmentation checkpoints."
+                )
+            self.pretrained_segmenters = nn.ModuleList(
+                [
+                    ActionSupervisedTinyUNetSegmenter(
+                        checkpoint,
+                        expected_labels=("background", *suffixes),
+                    )
+                    for checkpoint, suffixes in zip(
+                        pretrained_segmentation_checkpoints,
+                        self.view_mask_suffixes,
+                        strict=True,
+                    )
+                ]
+            )
+            self.seg_net = None
+        elif self.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
             if self.experiment in UNET_SEM_V5_EXPERIMENTS:
                 if not pretrained_segmentation_checkpoints:
                     raise ValueError(
@@ -1352,12 +1386,18 @@ class MaskACTPolicy(nn.Module):
             class_weights.extend(SEMANTIC_CLASS_WEIGHT_BY_NAME[suffix] for suffix in self.mask_suffixes)
             self.register_buffer("semantic_palette", torch.tensor(palette, dtype=torch.float32))
             self._semantic_palette_buffer_names: list[str] = []
+            self._semantic_class_weight_buffer_names: list[str] = []
             for view_idx, suffixes in enumerate(self.view_mask_suffixes):
                 name = f"semantic_palette_view_{view_idx}"
                 view_palette = [palette_by_class["background"]]
                 view_palette.extend(palette_by_class[suffix] for suffix in suffixes)
                 self.register_buffer(name, torch.tensor(view_palette, dtype=torch.float32))
                 self._semantic_palette_buffer_names.append(name)
+                weight_name = f"semantic_class_weights_view_{view_idx}"
+                view_weights = [SEMANTIC_CLASS_WEIGHT_BY_NAME["background"]]
+                view_weights.extend(SEMANTIC_CLASS_WEIGHT_BY_NAME[suffix] for suffix in suffixes)
+                self.register_buffer(weight_name, torch.tensor(view_weights, dtype=torch.float32))
+                self._semantic_class_weight_buffer_names.append(weight_name)
             self.register_buffer("semantic_class_weights", torch.tensor(class_weights, dtype=torch.float32))
             self.register_buffer("semantic_visual_mean", torch.tensor(IMAGENET_VISUAL_MEAN).view(1, 3, 1, 1))
             self.register_buffer("semantic_visual_std", torch.tensor(IMAGENET_VISUAL_STD).view(1, 3, 1, 1))
@@ -1483,6 +1523,12 @@ class MaskACTPolicy(nn.Module):
             1.0,
         )
         return self.action_to_seg_grad_ratio * ramp_progress
+
+    def scheduled_segmenter_finetune_scale(self) -> float:
+        """Keep ActionSEM segmenters fixed while ACT learns the frozen semantic input."""
+        if self.experiment not in ACTIONSEM_EXPERIMENTS:
+            return 1.0
+        return float(self._training_step > self.action_to_seg_warmup_steps)
 
     def scheduled_semantic_fusion_scale(self) -> float:
         if not self.uses_semantic_feature_fusion():
@@ -1889,6 +1935,9 @@ class MaskACTPolicy(nn.Module):
     def uses_frozen_semantic_segmenter(self) -> bool:
         return self.experiment in FROZEN_SEMANTIC_EXPERIMENTS
 
+    def uses_actionsem_segmenters(self) -> bool:
+        return self.experiment in ACTIONSEM_EXPERIMENTS
+
     def act_uses_raw_rgb_images(self) -> bool:
         return self.experiment in {
             "2C",
@@ -1899,6 +1948,7 @@ class MaskACTPolicy(nn.Module):
             "SSACT-1",
             "SSACT-3",
             "VIEWFUS-V1",
+            *ACTIONSEM_EXPERIMENTS,
             *FROZEN_SEMANTIC_EXPERIMENTS,
         }
 
@@ -1933,11 +1983,11 @@ class MaskACTPolicy(nn.Module):
         targets_by_view = []
         for view_idx in range(len(self.rgb_keys)):
             masks = []
-            for suffix_idx in range(len(self.mask_suffixes)):
+            for suffix_idx in range(len(self.view_mask_suffixes[view_idx])):
                 key = next(
                     key
-                    for key, mapped_position in self.mask_key_map.items()
-                    if mapped_position == (view_idx, suffix_idx)
+                    for key in self.mask_key_map
+                    if self.mask_key_local_map[key] == (view_idx, suffix_idx)
                 )
                 mask = self._current_visual_frame(raw_batch[key]).to(device=device, dtype=torch.float32)
                 mask = mask.mean(dim=1) if mask.shape[1] == 3 else mask[:, 0]
@@ -2103,6 +2153,7 @@ class MaskACTPolicy(nn.Module):
         targets_by_view: list[Tensor],
         class_quality_by_view: list[Tensor] | None = None,
     ) -> tuple[Tensor, Tensor, Tensor, dict[str, float]]:
+        """Legacy shared-class loss used by existing SEM/ASEM experiments."""
         ce_losses = []
         dice_by_class = []
         dice_valid_by_class = []
@@ -2175,10 +2226,120 @@ class MaskACTPolicy(nn.Module):
         }
         return seg_loss, ce_loss, dice_loss, dice_logs
 
+    def semantic_segmentation_losses_by_view(
+        self,
+        logits_by_view: list[Tensor],
+        targets_by_view: list[Tensor],
+        class_quality_by_view: list[Tensor] | None = None,
+    ) -> tuple[list[Tensor], list[Tensor], list[Tensor], dict[str, float]]:
+        """Compute quality-weighted CE and foreground Dice independently per view."""
+
+        if class_quality_by_view is None:
+            class_quality_by_view = [None] * len(logits_by_view)
+        if not (
+            len(logits_by_view) == len(targets_by_view) == len(class_quality_by_view)
+        ):
+            raise ValueError("Semantic logits, targets, and quality weights must have one entry per view.")
+
+        seg_losses: list[Tensor] = []
+        ce_losses: list[Tensor] = []
+        dice_losses: list[Tensor] = []
+        dice_values_by_suffix: dict[str, list[float]] = {}
+        dice_logs: dict[str, float] = {}
+        view_suffixes = getattr(self, "view_mask_suffixes", [self.mask_suffixes])
+        view_keys = getattr(self, "rgb_keys", ["view"] * len(logits_by_view))
+        weight_buffer_names = getattr(self, "_semantic_class_weight_buffer_names", [])
+
+        for view_idx, (logits, target, foreground_quality) in enumerate(
+            zip(logits_by_view, targets_by_view, class_quality_by_view, strict=True)
+        ):
+            suffixes = view_suffixes[view_idx]
+            if logits.shape[1] != len(suffixes) + 1:
+                raise ValueError(
+                    f"View {view_keys[view_idx]} has {logits.shape[1]} logits channels, expected "
+                    f"background + {suffixes}."
+                )
+            if view_idx < len(weight_buffer_names):
+                class_weights = getattr(self, weight_buffer_names[view_idx])
+            else:
+                class_weights = self.semantic_class_weights
+            if foreground_quality is None:
+                ce_loss = F.cross_entropy(logits, target, weight=class_weights)
+                sample_class_quality = torch.ones(
+                    logits.shape[:2],
+                    dtype=logits.dtype,
+                    device=logits.device,
+                )
+            else:
+                foreground_quality = foreground_quality.to(device=logits.device, dtype=logits.dtype)
+                if foreground_quality.shape != (logits.shape[0], logits.shape[1] - 1):
+                    raise ValueError(
+                        "Mask quality class weights must have shape "
+                        f"{(logits.shape[0], logits.shape[1] - 1)}, got {tuple(foreground_quality.shape)}."
+                    )
+                foreground_quality = foreground_quality.clamp(0.0, 1.0)
+                background_quality = foreground_quality.amin(dim=1, keepdim=True)
+                sample_class_quality = torch.cat([background_quality, foreground_quality], dim=1)
+                pixel_quality = sample_class_quality.gather(1, target.flatten(1)).reshape_as(target)
+                pixel_class_weight = class_weights[target]
+                ce_per_pixel = F.cross_entropy(
+                    logits,
+                    target,
+                    weight=class_weights,
+                    reduction="none",
+                )
+                ce_loss = (
+                    (ce_per_pixel * pixel_quality).sum()
+                    / (pixel_class_weight * pixel_quality).sum().clamp_min(1e-6)
+                )
+            probabilities = torch.softmax(logits, dim=1)
+            one_hot = (
+                F.one_hot(target, num_classes=logits.shape[1])
+                .permute(0, 3, 1, 2)
+                .to(logits.dtype)
+            )
+            dims = (0, 2, 3)
+            dice_weights = sample_class_quality.unsqueeze(-1).unsqueeze(-1)
+            intersection = (probabilities * one_hot * dice_weights).sum(dim=dims)
+            denominator = ((probabilities + one_hot) * dice_weights).sum(dim=dims)
+            dice_by_class = (2 * intersection + 1e-6) / (denominator + 1e-6)
+            dice_valid_by_class = (sample_class_quality > 0).any(dim=0)
+            valid_foreground = dice_valid_by_class[1:]
+            if valid_foreground.any():
+                dice_loss = 1 - (
+                    (dice_by_class[1:] * valid_foreground).sum() / valid_foreground.sum()
+                )
+            else:
+                dice_loss = dice_by_class.sum() * 0.0
+            seg_loss = ce_loss + self.dice_loss_weight * dice_loss
+
+            seg_losses.append(seg_loss)
+            ce_losses.append(ce_loss)
+            dice_losses.append(dice_loss)
+            view_name = view_keys[view_idx].rsplit(".", 1)[-1]
+            for class_idx, suffix in enumerate(suffixes, start=1):
+                value = float(dice_by_class[class_idx].detach().cpu())
+                if len(logits_by_view) > 1:
+                    dice_logs[f"dice_{view_name}_{suffix}"] = value
+                dice_values_by_suffix.setdefault(suffix, []).append(value)
+
+        for suffix, values in dice_values_by_suffix.items():
+            dice_logs[f"dice_{suffix}"] = sum(values) / len(values)
+        return seg_losses, ce_losses, dice_losses, dice_logs
+
     def predict_masks_and_latent(self, raw_batch: dict[str, Tensor], device: torch.device) -> tuple[Tensor, Tensor]:
         return self.predict_masks_and_latent_from_rgbs(self._get_rgb_inputs(raw_batch, device=device))
 
     def predict_view_logits_and_latent_from_rgbs(self, rgbs: list[Tensor]) -> tuple[list[Tensor], Tensor]:
+        if self.uses_actionsem_segmenters():
+            if self.pretrained_segmenters is None:
+                raise RuntimeError(f"{self.experiment} pretrained segmenters are missing.")
+            logits_by_view = [
+                segmenter(rgb)
+                for segmenter, rgb in zip(self.pretrained_segmenters, rgbs, strict=True)
+            ]
+            empty_latent = rgbs[0].new_zeros((rgbs[0].shape[0], 0))
+            return logits_by_view, empty_latent
         if self.uses_frozen_semantic_segmenter():
             if self.pretrained_segmenters is not None:
                 probabilities_by_view = [
@@ -2323,7 +2484,7 @@ class MaskACTPolicy(nn.Module):
     def forward(self, batch: dict[str, Tensor], raw_batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, float]]:
         device = batch["action"].device
         mask_targets = None
-        if not self.uses_frozen_semantic_segmenter():
+        if not self.uses_frozen_semantic_segmenter() and not self.uses_semantic_maps():
             mask_targets = self.build_mask_targets(raw_batch, device=device)
 
         if self.uses_semantic_latents():
@@ -2375,7 +2536,8 @@ class MaskACTPolicy(nn.Module):
                     gamma=self.mask_quality_weight_gamma,
                 )
                 class_quality_by_view = [
-                    quality_weights[:, view_idx] for view_idx in range(len(self.rgb_keys))
+                    quality_weights[:, view_idx, : len(self.view_mask_suffixes[view_idx])]
+                    for view_idx in range(len(self.rgb_keys))
                 ]
                 fusion_sample_quality = quality_weights.mean(dim=(1, 2))
                 quality_logs = {
@@ -2388,7 +2550,9 @@ class MaskACTPolicy(nn.Module):
             elif quality_validity is not None:
                 quality_validity = quality_validity.to(device=device, dtype=torch.bool)
                 class_quality_by_view = [
-                    quality_validity[:, view_idx].to(dtype=torch.float32)
+                    quality_validity[
+                        :, view_idx, : len(self.view_mask_suffixes[view_idx])
+                    ].to(dtype=torch.float32)
                     for view_idx in range(len(self.rgb_keys))
                 ]
                 fusion_sample_quality = quality_validity.to(dtype=torch.float32).mean(dim=(1, 2))
@@ -2400,17 +2564,35 @@ class MaskACTPolicy(nn.Module):
                 seg_loss = torch.zeros((), device=device, dtype=torch.float32)
                 ce_loss = seg_loss
                 dice_loss = seg_loss
+                seg_losses_by_view: list[Tensor] = []
                 dice_logs = {}
             else:
                 if semantic_targets is None:
                     raise RuntimeError("Trainable semantic experiments require semantic targets.")
-                seg_loss, ce_loss, dice_loss, dice_logs = self.semantic_segmentation_loss(
-                    logits_by_view,
-                    semantic_targets,
-                    class_quality_by_view,
-                )
+                if self.experiment in ACTIONSEM_EXPERIMENTS:
+                    (
+                        seg_losses_by_view,
+                        ce_losses_by_view,
+                        dice_losses_by_view,
+                        dice_logs,
+                    ) = self.semantic_segmentation_losses_by_view(
+                        logits_by_view,
+                        semantic_targets,
+                        class_quality_by_view,
+                    )
+                    seg_loss = torch.stack(seg_losses_by_view).mean()
+                    ce_loss = torch.stack(ce_losses_by_view).mean()
+                    dice_loss = torch.stack(dice_losses_by_view).mean()
+                else:
+                    seg_loss, ce_loss, dice_loss, dice_logs = self.semantic_segmentation_loss(
+                        logits_by_view,
+                        semantic_targets,
+                        class_quality_by_view,
+                    )
+                    seg_losses_by_view = [seg_loss]
             probabilities_by_view = self.semantic_probabilities(logits_by_view)
             action_to_seg_ratio = self.scheduled_action_to_seg_grad_ratio()
+            segmenter_finetune_scale = self.scheduled_segmenter_finetune_scale()
             act_batch = dict(batch)
             stage_total_loss = None
             stage_logs = {}
@@ -2643,7 +2825,10 @@ class MaskACTPolicy(nn.Module):
                 }
 
             action_loss, action_logs = self.act_policy(act_batch)
-            loss = self.action_loss_weight * action_loss + self.seg_loss_weight * seg_loss
+            loss = (
+                self.action_loss_weight * action_loss
+                + segmenter_finetune_scale * self.seg_loss_weight * seg_loss
+            )
             if viewfusion_loss is not None:
                 loss = loss + self.viewfusion_loss_weight * viewfusion_loss
             if phase_loss is not None:
@@ -2692,7 +2877,16 @@ class MaskACTPolicy(nn.Module):
                     "semantic_dynamics_valid_ratio": float(valid_future_steps.float().mean().cpu()),
                 }
             if self.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
-                self._asem_backward_losses = (action_loss, seg_loss, action_to_seg_ratio)
+                backward_seg_losses = (
+                    seg_losses_by_view
+                    if self.experiment in ACTIONSEM_EXPERIMENTS and segmenter_finetune_scale > 0.0
+                    else ([seg_loss] if self.experiment == "ASEM-1" else [])
+                )
+                self._asem_backward_losses = (
+                    action_loss,
+                    backward_seg_losses,
+                    action_to_seg_ratio,
+                )
             logs = {
                 "loss": float(loss.detach().cpu()),
                 "action_loss": float(action_loss.detach().cpu()),
@@ -2708,6 +2902,8 @@ class MaskACTPolicy(nn.Module):
             }
             if self.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
                 logs["action_to_seg_target_grad_ratio"] = action_to_seg_ratio
+            if self.experiment in ACTIONSEM_EXPERIMENTS:
+                logs["segmenter_finetune_active"] = segmenter_finetune_scale
             logs.update({key: float(value) for key, value in action_logs.items() if isinstance(value, (int, float))})
             return loss, logs
 
@@ -2773,35 +2969,107 @@ class MaskACTPolicy(nn.Module):
         return loss, logs
 
     def backward_training_loss(self, loss: Tensor, logs: dict[str, float]) -> None:
-        """Backpropagate, with guarded multi-task gradients for ASEM-1."""
+        """Backpropagate guarded action gradients into semantic segmenters."""
 
         if self.experiment not in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
             loss.backward()
             return
         if self._asem_backward_losses is None:
-            raise RuntimeError("ASEM-1 backward state is missing. Call forward before backward_training_loss.")
+            raise RuntimeError(
+                f"{self.experiment} backward state is missing. Call forward before backward_training_loss."
+            )
 
-        action_loss, seg_loss, target_ratio = self._asem_backward_losses
+        action_loss, seg_losses, target_ratio = self._asem_backward_losses
         self._asem_backward_losses = None
-        seg_parameters = [parameter for parameter in self.seg_net.parameters() if parameter.requires_grad]
+        parameter_groups = self.action_supervised_semantic_parameter_groups()
+        if not seg_losses:
+            (self.action_loss_weight * action_loss).backward()
+            logs.update(
+                {
+                    "seg_supervised_grad_norm": 0.0,
+                    "action_to_seg_raw_grad_norm": 0.0,
+                    "action_to_seg_applied_grad_norm": 0.0,
+                    "action_to_seg_applied_grad_ratio": 0.0,
+                }
+            )
+            return
+        if len(seg_losses) != len(parameter_groups):
+            raise RuntimeError(
+                f"{self.experiment} has {len(parameter_groups)} semantic parameter groups but "
+                f"{len(seg_losses)} supervised losses."
+            )
 
         weighted_action_loss = self.action_loss_weight * action_loss
-        weighted_action_loss.backward(retain_graph=target_ratio > 0.0)
-        action_grads = [
-            None if parameter.grad is None else parameter.grad.detach().clone()
-            for parameter in seg_parameters
+        weighted_action_loss.backward(retain_graph=True)
+        action_grads_by_group = [
+            [
+                None if parameter.grad is None else parameter.grad.detach().clone()
+                for parameter in parameters
+            ]
+            for _, parameters in parameter_groups
         ]
-        for parameter in seg_parameters:
-            parameter.grad = None
+        for _, parameters in parameter_groups:
+            for parameter in parameters:
+                parameter.grad = None
 
-        weighted_seg_loss = self.seg_loss_weight * seg_loss
+        weighted_seg_loss = self.seg_loss_weight * torch.stack(seg_losses).mean()
         weighted_seg_loss.backward()
-        seg_grads = [
-            None if parameter.grad is None else parameter.grad.detach().clone()
-            for parameter in seg_parameters
-        ]
+        group_metrics = []
+        for (group_name, parameters), action_grads in zip(
+            parameter_groups,
+            action_grads_by_group,
+            strict=True,
+        ):
+            seg_grads = [
+                None if parameter.grad is None else parameter.grad.detach().clone()
+                for parameter in parameters
+            ]
+            metrics = self.apply_guarded_action_gradients(
+                parameters,
+                action_grads,
+                seg_grads,
+                target_ratio,
+            )
+            group_metrics.append(metrics)
+            if self.experiment in ACTIONSEM_EXPERIMENTS:
+                logs.update({f"{group_name}_{key}": value for key, value in metrics.items()})
 
-        device = action_loss.device
+        metric_names = group_metrics[0]
+        logs.update(
+            {
+                key: sum(metrics[key] for metrics in group_metrics) / len(group_metrics)
+                for key in metric_names
+            }
+        )
+
+    def action_supervised_semantic_parameter_groups(self) -> list[tuple[str, list[nn.Parameter]]]:
+        if self.experiment in ACTIONSEM_EXPERIMENTS:
+            if self.pretrained_segmenters is None:
+                raise RuntimeError(f"{self.experiment} pretrained segmenters are missing.")
+            groups = []
+            for rgb_key, segmenter in zip(self.rgb_keys, self.pretrained_segmenters, strict=True):
+                parameters = [parameter for parameter in segmenter.parameters() if parameter.requires_grad]
+                if not parameters:
+                    raise RuntimeError(f"{self.experiment} segmenter for {rgb_key} has no trainable layers.")
+                groups.append((rgb_key.rsplit(".", 1)[-1], parameters))
+            return groups
+        if self.seg_net is None:
+            raise RuntimeError(f"{self.experiment} trainable segmentation network is missing.")
+        return [("semantic", [parameter for parameter in self.seg_net.parameters() if parameter.requires_grad])]
+
+    def apply_guarded_action_gradients(
+        self,
+        parameters: list[nn.Parameter],
+        action_grads: list[Tensor | None],
+        seg_grads: list[Tensor | None],
+        target_ratio: float,
+    ) -> dict[str, float]:
+        """Project conflicting action gradients and cap them relative to segmentation."""
+
+        device = next(
+            (gradient.device for gradient in [*action_grads, *seg_grads] if gradient is not None),
+            parameters[0].device,
+        )
         zero = torch.zeros((), device=device, dtype=torch.float32)
         action_norm_sq = zero.clone()
         seg_norm_sq = zero.clone()
@@ -2857,7 +3125,7 @@ class MaskACTPolicy(nn.Module):
         applied_scale_value = float(applied_scale.item())
 
         for parameter, seg_grad, action_grad in zip(
-            seg_parameters,
+            parameters,
             seg_grads,
             projected_action_grads,
             strict=True,
@@ -2870,21 +3138,19 @@ class MaskACTPolicy(nn.Module):
                 parameter.grad.add_(action_grad, alpha=applied_scale_value)
 
         applied_action_norm = projected_norm * applied_scale
-        logs.update(
-            {
-                "seg_supervised_grad_norm": float(seg_norm.cpu()),
-                "action_to_seg_raw_grad_norm": float(action_norm.cpu()),
-                "action_to_seg_raw_grad_ratio": float((action_norm / seg_norm.clamp_min(eps)).cpu()),
-                "action_to_seg_grad_cosine": float(cosine.cpu()),
-                "action_to_seg_projected_grad_cosine": float(projected_cosine.cpu()),
-                "action_to_seg_grad_conflict": float(conflict),
-                "action_to_seg_applied_scale": float(applied_scale.cpu()),
-                "action_to_seg_applied_grad_norm": float(applied_action_norm.cpu()),
-                "action_to_seg_applied_grad_ratio": float(
-                    (applied_action_norm / seg_norm.clamp_min(eps)).cpu()
-                ),
-            }
-        )
+        return {
+            "seg_supervised_grad_norm": float(seg_norm.cpu()),
+            "action_to_seg_raw_grad_norm": float(action_norm.cpu()),
+            "action_to_seg_raw_grad_ratio": float((action_norm / seg_norm.clamp_min(eps)).cpu()),
+            "action_to_seg_grad_cosine": float(cosine.cpu()),
+            "action_to_seg_projected_grad_cosine": float(projected_cosine.cpu()),
+            "action_to_seg_grad_conflict": float(conflict),
+            "action_to_seg_applied_scale": float(applied_scale.cpu()),
+            "action_to_seg_applied_grad_norm": float(applied_action_norm.cpu()),
+            "action_to_seg_applied_grad_ratio": float(
+                (applied_action_norm / seg_norm.clamp_min(eps)).cpu()
+            ),
+        }
 
 
 def parse_args() -> argparse.Namespace:
@@ -2907,6 +3173,8 @@ def parse_args() -> argparse.Namespace:
             "SEM-1-N",
             "SEM-1-V2",
             "ASEM-1",
+            "ACTIONSEM-F",
+            "ACTIONSEM-FS",
             "SSACT-1",
             "SSACT-3",
             "SEM-2",
@@ -3139,7 +3407,7 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=None,
         help=(
-            "View-aligned frozen TinyUNet checkpoints for UNET-SEM-V5 and STAGE-V5. "
+            "View-aligned TinyUNet checkpoints for UNET-SEM-V5, STAGE-V5, and ActionSEM. "
             "Supply one path for each ordered --rgb-keys entry."
         ),
     )
@@ -3307,6 +3575,7 @@ def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
         return list(args.rgb_keys)
     if experiment in {
         *UNET_SEM_V5_ONLY_EXPERIMENTS,
+        *ACTIONSEM_EXPERIMENTS,
         *STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS,
         *SIMPLE_STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS,
     }:
@@ -3731,7 +4000,32 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
                     "zero_initialized_output_projection": True,
                 }
             if args.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
-                payload["action_supervision_design"] = "mycode/ASEM_1_DESIGN.md"
+                payload["action_supervision_design"] = (
+                    "mycode/ACTIONSEM_DESIGN.md"
+                    if args.experiment in ACTIONSEM_EXPERIMENTS
+                    else "mycode/ASEM_1_DESIGN.md"
+                )
+            if args.experiment in ACTIONSEM_EXPERIMENTS:
+                payload["actionsem"] = {
+                    "segmentation_checkpoints": [
+                        str(path) for path in args.pretrained_segmentation_checkpoints
+                    ],
+                    "semantic_classes_by_view": {
+                        key: ["background", *suffixes]
+                        for key, suffixes in zip(
+                            args.rgb_keys,
+                            semantic_suffixes_by_view(args.rgb_keys, args.mask_target_keys),
+                            strict=True,
+                        )
+                    },
+                    "trainable_blocks": ["fuse0.convolutions", "head"],
+                    "batch_norm": "frozen_parameters_and_running_statistics",
+                    "segmentation_supervision": "quality_weighted_ce_plus_foreground_dice",
+                    "view_loss_reduction": "mean",
+                    "action_gradient_guard": "per_view_conflict_projection_and_norm_cap",
+                    "segmenter_frozen_steps": args.action_to_seg_warmup_steps,
+                    "action_gradient_ramp_steps": args.action_to_seg_ramp_steps,
+                }
             if args.experiment in PREDICTIVE_SEMANTIC_EXPERIMENTS:
                 payload["semantic_state_definition"] = "mycode/SEMANTIC_SERVO_FEASIBILITY.md"
                 payload["semantic_state_names"] = list(
@@ -4050,8 +4344,13 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             raise ValueError(
                 f"{args.experiment} requires exactly ['observation.images.front']; got {args.rgb_keys}."
             )
-    if args.experiment.upper() in UNET_SEM_V5_EXPERIMENTS:
-        expected_views = 1 if "-F-" in args.experiment.upper() else 2
+    if args.experiment.upper() in VIEW_SPECIFIC_PRETRAINED_SEGMENTER_EXPERIMENTS:
+        if args.experiment.upper() == "ACTIONSEM-F":
+            expected_views = 1
+        elif args.experiment.upper() == "ACTIONSEM-FS":
+            expected_views = 2
+        else:
+            expected_views = 1 if "-F-" in args.experiment.upper() else 2
         if args.experiment.upper() in UNET_SEM_V5_ONLY_EXPERIMENTS:
             expected_views = 2
         if len(args.rgb_keys) != expected_views:
@@ -4067,8 +4366,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             raise ValueError(
                 f"{args.experiment} requires observation.images.side as its second view; got {args.rgb_keys}."
             )
-    if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
-        if args.experiment.upper() in UNET_SEM_V5_EXPERIMENTS:
+    if args.experiment.upper() in {
+        *FROZEN_SEMANTIC_EXPERIMENTS,
+        *ACTIONSEM_EXPERIMENTS,
+    }:
+        if args.experiment.upper() in VIEW_SPECIFIC_PRETRAINED_SEGMENTER_EXPERIMENTS:
             if not args.pretrained_segmentation_checkpoints:
                 raise ValueError(
                     f"{args.experiment} requires --pretrained-segmentation-checkpoints."
@@ -4389,6 +4691,12 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 f"{args.action_to_seg_grad_ratio:g}x supervised segmentation gradient norm; "
                 f"conflict projection: {args.action_to_seg_conflict_projection}."
             )
+            if args.experiment in ACTIONSEM_EXPERIMENTS:
+                print(
+                    "ActionSEM segmenters: view-specific pretrained TinyUNets; trainable layers="
+                    "fuse0 convolutions + head; all BatchNorm frozen; segmentation view losses averaged; "
+                    f"sources={args.pretrained_segmentation_checkpoints}."
+                )
         else:
             semantic_description = (
                 "Semantic loss: weighted multiclass CE + "
@@ -4478,9 +4786,9 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 raw_batch = mask_quality_store.add_batch_quality(
                     raw_batch,
                     mask_keys=list(args.mask_target_keys),
-                    mask_key_map=model.mask_key_map,
+                    mask_key_map=model.mask_key_local_map,
                     num_views=len(args.rgb_keys),
-                    num_classes=len(model.mask_suffixes),
+                    num_classes=max(len(suffixes) for suffixes in model.view_mask_suffixes),
                 )
             if phase_store is not None:
                 raw_batch = phase_store.add_batch_phase(raw_batch)

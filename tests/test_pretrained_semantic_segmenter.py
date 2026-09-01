@@ -7,7 +7,11 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "mycode"))
 
-from pretrained_semantic_segmenter import EXPECTED_LABELS, FrozenTinyUNetSegmenter  # noqa: E402
+from pretrained_semantic_segmenter import (  # noqa: E402
+    EXPECTED_LABELS,
+    ActionSupervisedTinyUNetSegmenter,
+    FrozenTinyUNetSegmenter,
+)
 from train_mask_act_policy import act_identity_ids_for_experiment  # noqa: E402
 
 
@@ -74,3 +78,45 @@ def test_unet_sem_identity_ids_cover_single_and_dual_view_modalities():
     args.experiment = "UNET-SEM-V3-F-NOEMB"
     args.rgb_keys = ["observation.images.front"]
     assert act_identity_ids_for_experiment(args) == (None, None)
+
+
+def test_action_supervised_segmenter_only_trains_fuse0_convolutions_and_head():
+    expected_labels = (
+        "background",
+        "occluder",
+        "object",
+        "region",
+        "tool",
+        "leftarm",
+        "rightarm",
+    )
+    segmenter = ActionSupervisedTinyUNetSegmenter(
+        PROJECT_ROOT / "data/bettersetup_v5/models/unet_front_v4_r1/best.pt",
+        expected_labels=expected_labels,
+    )
+    segmenter.train()
+
+    trainable_names = {name for name, _ in segmenter.trainable_named_parameters()}
+    assert trainable_names == {
+        "fuse0.net.0.weight",
+        "fuse0.net.3.weight",
+        "head.weight",
+        "head.bias",
+    }
+    assert not segmenter.network.training
+    assert all(
+        not module.training
+        for module in segmenter.network.modules()
+        if isinstance(module, torch.nn.modules.batchnorm._BatchNorm)
+    )
+
+    logits = segmenter(torch.rand(1, 3, 36, 64))
+    assert logits.shape == (1, 7, 36, 64)
+    assert logits.requires_grad
+    logits.square().mean().backward()
+    assert all(parameter.grad is not None for _, parameter in segmenter.trainable_named_parameters())
+    assert all(
+        parameter.grad is None
+        for parameter in segmenter.parameters()
+        if not parameter.requires_grad
+    )

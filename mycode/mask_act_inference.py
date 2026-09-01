@@ -16,12 +16,13 @@ from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.policies.factory import make_pre_post_processors
 
 from train_mask_act_policy import (
+    ACTIONSEM_EXPERIMENTS,
     FROZEN_SEMANTIC_EXPERIMENTS,
     MaskACTPolicy,
     SEMANTIC_EXPERIMENTS,
     VIEW_FUSION_EXPERIMENTS,
     VIEWFUS_FUSED_FRONT_KEY,
-    UNET_SEM_V5_EXPERIMENTS,
+    VIEW_SPECIFIC_PRETRAINED_SEGMENTER_EXPERIMENTS,
     act_image_keys_for_experiment,
     make_policy,
     reshape_visual_stats_for_channel_first,
@@ -208,8 +209,11 @@ def load_mask_act_for_inference(
     args.device = "cuda" if torch.cuda.is_available() else "cpu"
     # Loading the checkpoint replaces these weights, so avoid an unnecessary network download.
     args.pretrained_backbone_weights = None
-    if str(args.experiment).upper() in FROZEN_SEMANTIC_EXPERIMENTS:
-        if str(args.experiment).upper() in UNET_SEM_V5_EXPERIMENTS:
+    if str(args.experiment).upper() in {
+        *FROZEN_SEMANTIC_EXPERIMENTS,
+        *ACTIONSEM_EXPERIMENTS,
+    }:
+        if str(args.experiment).upper() in VIEW_SPECIFIC_PRETRAINED_SEGMENTER_EXPERIMENTS:
             configured = [
                 Path(path).expanduser()
                 for path in getattr(args, "pretrained_segmentation_checkpoints", []) or []
@@ -238,7 +242,7 @@ def load_mask_act_for_inference(
                 ]
                 if missing_views:
                     raise FileNotFoundError(
-                        "Frozen view-specific segmentation checkpoints are unavailable at the recorded "
+                        "View-specific segmentation checkpoints are unavailable at the recorded "
                         "paths, dataset model package, and bundled project model package; missing views "
                         f"{missing_views}."
                     )

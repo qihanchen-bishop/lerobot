@@ -1,4 +1,4 @@
-"""Frozen TinyUNet semantic segmentation for policy-side semantic inputs."""
+"""Pretrained TinyUNet semantic segmentation for policy-side semantic inputs."""
 
 from __future__ import annotations
 
@@ -149,3 +149,104 @@ class FrozenTinyUNetSegmenter(nn.Module):
                 align_corners=False,
             )
         return probabilities
+
+
+class ActionSupervisedTinyUNetSegmenter(nn.Module):
+    """Load TinyUNet weights while exposing only late layers for policy supervision.
+
+    ``fuse0`` convolution weights and ``head`` are trainable. BatchNorm affine
+    parameters and running statistics stay frozen so small policy batches do not
+    corrupt the pretrained segmenter's normalization.
+    """
+
+    TRAINABLE_BLOCKS = ("fuse0", "head")
+
+    def __init__(
+        self,
+        checkpoint_path: str | Path,
+        *,
+        expected_labels: tuple[str, ...] | None = EXPECTED_LABELS,
+    ) -> None:
+        super().__init__()
+        path = Path(checkpoint_path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"Pretrained segmentation checkpoint not found: {path}")
+
+        checkpoint: dict[str, Any] = torch.load(path, map_location="cpu", weights_only=False)
+        labels = tuple(checkpoint.get("labels", ()))
+        if expected_labels is not None and labels != expected_labels:
+            raise ValueError(
+                f"Segmentation checkpoint labels must be {expected_labels}, got {labels} from {path}."
+            )
+        if not labels or labels[0] != "background" or len(set(labels)) != len(labels):
+            raise ValueError(
+                "Segmentation checkpoint labels must be unique, non-empty, and start with "
+                f"'background'; got {labels} from {path}."
+            )
+        image_size = checkpoint.get("image_size")
+        if not isinstance(image_size, (tuple, list)) or len(image_size) != 2:
+            raise ValueError(f"Segmentation checkpoint has invalid image_size: {image_size!r}")
+        width = int(checkpoint.get("args", {}).get("width", 0))
+        if width <= 0:
+            width = int(checkpoint["model"]["stem.0.weight"].shape[0])
+
+        self.network = TinyUNet(num_classes=len(labels), width=width)
+        self.network.load_state_dict(checkpoint["model"], strict=True)
+        for parameter in self.network.parameters():
+            parameter.requires_grad_(False)
+        for block_name in self.TRAINABLE_BLOCKS:
+            for parameter in getattr(self.network, block_name).parameters():
+                parameter.requires_grad_(True)
+        for module in self.network.modules():
+            if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                module.eval()
+                for parameter in module.parameters():
+                    parameter.requires_grad_(False)
+
+        input_width, input_height = (int(value) for value in image_size)
+        self.input_size = (input_height, input_width)
+        self.labels = labels
+        self.checkpoint_path = str(path)
+        self.checkpoint_epoch = int(checkpoint.get("epoch", -1))
+        self.register_buffer("mean", torch.tensor(IMAGENET_MEAN).view(1, 3, 1, 1))
+        self.register_buffer("std", torch.tensor(IMAGENET_STD).view(1, 3, 1, 1))
+        self.train(True)
+
+    def train(self, mode: bool = True) -> ActionSupervisedTinyUNetSegmenter:
+        super().train(mode)
+        # Convolutions remain differentiable in eval mode; keeping the complete
+        # pretrained network in eval mode freezes every BatchNorm running buffer.
+        self.network.eval()
+        return self
+
+    def trainable_named_parameters(self) -> list[tuple[str, nn.Parameter]]:
+        return [
+            (name, parameter)
+            for name, parameter in self.network.named_parameters()
+            if parameter.requires_grad
+        ]
+
+    def forward(self, rgb: Tensor) -> Tensor:
+        """Return differentiable per-class logits at the policy image resolution."""
+        if rgb.ndim != 4 or rgb.shape[1] != 3:
+            raise ValueError(f"Expected BCHW RGB input, got {tuple(rgb.shape)}.")
+        output_size = tuple(rgb.shape[-2:])
+        resized = rgb.to(dtype=torch.float32).clamp(0.0, 1.0)
+        if output_size != self.input_size:
+            resized = F.interpolate(
+                resized,
+                size=self.input_size,
+                mode="bilinear",
+                align_corners=False,
+                antialias=True,
+            )
+        normalized = (resized - self.mean) / self.std
+        logits = self.network(normalized)
+        if output_size != self.input_size:
+            logits = F.interpolate(
+                logits,
+                size=output_size,
+                mode="bilinear",
+                align_corners=False,
+            )
+        return logits
