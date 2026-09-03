@@ -122,6 +122,15 @@ class ACTConfig(PreTrainedConfig):
     # Training and loss computation.
     dropout: float = 0.1
     kl_weight: float = 10.0
+    action_representation: str = "absolute"
+    anchor_loss_weight: float = 0.25
+    motion_loss_weight: float = 0.25
+    reconstruction_loss_weight: float = 0.5
+    anchor_motion_gate_init: float = 0.1
+    action_target: str = "dataset_action"
+    follower_state_key: str = "observation.state"
+    gripper_loss_weight: float = 0.2
+    gripper_positive_weight: float = 1.0
     metric_mode: str | None = None
     metric_dim: int = 2
     image_camera_ids: list[int] | None = None
@@ -167,6 +176,47 @@ class ACTConfig(PreTrainedConfig):
             )
         if self.metric_dim <= 0:
             raise ValueError(f"`metric_dim` must be positive. Got {self.metric_dim}.")
+        if self.action_representation not in {"absolute", "anchor_offset"}:
+            raise ValueError(
+                "`action_representation` must be 'absolute' or 'anchor_offset'. "
+                f"Got {self.action_representation!r}."
+            )
+        if self.action_representation == "anchor_offset" and self.chunk_size < 2:
+            raise ValueError("`anchor_offset` action representation requires `chunk_size >= 2`.")
+        if self.action_target not in {
+            "dataset_action",
+            "follower_next_state",
+            "follower_delta",
+            "follower_anchor_delta",
+            "follower_joint_delta_gripper_absolute",
+            "follower_joint_anchor_delta_gripper_absolute",
+        }:
+            raise ValueError(
+                "`action_target` must be 'dataset_action', 'follower_next_state', "
+                "'follower_delta', 'follower_anchor_delta', or "
+                "'follower_joint_delta_gripper_absolute', or "
+                "'follower_joint_anchor_delta_gripper_absolute'. "
+                f"Got {self.action_target!r}."
+            )
+        if self.action_target != "dataset_action" and self.action_representation != "absolute":
+            raise ValueError(
+                f"{self.action_target} requires the standard absolute ACT decoder representation."
+            )
+        action_loss_weights = {
+            "anchor_loss_weight": self.anchor_loss_weight,
+            "motion_loss_weight": self.motion_loss_weight,
+            "reconstruction_loss_weight": self.reconstruction_loss_weight,
+        }
+        if any(weight < 0 for weight in action_loss_weights.values()):
+            raise ValueError(f"Anchor-and-motion loss weights must be non-negative: {action_loss_weights}.")
+        if self.action_representation == "anchor_offset" and sum(action_loss_weights.values()) <= 0:
+            raise ValueError("At least one anchor-and-motion action loss weight must be positive.")
+        if self.gripper_loss_weight < 0:
+            raise ValueError(f"`gripper_loss_weight` must be non-negative, got {self.gripper_loss_weight}.")
+        if self.gripper_positive_weight <= 0:
+            raise ValueError(
+                f"`gripper_positive_weight` must be positive, got {self.gripper_positive_weight}."
+            )
         image_count = len(self.image_features)
         if self.image_camera_embedding_mode not in {"default", "zero", "gated"}:
             raise ValueError(
@@ -220,6 +270,35 @@ class ACTConfig(PreTrainedConfig):
     def validate_features(self) -> None:
         if not self.image_features and not self.env_state_feature:
             raise ValueError("You must provide at least one image or the environment state among the inputs.")
+        if self.action_target in {
+            "follower_delta",
+            "follower_anchor_delta",
+            "follower_joint_delta_gripper_absolute",
+            "follower_joint_anchor_delta_gripper_absolute",
+        }:
+            state_feature = self.input_features.get(self.follower_state_key)
+            action_feature = self.output_features.get("action")
+            if state_feature is None:
+                raise ValueError(
+                    f"{self.action_target} requires input feature {self.follower_state_key!r}."
+                )
+            if action_feature is None or state_feature.shape != action_feature.shape:
+                raise ValueError(
+                    f"{self.action_target} requires matching follower state and action dimensions, got "
+                    f"state={getattr(state_feature, 'shape', None)} and "
+                    f"action={getattr(action_feature, 'shape', None)}."
+                )
+            if (
+                self.action_target
+                in {
+                    "follower_joint_delta_gripper_absolute",
+                    "follower_joint_anchor_delta_gripper_absolute",
+                }
+                and action_feature.shape[0] < 2
+            ):
+                raise ValueError(
+                    "follower_joint_delta_gripper_absolute requires at least one joint and one gripper."
+                )
 
     @property
     def observation_delta_indices(self) -> None:

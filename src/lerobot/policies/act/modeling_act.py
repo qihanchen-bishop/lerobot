@@ -20,6 +20,7 @@ The majority of changes here involve removing unused code, unifying naming, and 
 """
 
 import math
+from copy import deepcopy
 from collections import deque
 from collections.abc import Callable
 from itertools import chain
@@ -41,6 +42,200 @@ METRIC_INPUT = "metric_input"
 METRIC_PRED = "metric_pred"
 METRIC_SEED = "metric_seed"
 IMAGE_FEATURE_RESIDUALS = "image_feature_residuals"
+ANCHOR_PRED = "anchor_pred"
+MOTION_OFFSET_PRED = "motion_offset_pred"
+NORMALIZATION_EPS = 1e-8
+
+
+def decode_anchor_motion_actions(anchor: Tensor, motion_offsets: Tensor) -> Tensor:
+    """Decode one absolute anchor and same-anchor offsets into an absolute action chunk."""
+    if anchor.ndim != 3 or anchor.shape[1] != 1:
+        raise ValueError(f"Expected anchor shape (B, 1, A), got {tuple(anchor.shape)}.")
+    if motion_offsets.ndim != 3 or motion_offsets.shape[0] != anchor.shape[0]:
+        raise ValueError(
+            "Expected motion offsets with shape (B, S-1, A) and the same batch size as anchor, "
+            f"got anchor={tuple(anchor.shape)}, offsets={tuple(motion_offsets.shape)}."
+        )
+    if motion_offsets.shape[-1] != anchor.shape[-1]:
+        raise ValueError(
+            f"Anchor and offset action dimensions differ: {anchor.shape[-1]} and {motion_offsets.shape[-1]}."
+        )
+    return torch.cat([anchor, anchor + motion_offsets], dim=1)
+
+
+def decode_follower_delta_actions(
+    normalized_deltas: Tensor,
+    normalized_state: Tensor,
+    *,
+    delta_mean: Tensor,
+    delta_std: Tensor,
+    state_mean: Tensor,
+    state_std: Tensor,
+) -> Tensor:
+    """Integrate one-step follower deltas and encode absolute targets for the action postprocessor."""
+    if normalized_deltas.ndim != 3 or normalized_state.ndim != 2:
+        raise ValueError(
+            "Expected normalized deltas (B, S, A) and state (B, A), got "
+            f"{tuple(normalized_deltas.shape)} and {tuple(normalized_state.shape)}."
+        )
+    if normalized_deltas.shape[0] != normalized_state.shape[0]:
+        raise ValueError("Follower delta chunk and state batch sizes differ.")
+    if normalized_deltas.shape[-1] != normalized_state.shape[-1]:
+        raise ValueError("Follower delta and state dimensions differ.")
+    if torch.any(delta_std.abs() <= NORMALIZATION_EPS):
+        raise ValueError("Follower delta decoding requires non-zero per-joint delta standard deviations.")
+
+    raw_state = normalized_state * (state_std + NORMALIZATION_EPS) + state_mean
+    raw_deltas = normalized_deltas * (delta_std + NORMALIZATION_EPS) + delta_mean
+    absolute_actions = raw_state.unsqueeze(1) + raw_deltas.cumsum(dim=1)
+    return (absolute_actions - delta_mean) / delta_std
+
+
+def decode_follower_joint_delta_gripper_actions(
+    normalized_predictions: Tensor,
+    normalized_state: Tensor,
+    *,
+    action_mean: Tensor,
+    action_std: Tensor,
+    state_mean: Tensor,
+    state_std: Tensor,
+) -> Tensor:
+    """Integrate joint deltas while decoding the final gripper logit as an absolute binary command."""
+    if normalized_predictions.ndim != 3 or normalized_state.ndim != 2:
+        raise ValueError(
+            "Expected predictions (B, S, A) and state (B, A), got "
+            f"{tuple(normalized_predictions.shape)} and {tuple(normalized_state.shape)}."
+        )
+    if normalized_predictions.shape[0] != normalized_state.shape[0]:
+        raise ValueError("Follower prediction chunk and state batch sizes differ.")
+    if normalized_predictions.shape[-1] != normalized_state.shape[-1]:
+        raise ValueError("Follower prediction and state dimensions differ.")
+    if normalized_predictions.shape[-1] < 2:
+        raise ValueError("Expected at least one joint dimension and a final gripper dimension.")
+    if torch.any(action_std[:-1].abs() <= NORMALIZATION_EPS):
+        raise ValueError("Joint delta decoding requires non-zero per-joint action standard deviations.")
+
+    raw_state = normalized_state * (state_std + NORMALIZATION_EPS) + state_mean
+    raw_joint_deltas = (
+        normalized_predictions[..., :-1] * (action_std[:-1] + NORMALIZATION_EPS)
+        + action_mean[:-1]
+    )
+    raw_actions = torch.empty_like(normalized_predictions)
+    raw_actions[..., :-1] = raw_state[:, None, :-1] + raw_joint_deltas.cumsum(dim=1)
+    raw_actions[..., -1] = (normalized_predictions[..., -1] >= 0).to(raw_actions.dtype)
+    return (raw_actions - action_mean) / (action_std + NORMALIZATION_EPS)
+
+
+def follower_joint_anchor_delta_gripper_targets(
+    normalized_future_states: Tensor,
+    normalized_state: Tensor,
+    *,
+    action_mean: Tensor,
+    action_std: Tensor,
+    state_mean: Tensor,
+    state_std: Tensor,
+) -> Tensor:
+    """Use planning-frame joint offsets while retaining the normalized absolute gripper target."""
+    if normalized_future_states.ndim != 3 or normalized_state.ndim != 2:
+        raise ValueError(
+            "Expected future states (B, S, A) and state (B, A), got "
+            f"{tuple(normalized_future_states.shape)} and {tuple(normalized_state.shape)}."
+        )
+    if normalized_future_states.shape[-1] < 2:
+        raise ValueError("Expected at least one joint dimension and a final gripper dimension.")
+
+    raw_future_states = (
+        normalized_future_states * (action_std + NORMALIZATION_EPS) + action_mean
+    )
+    raw_state = normalized_state * (state_std + NORMALIZATION_EPS) + state_mean
+    targets = normalized_future_states.clone()
+    targets[..., :-1] = (
+        raw_future_states[..., :-1] - raw_state[:, None, :-1]
+    ) / (action_std[:-1] + NORMALIZATION_EPS)
+    return targets
+
+
+def decode_follower_joint_anchor_delta_gripper_actions(
+    normalized_predictions: Tensor,
+    normalized_state: Tensor,
+    *,
+    action_mean: Tensor,
+    action_std: Tensor,
+    state_mean: Tensor,
+    state_std: Tensor,
+) -> Tensor:
+    """Decode fixed-anchor joint offsets and the final absolute binary gripper logit."""
+    if normalized_predictions.ndim != 3 or normalized_state.ndim != 2:
+        raise ValueError(
+            "Expected predictions (B, S, A) and state (B, A), got "
+            f"{tuple(normalized_predictions.shape)} and {tuple(normalized_state.shape)}."
+        )
+    if normalized_predictions.shape[0] != normalized_state.shape[0]:
+        raise ValueError("Follower prediction chunk and state batch sizes differ.")
+    if normalized_predictions.shape[-1] != normalized_state.shape[-1]:
+        raise ValueError("Follower prediction and state dimensions differ.")
+    if normalized_predictions.shape[-1] < 2:
+        raise ValueError("Expected at least one joint dimension and a final gripper dimension.")
+    if torch.any(action_std[:-1].abs() <= NORMALIZATION_EPS):
+        raise ValueError("Joint anchor decoding requires non-zero per-joint action standard deviations.")
+
+    raw_state = normalized_state * (state_std + NORMALIZATION_EPS) + state_mean
+    raw_actions = torch.empty_like(normalized_predictions)
+    raw_actions[..., :-1] = (
+        raw_state[:, None, :-1]
+        + normalized_predictions[..., :-1] * (action_std[:-1] + NORMALIZATION_EPS)
+    )
+    raw_actions[..., -1] = (normalized_predictions[..., -1] >= 0).to(raw_actions.dtype)
+    return (raw_actions - action_mean) / (action_std + NORMALIZATION_EPS)
+
+
+def follower_anchor_delta_targets(
+    normalized_future_states: Tensor,
+    normalized_state: Tensor,
+    *,
+    action_mean: Tensor,
+    action_std: Tensor,
+    state_mean: Tensor,
+    state_std: Tensor,
+) -> Tensor:
+    """Convert normalized future follower states to offsets from the planning-frame state."""
+    if normalized_future_states.ndim != 3 or normalized_state.ndim != 2:
+        raise ValueError(
+            "Expected future states (B, S, A) and current state (B, A), got "
+            f"{tuple(normalized_future_states.shape)} and {tuple(normalized_state.shape)}."
+        )
+    raw_future_states = normalized_future_states * (action_std + NORMALIZATION_EPS) + action_mean
+    raw_state = normalized_state * (state_std + NORMALIZATION_EPS) + state_mean
+    return (raw_future_states - raw_state.unsqueeze(1)) / (action_std + NORMALIZATION_EPS)
+
+
+def decode_follower_anchor_delta_actions(
+    normalized_offsets: Tensor,
+    normalized_state: Tensor,
+    *,
+    action_mean: Tensor,
+    action_std: Tensor,
+    state_mean: Tensor,
+    state_std: Tensor,
+) -> Tensor:
+    """Decode fixed-anchor follower offsets into absolute targets for the action postprocessor."""
+    if normalized_offsets.ndim != 3 or normalized_state.ndim != 2:
+        raise ValueError(
+            "Expected offsets (B, S, A) and current state (B, A), got "
+            f"{tuple(normalized_offsets.shape)} and {tuple(normalized_state.shape)}."
+        )
+    if normalized_offsets.shape[0] != normalized_state.shape[0]:
+        raise ValueError("Follower anchor-delta chunk and state batch sizes differ.")
+    if normalized_offsets.shape[-1] != normalized_state.shape[-1]:
+        raise ValueError("Follower anchor-delta and state dimensions differ.")
+    if torch.any(action_std.abs() <= NORMALIZATION_EPS):
+        raise ValueError("Follower anchor-delta decoding requires non-zero action standard deviations.")
+
+    raw_state = normalized_state * (state_std + NORMALIZATION_EPS) + state_mean
+    absolute_actions = raw_state.unsqueeze(1) + normalized_offsets * (
+        action_std + NORMALIZATION_EPS
+    )
+    return (absolute_actions - action_mean) / action_std
 
 
 class ACTPolicy(PreTrainedPolicy):
@@ -67,6 +262,58 @@ class ACTPolicy(PreTrainedPolicy):
         self.config = config
 
         self.model = ACT(config)
+
+        if config.action_target in {
+            "follower_delta",
+            "follower_anchor_delta",
+            "follower_joint_delta_gripper_absolute",
+            "follower_joint_anchor_delta_gripper_absolute",
+        }:
+            dataset_stats = kwargs.get("dataset_stats") or {}
+            action_dim = config.output_features[ACTION].shape[0]
+
+            def stat_tensor(feature_key: str, stat_name: str, default: float) -> Tensor:
+                feature_stats = dataset_stats.get(feature_key, {})
+                value = feature_stats.get(stat_name)
+                if value is None:
+                    return torch.full((action_dim,), default, dtype=torch.float32)
+                tensor = torch.as_tensor(value, dtype=torch.float32).reshape(-1)
+                if tensor.numel() != action_dim:
+                    raise ValueError(
+                        f"Expected {action_dim} values for {feature_key}.{stat_name}, "
+                        f"got shape {tuple(tensor.shape)}."
+                    )
+                return tensor
+
+            if config.action_target in {
+                "follower_delta",
+                "follower_joint_delta_gripper_absolute",
+            }:
+                self.register_buffer(
+                    "follower_delta_mean",
+                    stat_tensor(ACTION, "mean", 0.0),
+                )
+                self.register_buffer(
+                    "follower_delta_std",
+                    stat_tensor(ACTION, "std", 1.0),
+                )
+            else:
+                self.register_buffer(
+                    "follower_absolute_mean",
+                    stat_tensor(ACTION, "mean", 0.0),
+                )
+                self.register_buffer(
+                    "follower_absolute_std",
+                    stat_tensor(ACTION, "std", 1.0),
+                )
+            self.register_buffer(
+                "follower_state_mean",
+                stat_tensor(config.follower_state_key, "mean", 0.0),
+            )
+            self.register_buffer(
+                "follower_state_std",
+                stat_tensor(config.follower_state_key, "std", 1.0),
+            )
 
         if config.temporal_ensemble_coeff is not None:
             self.temporal_ensembler = ACTTemporalEnsembler(config.temporal_ensemble_coeff, config.chunk_size)
@@ -136,10 +383,66 @@ class ACTPolicy(PreTrainedPolicy):
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
         actions = self.model(batch)[0]
+        if self.config.action_target == "follower_delta":
+            actions = decode_follower_delta_actions(
+                actions,
+                batch[self.config.follower_state_key],
+                delta_mean=self.follower_delta_mean,
+                delta_std=self.follower_delta_std,
+                state_mean=self.follower_state_mean,
+                state_std=self.follower_state_std,
+            )
+        elif self.config.action_target == "follower_joint_delta_gripper_absolute":
+            actions = decode_follower_joint_delta_gripper_actions(
+                actions,
+                batch[self.config.follower_state_key],
+                action_mean=self.follower_delta_mean,
+                action_std=self.follower_delta_std,
+                state_mean=self.follower_state_mean,
+                state_std=self.follower_state_std,
+            )
+        elif self.config.action_target == "follower_joint_anchor_delta_gripper_absolute":
+            actions = decode_follower_joint_anchor_delta_gripper_actions(
+                actions,
+                batch[self.config.follower_state_key],
+                action_mean=self.follower_absolute_mean,
+                action_std=self.follower_absolute_std,
+                state_mean=self.follower_state_mean,
+                state_std=self.follower_state_std,
+            )
+        elif self.config.action_target == "follower_anchor_delta":
+            actions = decode_follower_anchor_delta_actions(
+                actions,
+                batch[self.config.follower_state_key],
+                action_mean=self.follower_absolute_mean,
+                action_std=self.follower_absolute_std,
+                state_mean=self.follower_state_mean,
+                state_std=self.follower_state_std,
+            )
         return actions
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         """Run the batch through the model and compute the loss for training or validation."""
+        if self.config.action_target == "follower_anchor_delta":
+            batch = dict(batch)
+            batch[ACTION] = follower_anchor_delta_targets(
+                batch[ACTION],
+                batch[self.config.follower_state_key],
+                action_mean=self.follower_absolute_mean,
+                action_std=self.follower_absolute_std,
+                state_mean=self.follower_state_mean,
+                state_std=self.follower_state_std,
+            )
+        elif self.config.action_target == "follower_joint_anchor_delta_gripper_absolute":
+            batch = dict(batch)
+            batch[ACTION] = follower_joint_anchor_delta_gripper_targets(
+                batch[ACTION],
+                batch[self.config.follower_state_key],
+                action_mean=self.follower_absolute_mean,
+                action_std=self.follower_absolute_std,
+                state_mean=self.follower_state_mean,
+                state_std=self.follower_state_std,
+            )
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
@@ -148,11 +451,97 @@ class ACTPolicy(PreTrainedPolicy):
         actions_hat, (mu_hat, log_sigma_x2_hat) = model_out[:2]
         aux_outputs = model_out[2] if len(model_out) > 2 else {}
 
-        l1_loss = (
-            F.l1_loss(batch[ACTION], actions_hat, reduction="none") * ~batch["action_is_pad"].unsqueeze(-1)
-        ).mean()
+        valid_action = ~batch["action_is_pad"].unsqueeze(-1)
+        if self.config.action_target in {
+            "follower_joint_delta_gripper_absolute",
+            "follower_joint_anchor_delta_gripper_absolute",
+        }:
+            if self.config.action_target == "follower_joint_delta_gripper_absolute":
+                gripper_action_mean = self.follower_delta_mean[-1]
+                gripper_action_std = self.follower_delta_std[-1]
+            else:
+                gripper_action_mean = self.follower_absolute_mean[-1]
+                gripper_action_std = self.follower_absolute_std[-1]
+            joint_l1_loss = (
+                F.l1_loss(batch[ACTION][..., :-1], actions_hat[..., :-1], reduction="none")
+                * valid_action
+            ).mean()
+            raw_gripper_target = (
+                batch[ACTION][..., -1] * (gripper_action_std + NORMALIZATION_EPS)
+                + gripper_action_mean
+            ).clamp(0, 1)
+            gripper_bce_per_step = F.binary_cross_entropy_with_logits(
+                actions_hat[..., -1],
+                raw_gripper_target,
+                pos_weight=actions_hat.new_tensor(self.config.gripper_positive_weight),
+                reduction="none",
+            )
+            valid_step = valid_action[..., 0]
+            gripper_bce = (gripper_bce_per_step * valid_step).mean()
+            reconstruction_loss = joint_l1_loss + self.config.gripper_loss_weight * gripper_bce
+        else:
+            reconstruction_loss = (
+                F.l1_loss(batch[ACTION], actions_hat, reduction="none") * valid_action
+            ).mean()
 
-        loss_dict = {"l1_loss": l1_loss.item()}
+        if self.config.action_representation == "anchor_offset":
+            anchor_hat = aux_outputs[ANCHOR_PRED]
+            motion_offset_hat = aux_outputs[MOTION_OFFSET_PRED]
+            anchor_target = batch[ACTION][:, :1]
+            motion_offset_target = batch[ACTION][:, 1:] - anchor_target
+            anchor_loss = (
+                F.l1_loss(anchor_target, anchor_hat, reduction="none") * valid_action[:, :1]
+            ).mean()
+            motion_loss = (
+                F.l1_loss(motion_offset_target, motion_offset_hat, reduction="none") * valid_action[:, 1:]
+            ).mean()
+            l1_loss = (
+                self.config.anchor_loss_weight * anchor_loss
+                + self.config.motion_loss_weight * motion_loss
+                + self.config.reconstruction_loss_weight * reconstruction_loss
+            )
+            valid_steps = (~batch["action_is_pad"]).sum(dim=1).clamp_min(1)
+            endpoint_index = (valid_steps - 1).view(-1, 1, 1).expand(-1, 1, actions_hat.shape[-1])
+            endpoint_loss = F.l1_loss(
+                actions_hat.gather(1, endpoint_index),
+                batch[ACTION].gather(1, endpoint_index),
+            )
+            velocity_valid = valid_action[:, 1:] & valid_action[:, :-1]
+            velocity_loss = (
+                F.l1_loss(
+                    actions_hat[:, 1:] - actions_hat[:, :-1],
+                    batch[ACTION][:, 1:] - batch[ACTION][:, :-1],
+                    reduction="none",
+                )
+                * velocity_valid
+            ).mean()
+            loss_dict = {
+                "l1_loss": l1_loss.item(),
+                "anchor_l1": anchor_loss.item(),
+                "motion_offset_l1": motion_loss.item(),
+                "reconstructed_action_l1": reconstruction_loss.item(),
+                "endpoint_l1": endpoint_loss.item(),
+                "velocity_l1": velocity_loss.item(),
+                "offset_rms": motion_offset_hat.detach().float().square().mean().sqrt().item(),
+            }
+        else:
+            l1_loss = reconstruction_loss
+            loss_dict = {"l1_loss": l1_loss.item()}
+            if self.config.action_target in {
+                "follower_joint_delta_gripper_absolute",
+                "follower_joint_anchor_delta_gripper_absolute",
+            }:
+                valid_count = valid_step.sum().clamp_min(1)
+                gripper_correct = (
+                    (actions_hat[..., -1] >= 0) == (raw_gripper_target >= 0.5)
+                ) & valid_step
+                loss_dict.update(
+                    {
+                        "joint_delta_l1": joint_l1_loss.item(),
+                        "gripper_bce": gripper_bce.item(),
+                        "gripper_accuracy": (gripper_correct.sum() / valid_count).item(),
+                    }
+                )
         if self.config.use_vae:
             # Calculate Dₖₗ(latent_pdf || standard_normal). Note: After computing the KL-divergence for
             # each dimension independently, we sum over the latent dimension to get the total
@@ -175,6 +564,14 @@ class ACTPolicy(PreTrainedPolicy):
                 if key.startswith("camera_embedding_") or key.startswith("camera_image_")
             }
         )
+        if self.config.action_representation == "anchor_offset":
+            loss_dict.update(
+                {
+                    key: float(value.detach().cpu())
+                    for key, value in aux_outputs.items()
+                    if key.startswith("anchor_motion_")
+                }
+            )
 
         return loss, loss_dict
 
@@ -380,6 +777,10 @@ class ACT(nn.Module):
         # The cls token forms parameters of the latent's distribution (like this [*means, *log_variances]).
         super().__init__()
         self.config = config
+        self.image_camera_embed = None
+        self.image_camera_embed_gate = None
+        self.image_modality_embed = None
+        self.image_modality_embed_gate = None
 
         if self.config.use_vae:
             self.vae_encoder = ACTEncoder(config, is_vae_encoder=True)
@@ -500,6 +901,24 @@ class ACT(nn.Module):
 
         # Final action regression head on the output of the transformer's decoder.
         self.action_head = nn.Linear(config.dim_model, self.config.action_feature.shape[0])
+        if self.config.action_representation == "anchor_offset":
+            # Start both regression heads from the same mapping without consuming additional RNG state.
+            self.anchor_head = deepcopy(self.action_head)
+            rng_state = torch.random.get_rng_state()
+            self.anchor_motion_input_proj = nn.Linear(
+                self.config.action_feature.shape[0], config.dim_model
+            )
+            torch.random.set_rng_state(rng_state)
+            with torch.no_grad():
+                self.anchor_motion_input_proj.weight.copy_(self.action_head.weight.transpose(0, 1))
+                self.anchor_motion_input_proj.bias.zero_()
+            self.anchor_motion_gate = nn.Parameter(
+                torch.tensor(float(config.anchor_motion_gate_init))
+            )
+        else:
+            self.anchor_head = None
+            self.anchor_motion_input_proj = None
+            self.anchor_motion_gate = None
 
         self._reset_parameters()
 
@@ -712,7 +1131,30 @@ class ACT(nn.Module):
         # Move back to (B, S, C).
         decoder_out = decoder_out.transpose(0, 1)
 
-        actions = self.action_head(decoder_out)
+        if self.config.action_representation == "anchor_offset":
+            anchor = self.anchor_head(decoder_out[:, :1])
+            anchor_condition = self.anchor_motion_input_proj(anchor.squeeze(1)).unsqueeze(1)
+            motion_features = decoder_out[:, 1:] + self.anchor_motion_gate * anchor_condition
+            motion_offsets = self.action_head(motion_features)
+            actions = decode_anchor_motion_actions(anchor, motion_offsets)
+            motion_feature_rms = decoder_out[:, 1:].detach().float().square().mean().sqrt()
+            effective_condition_rms = (
+                self.anchor_motion_gate.detach().float() * anchor_condition.detach().float()
+            ).square().mean().sqrt()
+            aux_outputs.update(
+                {
+                    ANCHOR_PRED: anchor,
+                    MOTION_OFFSET_PRED: motion_offsets,
+                    "anchor_motion_gate": self.anchor_motion_gate.detach().float(),
+                    "anchor_motion_condition_rms": effective_condition_rms,
+                    "anchor_motion_feature_rms": motion_feature_rms,
+                    "anchor_motion_condition_to_feature_ratio": (
+                        effective_condition_rms / motion_feature_rms.clamp_min(1e-12)
+                    ),
+                }
+            )
+        else:
+            actions = self.action_head(decoder_out)
         if self.config.metric_mode == "decoder_autoregressive":
             aux_outputs[METRIC_PRED] = self.metric_head(decoder_out)
 
