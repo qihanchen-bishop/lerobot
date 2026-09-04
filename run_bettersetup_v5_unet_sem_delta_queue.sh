@@ -8,7 +8,7 @@ cd "$PROJECT_ROOT"
 
 PYTHON_BIN="${PYTHON_BIN:-/home/qihan/miniconda3/envs/lerobot/bin/python}"
 DATASET_ROOT="${DATASET_ROOT:-/home/qihan/data/lerobot/data/bettersetup_v5}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_ROOT/outputs/train}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_ROOT/outputs/train/delta}"
 STEPS="${STEPS:-100000}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
 NUM_WORKERS="${NUM_WORKERS:-16}"

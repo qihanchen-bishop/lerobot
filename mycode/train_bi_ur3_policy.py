@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=100_000)
     parser.add_argument("--seed", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--num-workers", type=int, default=8)
+    parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--chunk-size", type=int, default=60)
     parser.add_argument("--n-action-steps", type=int, default=60)
@@ -56,8 +56,8 @@ def parse_args() -> argparse.Namespace:
         type=int,
         nargs=2,
         metavar=("HEIGHT", "WIDTH"),
-        default=(240, 320),
-        help="Aspect-preserving ACT resize-and-pad shape for every selected camera.",
+        default=None,
+        help="Optional aspect-preserving ACT resize-and-pad shape. By default, use the original resolution.",
     )
     parser.add_argument(
         "--act-action-target",
@@ -136,7 +136,7 @@ def configure_base_args(args: argparse.Namespace) -> None:
     args.policy_type = "act"
     args.no_gripper = False
     args.act_action_representation = "absolute"
-    args.act_image_size = tuple(args.image_size)
+    args.act_image_size = tuple(args.image_size) if args.image_size is not None else None
     args.act_anchor_loss_weight = 0.25
     args.act_motion_loss_weight = 0.25
     args.act_reconstruction_loss_weight = 0.5
