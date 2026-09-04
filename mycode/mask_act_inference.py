@@ -294,7 +294,16 @@ def load_mask_act_for_inference(
     features = dataset_to_policy_features(meta.features)
     act_input_keys = [*args.state_keys, *act_image_keys_for_experiment(args)]
     act_input_features = {key: features[key] for key in act_input_keys if key in features}
-    stats = reshape_visual_stats_for_channel_first(meta.stats, act_input_features)
+    inference_stats = deepcopy(meta.stats)
+    if getattr(args, "act_action_target", "dataset_action") != "dataset_action":
+        action_stats = run_cfg.get("action_stats")
+        if not isinstance(action_stats, dict):
+            raise ValueError(
+                "Follower-delta Mask-ACT checkpoint is missing derived action_stats in "
+                "mask_act_run_config.json."
+            )
+        inference_stats["action"] = action_stats
+    stats = reshape_visual_stats_for_channel_first(inference_stats, act_input_features)
 
     model = make_policy(args, meta, stats=stats)
     state = torch.load(checkpoint_dir / "training_state.pt", map_location="cpu", weights_only=False)

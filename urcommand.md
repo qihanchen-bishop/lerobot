@@ -97,3 +97,64 @@ conda run --no-capture-output -n lerobot python -u mycode/train_lerobot_policy.p
 ```bash
 ./run_ur_test1_fdelta_gripper_ft.sh
 ```
+
+## test1_full 双视角 follower delta + 独立夹爪头
+
+使用专用入口 `mycode/train_bi_ur3_policy.py`。两个实验都输入 front + top RGB 和当前
+`observation.state`；前 12 维只用未来 follower state 生成关节监督，不使用 leader action。
+第 13 维由独立分类头预测下一帧 follower 夹爪的绝对 `0/1` 状态，并使用
+`BCEWithLogitsLoss(pos_weight=2.5)`。两个视角都等比例缩放并补边到 `240x320`，不裁剪视野。
+
+### 双视角逐步 delta（推理时累计）
+
+```bash
+conda run --no-capture-output -n lerobot python -u mycode/train_bi_ur3_policy.py \
+  --root /home/qihan/data/lerobot/data/test1_full \
+  --repo-id local/test1_full \
+  --image-keys observation.images.front observation.images.top \
+  --state-keys observation.state \
+  --act-action-target follower_joint_delta_gripper_absolute \
+  --act-follower-state-key observation.state \
+  --act-gripper-loss-weight 0.2 \
+  --act-gripper-positive-weight 2.5 \
+  --image-size 240 320 \
+  --output-dir outputs/train/UR-FDeltaSeparateGrip-ACT-FT-test1-full \
+  --job-name UR-FDeltaSeparateGrip-ACT-FT-test1-full \
+  --chunk-size 60 \
+  --n-action-steps 60 \
+  --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 \
+  --batch-size 8 \
+  --steps 100000 \
+  --seed 1000 \
+  --num-workers 16 \
+  --device cuda \
+  --video-backend pyav \
+  --rebuild-view
+```
+
+### 双视角固定锚点 delta（不累计前序预测误差）
+
+```bash
+conda run --no-capture-output -n lerobot python -u mycode/train_bi_ur3_policy.py \
+  --root /home/qihan/data/lerobot/data/test1_full \
+  --repo-id local/test1_full \
+  --image-keys observation.images.front observation.images.top \
+  --state-keys observation.state \
+  --act-action-target follower_joint_anchor_delta_gripper_absolute \
+  --act-follower-state-key observation.state \
+  --act-gripper-loss-weight 0.2 \
+  --act-gripper-positive-weight 2.5 \
+  --image-size 240 320 \
+  --output-dir outputs/train/UR-FAnchorDeltaSeparateGrip-ACT-FT-test1-full \
+  --job-name UR-FAnchorDeltaSeparateGrip-ACT-FT-test1-full \
+  --chunk-size 60 \
+  --n-action-steps 60 \
+  --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 \
+  --batch-size 8 \
+  --steps 100000 \
+  --seed 1000 \
+  --num-workers 8 \
+  --device cuda \
+  --video-backend pyav \
+  --rebuild-view
+```

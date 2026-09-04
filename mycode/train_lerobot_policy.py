@@ -705,6 +705,7 @@ def build_policy_config(policy_type: str, meta: LeRobotDatasetMetadata, args: ar
         kwargs["chunk_size"] = args.chunk_size
         kwargs["n_action_steps"] = args.n_action_steps
         kwargs["pretrained_backbone_weights"] = args.pretrained_backbone_weights
+        kwargs["image_resize_shape"] = getattr(args, "act_image_size", None)
         kwargs["action_representation"] = args.act_action_representation
         kwargs["anchor_loss_weight"] = args.act_anchor_loss_weight
         kwargs["motion_loss_weight"] = args.act_motion_loss_weight
@@ -714,6 +715,7 @@ def build_policy_config(policy_type: str, meta: LeRobotDatasetMetadata, args: ar
         kwargs["follower_state_key"] = args.act_follower_state_key
         kwargs["gripper_loss_weight"] = args.act_gripper_loss_weight
         kwargs["gripper_positive_weight"] = args.act_gripper_positive_weight
+        kwargs["separate_gripper_head"] = getattr(args, "act_separate_gripper_head", False)
         if getattr(args, "act_camera_embedding", False):
             kwargs["image_camera_ids"] = list(range(len(args.image_keys)))
             kwargs["image_camera_embedding_mode"] = args.act_camera_embedding_mode
@@ -859,7 +861,8 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             print(
                 "ACT gripper supervision: absolute binary BCE, "
                 f"loss_weight={policy_cfg.gripper_loss_weight:g}, "
-                f"positive_weight={policy_cfg.gripper_positive_weight:g}"
+                f"positive_weight={policy_cfg.gripper_positive_weight:g}, "
+                f"separate_head={policy_cfg.separate_gripper_head}"
             )
         print(
             "ACT action representation: "

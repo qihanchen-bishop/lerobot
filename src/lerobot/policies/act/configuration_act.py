@@ -99,6 +99,7 @@ class ACTConfig(PreTrainedConfig):
     vision_backbone: str = "resnet18"
     pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"
     replace_final_stride_with_dilation: int = False
+    image_resize_shape: tuple[int, int] | None = None
     # Transformer layers.
     pre_norm: bool = False
     dim_model: int = 512
@@ -131,6 +132,7 @@ class ACTConfig(PreTrainedConfig):
     follower_state_key: str = "observation.state"
     gripper_loss_weight: float = 0.2
     gripper_positive_weight: float = 1.0
+    separate_gripper_head: bool = False
     metric_mode: str | None = None
     metric_dim: int = 2
     image_camera_ids: list[int] | None = None
@@ -216,6 +218,19 @@ class ACTConfig(PreTrainedConfig):
         if self.gripper_positive_weight <= 0:
             raise ValueError(
                 f"`gripper_positive_weight` must be positive, got {self.gripper_positive_weight}."
+            )
+        if self.separate_gripper_head and self.action_target not in {
+            "follower_joint_delta_gripper_absolute",
+            "follower_joint_anchor_delta_gripper_absolute",
+        }:
+            raise ValueError(
+                "`separate_gripper_head` requires a follower joint-delta/gripper-absolute target."
+            )
+        if self.image_resize_shape is not None and (
+            len(self.image_resize_shape) != 2 or any(size <= 0 for size in self.image_resize_shape)
+        ):
+            raise ValueError(
+                f"`image_resize_shape` must contain two positive dimensions, got {self.image_resize_shape}."
             )
         image_count = len(self.image_features)
         if self.image_camera_embedding_mode not in {"default", "zero", "gated"}:

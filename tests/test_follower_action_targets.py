@@ -1,7 +1,11 @@
 import pandas as pd
+import pytest
 import torch
 
+from lerobot.configs.types import FeatureType, PolicyFeature
+from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.act.modeling_act import (
+    ACT,
     NORMALIZATION_EPS,
     decode_follower_anchor_delta_actions,
     decode_follower_delta_actions,
@@ -9,8 +13,10 @@ from lerobot.policies.act.modeling_act import (
     decode_follower_joint_delta_gripper_actions,
     follower_anchor_delta_targets,
     follower_joint_anchor_delta_gripper_targets,
+    resize_image_with_pad,
 )
 from mycode.train_lerobot_policy import _replace_action_with_next_follower_state
+from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
 
 
 def test_follower_next_state_targets_shift_within_each_episode():
@@ -221,3 +227,60 @@ def test_follower_anchor_delta_decoder_does_not_accumulate_offsets():
     postprocessed_actions = encoded_actions * action_std + action_mean
 
     torch.testing.assert_close(postprocessed_actions, torch.tensor([[[11.0], [13.0], [9.0]]]))
+
+
+def test_separate_gripper_head_has_independent_joint_and_gripper_parameters():
+    config = ACTConfig(
+        input_features={
+            "observation.images.front": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 64, 64)),
+            OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(3,)),
+        },
+        output_features={ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(3,))},
+        action_target="follower_joint_delta_gripper_absolute",
+        separate_gripper_head=True,
+        pretrained_backbone_weights=None,
+        chunk_size=2,
+        n_action_steps=2,
+        use_vae=False,
+        dim_model=32,
+        n_heads=4,
+        dim_feedforward=64,
+        n_encoder_layers=1,
+        n_decoder_layers=1,
+    )
+    model = ACT(config).eval()
+    batch = {
+        OBS_IMAGES: [torch.rand(1, 3, 64, 64)],
+        OBS_STATE: torch.rand(1, 3),
+    }
+
+    actions = model(batch)[0]
+    assert actions.shape == (1, 2, 3)
+    assert model.action_head.out_features == 2
+    assert model.gripper_head.out_features == 1
+
+    actions[..., :-1].sum().backward()
+    assert model.action_head.weight.grad is not None
+    assert model.gripper_head.weight.grad is not None
+    assert model.gripper_head.weight.grad.abs().sum() == 0
+
+    model.zero_grad(set_to_none=True)
+    model(batch)[0][..., -1].sum().backward()
+    assert model.action_head.weight.grad is not None
+    assert model.action_head.weight.grad.abs().sum() == 0
+    assert model.gripper_head.weight.grad is not None
+
+
+def test_separate_gripper_head_rejects_non_hybrid_action_target():
+    with pytest.raises(ValueError, match="requires a follower joint-delta"):
+        ACTConfig(separate_gripper_head=True)
+
+
+def test_act_image_resize_preserves_aspect_ratio_and_pads() -> None:
+    image = torch.ones(1, 3, 2, 4)
+
+    resized = resize_image_with_pad(image, (4, 4))
+
+    assert resized.shape == (1, 3, 4, 4)
+    torch.testing.assert_close(resized[:, :, 1:3], torch.ones(1, 3, 2, 4))
+    torch.testing.assert_close(resized[:, :, (0, 3)], torch.zeros(1, 3, 2, 4))

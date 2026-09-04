@@ -41,9 +41,10 @@ Experiments:
       the corresponding RGB views with gated camera and modality identity embeddings.
   UNET-SEM-V3-F-NOEMB: A frozen seven-class front-only TinyUNet produces one soft semantic RGB
       stream beside front RGB. The two streams share ACT's backbone and use no identity embeddings.
-  UNET-SEM-V5: Frozen view-specific TinyUNets produce a seven-class front semantic map and a
-      five-class side semantic map. ACT receives both semantic maps and both RGB views through its
-      shared image backbone, without camera or modality embeddings.
+  UNET-SEM-V5/UNET-SEM-V5-FS: Frozen view-specific TinyUNets produce a seven-class front semantic
+      map and a five-class side semantic map. ACT receives both semantic maps and both RGB views
+      through its shared image backbone, without camera or modality embeddings.
+  UNET-SEM-V5-F: Front-only form of UNET-SEM-V5, using the front semantic map and front RGB.
   STAGE-V5-*: Front-derived expose/separate/transport/restore/done supervision trains a temporal
       stage head. The four F/FS and RGB/UNETSEM variants isolate view count and semantic visual input;
       every variant predicts its stage online from the frozen front segmenter at deployment.
@@ -148,7 +149,7 @@ SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS = (
     SIMPLE_STAGE_V5_EXPERIMENTS - SIMPLE_STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS
 )
 SIMPLE_STAGE_NAMES = ("expose", "separate", "transport", "restore")
-UNET_SEM_V5_ONLY_EXPERIMENTS = {"UNET-SEM-V5", "UNET-SEM-V5-FS"}
+UNET_SEM_V5_ONLY_EXPERIMENTS = {"UNET-SEM-V5", "UNET-SEM-V5-F", "UNET-SEM-V5-FS"}
 ACTIONSEM_EXPERIMENTS = {"ACTIONSEM-F", "ACTIONSEM-FS"}
 UNET_SEM_V5_EXPERIMENTS = {
     *UNET_SEM_V5_ONLY_EXPERIMENTS,
@@ -639,6 +640,8 @@ class MaskActRunConfig:
     metric_eps: float
     chunk_size: int
     n_action_steps: int
+    act_action_target: str
+    act_follower_state_key: str
     pretrained_backbone_weights: str | None
     pretrained_segmentation_checkpoint: str | None
     pretrained_segmentation_checkpoints: list[str] | None
@@ -3182,6 +3185,7 @@ def parse_args() -> argparse.Namespace:
             "UNET-SEM",
             "UNET-SEM-V3-F-NOEMB",
             "UNET-SEM-V5",
+            "UNET-SEM-V5-F",
             "UNET-SEM-V5-FS",
             "STAGE-V5-F-RGB",
             "STAGE-V5-FS-RGB",
@@ -3394,6 +3398,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stage-attention-regularization-weight", type=float, default=0.01)
     parser.add_argument("--chunk-size", type=int, default=100)
     parser.add_argument("--n-action-steps", type=int, default=100)
+    parser.add_argument(
+        "--act-action-target",
+        choices=["dataset_action", "follower_delta", "follower_anchor_delta"],
+        default="dataset_action",
+        help=(
+            "ACT supervision target. follower_delta uses measured one-step follower deltas; "
+            "follower_anchor_delta uses future follower states relative to the planning-frame state."
+        ),
+    )
+    parser.add_argument(
+        "--act-follower-state-key",
+        default="observation.state",
+        help="State feature used by follower_delta and follower_anchor_delta.",
+    )
     parser.add_argument("--pretrained-backbone-weights", default="ResNet18_Weights.IMAGENET1K_V1")
     parser.add_argument(
         "--pretrained-segmentation-checkpoint",
@@ -3721,13 +3739,15 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         chunk_size=args.chunk_size,
         n_action_steps=args.n_action_steps,
         pretrained_backbone_weights=args.pretrained_backbone_weights,
+        action_target=getattr(args, "act_action_target", "dataset_action"),
+        follower_state_key=getattr(args, "act_follower_state_key", "observation.state"),
         metric_mode=act_metric_mode(args.experiment),
         metric_dim=2,
         image_camera_ids=image_camera_ids,
         image_modality_ids=image_modality_ids,
         **identity_embedding_kwargs,
     )
-    act_policy = ACTPolicy(policy_cfg)
+    act_policy = ACTPolicy(policy_cfg, dataset_stats=stats)
     return MaskACTPolicy(
         act_policy=act_policy,
         experiment=args.experiment,
@@ -3791,7 +3811,12 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
     )
 
 
-def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> None:
+def save_run_config(
+    args: argparse.Namespace,
+    image_keys_in_view: list[str],
+    *,
+    action_stats: dict[str, Any],
+) -> None:
     run_cfg = MaskActRunConfig(
         experiment=args.experiment,
         repo_id=args.repo_id,
@@ -3863,6 +3888,8 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
         seed=args.seed,
         chunk_size=args.chunk_size,
         n_action_steps=args.n_action_steps,
+        act_action_target=args.act_action_target,
+        act_follower_state_key=args.act_follower_state_key,
         pretrained_backbone_weights=args.pretrained_backbone_weights,
         pretrained_segmentation_checkpoint=(
             str(args.pretrained_segmentation_checkpoint)
@@ -3882,6 +3909,7 @@ def save_run_config(args: argparse.Namespace, image_keys_in_view: list[str]) -> 
     with open(args.output_dir / "mask_act_run_config.json", "w") as f:
         payload = asdict(run_cfg)
         payload["dataset_view_image_keys"] = image_keys_in_view
+        payload["action_stats"] = action_stats
         payload["act_image_keys"] = act_image_keys_for_experiment(args)
         if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS:
             payload["view_fusion"] = {
@@ -4352,7 +4380,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         else:
             expected_views = 1 if "-F-" in args.experiment.upper() else 2
         if args.experiment.upper() in UNET_SEM_V5_ONLY_EXPERIMENTS:
-            expected_views = 2
+            expected_views = 1 if args.experiment.upper() == "UNET-SEM-V5-F" else 2
         if len(args.rgb_keys) != expected_views:
             raise ValueError(
                 f"{args.experiment} requires {expected_views} ordered RGB view(s); got {args.rgb_keys}."
@@ -4465,6 +4493,26 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     if args.overwrite_output and args.resume_checkpoint is not None:
         raise ValueError("--overwrite-output cannot be used together with --resume-checkpoint.")
 
+    if args.act_action_target != "dataset_action":
+        if args.act_follower_state_key not in args.state_keys:
+            raise ValueError(
+                f"Follower target key {args.act_follower_state_key!r} must be listed in --state-keys."
+            )
+        with open(source_root / "meta" / "info.json") as info_file:
+            source_features = json.load(info_file).get("features", {})
+        action_feature = source_features.get("action")
+        state_feature = source_features.get(args.act_follower_state_key)
+        if not isinstance(action_feature, dict) or not isinstance(state_feature, dict):
+            raise KeyError(
+                f"{args.act_action_target} requires action and {args.act_follower_state_key!r} metadata."
+            )
+        for field in ("shape", "names"):
+            if action_feature.get(field) != state_feature.get(field):
+                raise ValueError(
+                    f"Follower state and action {field} differ: "
+                    f"{state_feature.get(field)} != {action_feature.get(field)}"
+                )
+
     if args.output_dir.exists() and args.overwrite_output:
         shutil.rmtree(args.output_dir)
 
@@ -4541,10 +4589,14 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         view_root=view_root,
         image_keys=image_keys_in_view,
         state_keys=args.state_keys,
+        action_target=args.act_action_target,
+        follower_state_key=args.act_follower_state_key,
         rebuild=args.rebuild_view,
         no_gripper=args.no_gripper,
     )
-    save_run_config(args, image_keys_in_view)
+    with open(filtered_root / "meta" / "stats.json") as stats_file:
+        filtered_action_stats = json.load(stats_file)["action"]
+    save_run_config(args, image_keys_in_view, action_stats=filtered_action_stats)
 
     meta = LeRobotDatasetMetadata(args.repo_id, root=filtered_root)
     if (phase_store is not None or stage_store is not None) and meta.total_frames != source_meta.total_frames:
@@ -4615,6 +4667,10 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     print(f"Mask supervision keys: {args.mask_target_keys}")
     print(f"Training image size: {args.image_size or 'dataset native resolution'}")
     print(f"Random seed: {args.seed}")
+    print(
+        "ACT supervision target: "
+        f"mode={args.act_action_target}, follower_state_key={args.act_follower_state_key}"
+    )
     if mask_quality_store is not None:
         if args.mask_quality_weighting == "soft":
             print(

@@ -45,6 +45,19 @@ def test_view_named_unet_sem_v5_alias_uses_same_visual_inputs() -> None:
     assert act_image_keys_for_experiment(view_named) == act_image_keys_for_experiment(original)
 
 
+def test_front_only_unet_sem_v5_uses_front_semantic_and_rgb_inputs() -> None:
+    front_only = Namespace(experiment="UNET-SEM-V5-F", rgb_keys=[FRONT])
+
+    assert act_image_keys_for_experiment(front_only) == [f"{FRONT}_semantic", FRONT]
+    suffixes, key_map = build_mask_layout_for_experiment(
+        "UNET-SEM-V5-F",
+        [FRONT],
+        [f"{FRONT}_{name}" for name in FRONT_CLASSES],
+    )
+    assert suffixes == FRONT_CLASSES
+    assert key_map[f"{FRONT}_rightarm"] == (0, 5)
+
+
 def test_legacy_multiview_semantic_layout_still_rejects_missing_classes() -> None:
     with pytest.raises(ValueError, match="same semantic mask suffixes"):
         build_mask_layout_for_experiment("SEM-1-N", [FRONT, SIDE], v5_mask_keys())

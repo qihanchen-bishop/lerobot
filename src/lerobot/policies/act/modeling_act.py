@@ -47,6 +47,30 @@ MOTION_OFFSET_PRED = "motion_offset_pred"
 NORMALIZATION_EPS = 1e-8
 
 
+def resize_image_with_pad(image: Tensor, output_shape: tuple[int, int]) -> Tensor:
+    """Resize BCHW images without cropping or changing their aspect ratio."""
+    if image.ndim != 4:
+        raise ValueError(f"Expected a BCHW image tensor, got {tuple(image.shape)}.")
+    output_height, output_width = output_shape
+    input_height, input_width = image.shape[-2:]
+    scale = min(output_height / input_height, output_width / input_width)
+    resized_height = max(1, min(output_height, round(input_height * scale)))
+    resized_width = max(1, min(output_width, round(input_width * scale)))
+    resized = F.interpolate(
+        image,
+        size=(resized_height, resized_width),
+        mode="bilinear",
+        align_corners=False,
+        antialias=True,
+    )
+    pad_height = output_height - resized_height
+    pad_width = output_width - resized_width
+    return F.pad(
+        resized,
+        (pad_width // 2, pad_width - pad_width // 2, pad_height // 2, pad_height - pad_height // 2),
+    )
+
+
 def decode_anchor_motion_actions(anchor: Tensor, motion_offsets: Tensor) -> Tensor:
     """Decode one absolute anchor and same-anchor offsets into an absolute action chunk."""
     if anchor.ndim != 3 or anchor.shape[1] != 1:
@@ -899,8 +923,14 @@ class ACT(nn.Module):
         # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
         self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model)
 
-        # Final action regression head on the output of the transformer's decoder.
-        self.action_head = nn.Linear(config.dim_model, self.config.action_feature.shape[0])
+        # Final action prediction heads on the output of the transformer's decoder.
+        action_dim = self.config.action_feature.shape[0]
+        if config.separate_gripper_head:
+            self.action_head = nn.Linear(config.dim_model, action_dim - 1)
+            self.gripper_head = nn.Linear(config.dim_model, 1)
+        else:
+            self.action_head = nn.Linear(config.dim_model, action_dim)
+            self.gripper_head = None
         if self.config.action_representation == "anchor_offset":
             # Start both regression heads from the same mapping without consuming additional RNG state.
             self.anchor_head = deepcopy(self.action_head)
@@ -1041,6 +1071,8 @@ class ACT(nn.Module):
                     f"got {len(image_feature_residuals)}."
                 )
             for image_idx, img in enumerate(batch[OBS_IMAGES]):
+                if self.config.image_resize_shape is not None:
+                    img = resize_image_with_pad(img, self.config.image_resize_shape)
                 cam_features = self.backbone(img)["feature_map"]
                 if image_feature_residuals is not None:
                     residual = image_feature_residuals[image_idx]
@@ -1155,6 +1187,8 @@ class ACT(nn.Module):
             )
         else:
             actions = self.action_head(decoder_out)
+            if self.gripper_head is not None:
+                actions = torch.cat([actions, self.gripper_head(decoder_out)], dim=-1)
         if self.config.metric_mode == "decoder_autoregressive":
             aux_outputs[METRIC_PRED] = self.metric_head(decoder_out)
 
