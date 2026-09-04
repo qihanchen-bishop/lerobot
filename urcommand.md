@@ -108,6 +108,9 @@ conda run --no-capture-output -n lerobot python -u mycode/train_lerobot_policy.p
 
 ### 双视角逐步 delta（推理时累计）
 
+以下命令使用原始相机分辨率。`fullres-v2` 用于避开早先实际采用 `240x320`、但被误命名为
+`fullres` 的已有输出目录。
+
 ```bash
 conda run --no-capture-output -n lerobot python -u mycode/train_bi_ur3_policy.py \
   --root /home/qihan/data/lerobot/data/test1_full \
@@ -118,8 +121,8 @@ conda run --no-capture-output -n lerobot python -u mycode/train_bi_ur3_policy.py
   --act-follower-state-key observation.state \
   --act-gripper-loss-weight 0.2 \
   --act-gripper-positive-weight 2.5 \
-  --output-dir outputs/train/UR-FDeltaSeparateGrip-ACT-FT-test1-fullres \
-  --job-name UR-FDeltaSeparateGrip-ACT-FT-test1-fullres \
+  --output-dir outputs/train/UR-FDeltaSeparateGrip-ACT-FT-test1-fullres-v2 \
+  --job-name UR-FDeltaSeparateGrip-ACT-FT-test1-fullres-v2 \
   --chunk-size 60 \
   --n-action-steps 60 \
   --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 \
