@@ -7,8 +7,12 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mycode"))
 from train_mask_act_policy import (  # noqa: E402
+    act_metric_dim,
+    act_metric_mode,
+    act_metric_token_output_dims,
     act_image_keys_for_experiment,
     build_mask_layout_for_experiment,
+    front_query_metric_targets,
     semantic_suffixes_by_view,
     simple_stage_probabilities,
 )
@@ -56,6 +60,53 @@ def test_front_only_unet_sem_v5_uses_front_semantic_and_rgb_inputs() -> None:
     )
     assert suffixes == FRONT_CLASSES
     assert key_map[f"{FRONT}_rightarm"] == (0, 5)
+
+
+def test_front_query_token_experiment_keeps_v5_visual_inputs_and_adds_three_tokens() -> None:
+    args = Namespace(experiment="UNET-SEM-V5-F-QTOKEN", rgb_keys=[FRONT])
+
+    assert act_image_keys_for_experiment(args) == [f"{FRONT}_semantic", FRONT]
+    assert act_metric_mode(args.experiment) == "encoder_tokens"
+    assert act_metric_dim(args.experiment) == 3
+    assert act_metric_token_output_dims(args.experiment) == [1, 1, 2]
+
+
+def test_two_view_query_token_experiment_keeps_both_semantic_and_rgb_inputs() -> None:
+    args = Namespace(experiment="UNET-SEM-V5-FS-QTOKEN", rgb_keys=[FRONT, SIDE])
+
+    assert act_image_keys_for_experiment(args) == [
+        f"{FRONT}_semantic",
+        f"{SIDE}_semantic",
+        FRONT,
+        SIDE,
+    ]
+    assert act_metric_mode(args.experiment) == "encoder_tokens"
+    assert act_metric_dim(args.experiment) == 3
+    assert act_metric_token_output_dims(args.experiment) == [1, 1, 2]
+
+
+def test_front_query_metrics_fit_tool_line_endpoint_vector_and_visibility_mask() -> None:
+    labels = torch.zeros((2, 10, 10), dtype=torch.long)
+    object_id = FRONT_CLASSES.index("object") + 1
+    region_id = FRONT_CLASSES.index("region") + 1
+    tool_id = FRONT_CLASSES.index("tool") + 1
+    labels[0, 5, 7] = object_id
+    labels[0, 2, 3] = region_id
+    labels[0, 7, 1:6] = tool_id
+    labels[1, 5, 3] = region_id
+    labels[1, 5, 9] = tool_id
+
+    targets, validity = front_query_metric_targets(
+        _probabilities_from_labels(labels), FRONT_CLASSES
+    )
+
+    assert targets[0, 0] == pytest.approx(0.01)
+    assert targets[0, 1] == pytest.approx(5 / (162**0.5))
+    assert targets[0, 2] == pytest.approx(6 / 9)
+    assert targets[0, 3] == pytest.approx(-2 / 9)
+    assert validity[0].tolist() == [True, True, True, True]
+    assert targets[1, 0] == 0
+    assert validity[1].tolist() == [True, False, False, False]
 
 
 def test_legacy_multiview_semantic_layout_still_rejects_missing_classes() -> None:

@@ -44,6 +44,11 @@ Experiments:
   UNET-SEM-V5/UNET-SEM-V5-FS: Frozen view-specific TinyUNets produce a seven-class front semantic
       map and a five-class side semantic map. ACT receives both semantic maps and both RGB views
       through its shared image backbone, without camera or modality embeddings.
+  UNET-SEM-V5-F-QTOKEN: Front-only UNET-SEM-V5 plus three supervised ACT encoder query tokens for
+      visible object occupancy, object-region distance, and the 2-D vector from the fitted tool-line
+      left endpoint to the object centroid.
+  UNET-SEM-V5-FS-QTOKEN: Two-view UNET-SEM-V5 with the same three query targets computed only from
+      front semantic labels; side semantics remain visual context and never define metric targets.
   UNET-SEM-V5-F: Front-only form of UNET-SEM-V5, using the front semantic map and front RGB.
   STAGE-V5-*: Front-derived expose/separate/transport/restore/done supervision trains a temporal
       stage head. The four F/FS and RGB/UNETSEM variants isolate view count and semantic visual input;
@@ -149,7 +154,17 @@ SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS = (
     SIMPLE_STAGE_V5_EXPERIMENTS - SIMPLE_STAGE_V5_SEMANTIC_INPUT_EXPERIMENTS
 )
 SIMPLE_STAGE_NAMES = ("expose", "separate", "transport", "restore")
-UNET_SEM_V5_ONLY_EXPERIMENTS = {"UNET-SEM-V5", "UNET-SEM-V5-F", "UNET-SEM-V5-FS"}
+UNET_SEM_V5_QUERY_EXPERIMENTS = {
+    "UNET-SEM-V5-F-QTOKEN",
+    "UNET-SEM-V5-FS-QTOKEN",
+}
+UNET_SEM_V5_FRONT_EXPERIMENTS = {"UNET-SEM-V5-F", "UNET-SEM-V5-F-QTOKEN"}
+UNET_SEM_V5_ONLY_EXPERIMENTS = {
+    "UNET-SEM-V5",
+    "UNET-SEM-V5-FS",
+    *UNET_SEM_V5_FRONT_EXPERIMENTS,
+    *UNET_SEM_V5_QUERY_EXPERIMENTS,
+}
 ACTIONSEM_EXPERIMENTS = {"ACTIONSEM-F", "ACTIONSEM-FS"}
 UNET_SEM_V5_EXPERIMENTS = {
     *UNET_SEM_V5_ONLY_EXPERIMENTS,
@@ -194,6 +209,19 @@ ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS = {"ASEM-1", *ACTIONSEM_EXPERIMENTS}
 PREDICTIVE_SEMANTIC_EXPERIMENTS = {"SSACT-1"}
 PHASE_CONDITIONED_EXPERIMENTS = {"SSACT-1", *STAGE_AWARE_EXPERIMENTS}
 SEMANTIC_CLASSES = ("occluder", "object", "region", "tool")
+FRONT_QUERY_TOKEN_NAMES = (
+    "object_occupancy",
+    "object_region_distance",
+    "tool_left_to_object_vector",
+)
+FRONT_QUERY_TOKEN_OUTPUT_DIMS = (1, 1, 2)
+FRONT_QUERY_METRIC_NAMES = (
+    "object_occupancy",
+    "object_region_distance",
+    "tool_left_to_object_dx",
+    "tool_left_to_object_dy",
+)
+FRONT_QUERY_METRIC_SMOOTH_L1_BETA = 0.01
 SEMANTIC_STATE_FEATURES_PER_VIEW = (
     "area_occluder",
     "area_object",
@@ -1056,6 +1084,119 @@ def find_semantic_mask_index(mask_keys: list[str], semantic_name: str) -> int:
         if key.endswith(suffix) or key.rsplit(".", 1)[-1] == semantic_name:
             return idx
     raise ValueError(f"Could not find semantic mask '{semantic_name}' in mask keys: {mask_keys}")
+
+
+def front_query_metric_targets(
+    probabilities: Tensor,
+    foreground_suffixes: list[str] | tuple[str, ...],
+    *,
+    eps: float = 1e-6,
+) -> tuple[Tensor, Tensor]:
+    """Compute front-view geometry targets and per-target visibility validity."""
+    required = ("object", "region", "tool")
+    missing = [name for name in required if name not in foreground_suffixes]
+    if missing:
+        raise ValueError(f"Front query metrics require semantic classes {missing}.")
+    expected_channels = len(foreground_suffixes) + 1
+    if probabilities.ndim != 4 or probabilities.shape[1] != expected_channels:
+        raise ValueError(
+            "Expected front probabilities shaped "
+            f"(B, {expected_channels}, H, W), got {tuple(probabilities.shape)}."
+        )
+
+    def foreground(name: str) -> Tensor:
+        return probabilities[:, foreground_suffixes.index(name) + 1]
+
+    object_mask = foreground("object")
+    region_mask = foreground("region")
+    tool_mask = foreground("tool")
+    height, width = object_mask.shape[-2:]
+    y_coords = torch.linspace(0.0, float(height - 1), height, device=probabilities.device, dtype=probabilities.dtype)
+    x_coords = torch.linspace(0.0, float(width - 1), width, device=probabilities.device, dtype=probabilities.dtype)
+    yy, xx = torch.meshgrid(y_coords, x_coords, indexing="ij")
+
+    def centroid(mask: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        mass = mask.sum(dim=(-2, -1))
+        safe_mass = mass.clamp_min(eps)
+        x = (mask * xx).sum(dim=(-2, -1)) / safe_mass
+        y = (mask * yy).sum(dim=(-2, -1)) / safe_mass
+        return x, y, mass > eps
+
+    object_x, object_y, object_visible = centroid(object_mask)
+    region_x, region_y, region_visible = centroid(region_mask)
+    tool_x, tool_y, tool_visible = centroid(tool_mask)
+
+    occupancy = object_mask.mean(dim=(-2, -1)).clamp(0.0, 1.0)
+    diagonal = torch.sqrt(
+        torch.as_tensor(
+            max((height - 1) ** 2 + (width - 1) ** 2, 1),
+            device=probabilities.device,
+            dtype=probabilities.dtype,
+        )
+    )
+    object_region_distance = (
+        torch.sqrt((object_x - region_x).square() + (object_y - region_y).square()) / diagonal
+    ).clamp(0.0, 1.0)
+    normalized_xx = xx / max(width - 1, 1)
+    normalized_yy = yy / max(height - 1, 1)
+    tool_center_x = tool_x / max(width - 1, 1)
+    tool_center_y = tool_y / max(height - 1, 1)
+    centered_x = normalized_xx.unsqueeze(0) - tool_center_x[:, None, None]
+    centered_y = normalized_yy.unsqueeze(0) - tool_center_y[:, None, None]
+    tool_mass = tool_mask.sum(dim=(-2, -1)).clamp_min(eps)
+    covariance_xx = (tool_mask * centered_x.square()).sum(dim=(-2, -1)) / tool_mass
+    covariance_xy = (tool_mask * centered_x * centered_y).sum(dim=(-2, -1)) / tool_mass
+    covariance_yy = (tool_mask * centered_y.square()).sum(dim=(-2, -1)) / tool_mass
+    covariance = torch.stack(
+        [covariance_xx, covariance_xy, covariance_xy, covariance_yy], dim=-1
+    ).reshape(-1, 2, 2)
+    principal_axis = torch.linalg.eigh(covariance).eigenvectors[:, :, -1]
+    projection = (
+        centered_x * principal_axis[:, 0, None, None]
+        + centered_y * principal_axis[:, 1, None, None]
+    )
+    foreground_pixels = tool_mask > 0.5
+    min_projection = torch.where(
+        foreground_pixels, projection, torch.full_like(projection, torch.inf)
+    ).amin(dim=(-2, -1))
+    max_projection = torch.where(
+        foreground_pixels, projection, torch.full_like(projection, -torch.inf)
+    ).amax(dim=(-2, -1))
+    min_projection = torch.where(tool_visible, min_projection, torch.zeros_like(min_projection))
+    max_projection = torch.where(tool_visible, max_projection, torch.zeros_like(max_projection))
+    endpoint_a = torch.stack([tool_center_x, tool_center_y], dim=-1) + (
+        min_projection[:, None] * principal_axis
+    )
+    endpoint_b = torch.stack([tool_center_x, tool_center_y], dim=-1) + (
+        max_projection[:, None] * principal_axis
+    )
+    tool_left_endpoint = torch.where(
+        (endpoint_a[:, 0] <= endpoint_b[:, 0])[:, None], endpoint_a, endpoint_b
+    )
+    object_point = torch.stack(
+        [object_x / max(width - 1, 1), object_y / max(height - 1, 1)], dim=-1
+    )
+    tool_left_to_object = (object_point - tool_left_endpoint).clamp(-1.0, 1.0)
+
+    targets = torch.stack(
+        [
+            occupancy,
+            object_region_distance,
+            tool_left_to_object[:, 0],
+            tool_left_to_object[:, 1],
+        ],
+        dim=-1,
+    )
+    validity = torch.stack(
+        [
+            torch.ones_like(object_visible),
+            object_visible & region_visible,
+            object_visible & tool_visible,
+            object_visible & tool_visible,
+        ],
+        dim=-1,
+    )
+    return targets, validity
 
 
 def semantic_image_key(rgb_key: str) -> str:
@@ -1926,6 +2067,9 @@ class MaskACTPolicy(nn.Module):
     def uses_mask_metrics(self) -> bool:
         return self.experiment in {"4A", "4B", "4C"}
 
+    def uses_front_query_metrics(self) -> bool:
+        return self.experiment in UNET_SEM_V5_QUERY_EXPERIMENTS
+
     def uses_semantic_latents(self) -> bool:
         return self.experiment == "5"
 
@@ -2524,7 +2668,7 @@ class MaskACTPolicy(nn.Module):
             rgbs = self._get_rgb_inputs(raw_batch, device=device)
             logits_by_view, _ = self.predict_view_logits_and_latent_from_rgbs(rgbs)
             semantic_targets = None
-            if not self.uses_frozen_semantic_segmenter():
+            if not self.uses_frozen_semantic_segmenter() or self.uses_front_query_metrics():
                 semantic_targets = self.build_semantic_targets(raw_batch, device=device)
             quality_validity = raw_batch.get("mask_quality_current_valid")
             quality_scores = raw_batch.get("mask_quality_current_score")
@@ -2594,6 +2738,37 @@ class MaskACTPolicy(nn.Module):
                     )
                     seg_losses_by_view = [seg_loss]
             probabilities_by_view = self.semantic_probabilities(logits_by_view)
+            metric_targets = None
+            metric_weights = None
+            if self.uses_front_query_metrics():
+                if semantic_targets is None:
+                    raise RuntimeError("Front query-token supervision requires front semantic labels.")
+                front_target_probabilities = F.one_hot(
+                    semantic_targets[0],
+                    num_classes=len(self.view_mask_suffixes[0]) + 1,
+                ).permute(0, 3, 1, 2).to(dtype=torch.float32)
+                metric_targets, metric_validity = front_query_metric_targets(
+                    front_target_probabilities,
+                    self.view_mask_suffixes[0],
+                    eps=self.metric_eps,
+                )
+                metric_weights = metric_validity.to(dtype=metric_targets.dtype)
+                if class_quality_by_view is not None:
+                    front_quality = class_quality_by_view[0]
+                    suffixes = self.view_mask_suffixes[0]
+                    object_quality = front_quality[:, suffixes.index("object")]
+                    region_quality = front_quality[:, suffixes.index("region")]
+                    tool_quality = front_quality[:, suffixes.index("tool")]
+                    metric_quality = torch.stack(
+                        [
+                            object_quality,
+                            torch.minimum(object_quality, region_quality),
+                            torch.minimum(object_quality, tool_quality),
+                            torch.minimum(object_quality, tool_quality),
+                        ],
+                        dim=-1,
+                    )
+                    metric_weights = metric_weights * metric_quality
             action_to_seg_ratio = self.scheduled_action_to_seg_grad_ratio()
             segmenter_finetune_scale = self.scheduled_segmenter_finetune_scale()
             act_batch = dict(batch)
@@ -2781,6 +2956,9 @@ class MaskACTPolicy(nn.Module):
                 for rgb_key, semantic_map in zip(self.rgb_keys, semantic_maps, strict=True):
                     act_batch[semantic_image_key(rgb_key)] = self.normalize_semantic_map(semantic_map)
 
+            if metric_targets is not None:
+                act_batch["metric_target"] = metric_targets
+
             phase_loss = None
             phase_logs = {}
             if self.experiment == "SSACT-1":
@@ -2828,10 +3006,46 @@ class MaskACTPolicy(nn.Module):
                 }
 
             action_loss, action_logs = self.act_policy(act_batch)
+            metric_loss = None
+            metric_logs = {}
+            metric_pred = action_logs.pop(METRIC_PRED, None)
+            if metric_targets is not None:
+                if metric_pred is None or metric_weights is None:
+                    raise RuntimeError("ACT did not return the configured front query-token predictions.")
+                metric_error = F.smooth_l1_loss(
+                    metric_pred,
+                    metric_targets,
+                    reduction="none",
+                    beta=FRONT_QUERY_METRIC_SMOOTH_L1_BETA,
+                )
+                group_losses = []
+                output_start = 0
+                for output_dim in FRONT_QUERY_TOKEN_OUTPUT_DIMS:
+                    output_slice = slice(output_start, output_start + output_dim)
+                    group_error = metric_error[:, output_slice]
+                    group_weight = metric_weights[:, output_slice]
+                    group_losses.append(
+                        (group_error * group_weight).sum() / group_weight.sum().clamp_min(1.0)
+                    )
+                    output_start += output_dim
+                metric_loss = torch.stack(group_losses).mean()
+                metric_absolute_error = (metric_pred.detach() - metric_targets).abs()
+                for metric_idx, metric_name in enumerate(FRONT_QUERY_METRIC_NAMES):
+                    weights = metric_weights[:, metric_idx]
+                    metric_logs[f"{metric_name}_mae"] = float(
+                        (metric_absolute_error[:, metric_idx] * weights).sum().cpu()
+                        / weights.sum().clamp_min(1.0).cpu()
+                    )
+                    metric_logs[f"{metric_name}_valid_ratio"] = float(
+                        (weights > 0).float().mean().cpu()
+                    )
+                metric_logs["metric_loss"] = float(metric_loss.detach().cpu())
             loss = (
                 self.action_loss_weight * action_loss
                 + segmenter_finetune_scale * self.seg_loss_weight * seg_loss
             )
+            if metric_loss is not None:
+                loss = loss + self.metric_loss_weight * metric_loss
             if viewfusion_loss is not None:
                 loss = loss + self.viewfusion_loss_weight * viewfusion_loss
             if phase_loss is not None:
@@ -2902,6 +3116,7 @@ class MaskACTPolicy(nn.Module):
                 **stage_logs,
                 **quality_logs,
                 **semantic_fusion_logs,
+                **metric_logs,
             }
             if self.experiment in ACTION_SUPERVISED_SEMANTIC_EXPERIMENTS:
                 logs["action_to_seg_target_grad_ratio"] = action_to_seg_ratio
@@ -3187,6 +3402,8 @@ def parse_args() -> argparse.Namespace:
             "UNET-SEM-V5",
             "UNET-SEM-V5-F",
             "UNET-SEM-V5-FS",
+            "UNET-SEM-V5-F-QTOKEN",
+            "UNET-SEM-V5-FS-QTOKEN",
             "STAGE-V5-F-RGB",
             "STAGE-V5-FS-RGB",
             "STAGE-V5-F-UNETSEM",
@@ -3651,10 +3868,20 @@ def act_uses_metric_env_state(experiment: str) -> bool:
 
 def act_metric_mode(experiment: str) -> str | None:
     experiment = experiment.upper()
-    if experiment == "4B":
+    if experiment == "4B" or experiment in UNET_SEM_V5_QUERY_EXPERIMENTS:
         return "encoder_tokens"
     if experiment == "4C":
         return "decoder_autoregressive"
+    return None
+
+
+def act_metric_dim(experiment: str) -> int:
+    return len(FRONT_QUERY_TOKEN_NAMES) if experiment.upper() in UNET_SEM_V5_QUERY_EXPERIMENTS else 2
+
+
+def act_metric_token_output_dims(experiment: str) -> list[int] | None:
+    if experiment.upper() in UNET_SEM_V5_QUERY_EXPERIMENTS:
+        return list(FRONT_QUERY_TOKEN_OUTPUT_DIMS)
     return None
 
 
@@ -3742,7 +3969,8 @@ def make_policy(args: argparse.Namespace, meta: LeRobotDatasetMetadata, stats: d
         action_target=getattr(args, "act_action_target", "dataset_action"),
         follower_state_key=getattr(args, "act_follower_state_key", "observation.state"),
         metric_mode=act_metric_mode(args.experiment),
-        metric_dim=2,
+        metric_dim=act_metric_dim(args.experiment),
+        metric_token_output_dims=act_metric_token_output_dims(args.experiment),
         image_camera_ids=image_camera_ids,
         image_modality_ids=image_modality_ids,
         **identity_embedding_kwargs,
@@ -3936,6 +4164,23 @@ def save_run_config(
                 "inside_region_ring_ratio": 0.95,
                 "learned_stage_model": False,
                 "temporal_state_machine": False,
+            }
+        if args.experiment.upper() in UNET_SEM_V5_QUERY_EXPERIMENTS:
+            payload["front_query_tokens"] = {
+                "source_view": "observation.images.front",
+                "names": list(FRONT_QUERY_TOKEN_NAMES),
+                "output_dims": list(FRONT_QUERY_TOKEN_OUTPUT_DIMS),
+                "targets": {
+                    "object_occupancy": "object_pixels/image_pixels",
+                    "object_region_distance": "centroid_euclidean_distance/image_diagonal",
+                    "tool_left_to_object_vector": (
+                        "normalized object centroid minus the x-left endpoint of the tool-mask PCA line"
+                    ),
+                },
+                "metric_mode": "encoder_tokens",
+                "smooth_l1_beta": FRONT_QUERY_METRIC_SMOOTH_L1_BETA,
+                "visibility_masked": True,
+                "quality_weighted": args.mask_quality_dir is not None,
             }
         if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS:
             camera_ids, modality_ids = act_identity_ids_for_experiment(args)
@@ -4380,7 +4625,9 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         else:
             expected_views = 1 if "-F-" in args.experiment.upper() else 2
         if args.experiment.upper() in UNET_SEM_V5_ONLY_EXPERIMENTS:
-            expected_views = 1 if args.experiment.upper() == "UNET-SEM-V5-F" else 2
+            expected_views = (
+                1 if args.experiment.upper() in UNET_SEM_V5_FRONT_EXPERIMENTS else 2
+            )
         if len(args.rgb_keys) != expected_views:
             raise ValueError(
                 f"{args.experiment} requires {expected_views} ordered RGB view(s); got {args.rgb_keys}."
@@ -4451,7 +4698,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             "--mask-quality-dir currently supports semantic experiments including SSACT-3. "
             "The legacy independent-BCE mask experiments require a separate classwise BCE masking path."
         )
-    if args.mask_quality_dir is not None and args.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
+    if (
+        args.mask_quality_dir is not None
+        and args.experiment in FROZEN_SEMANTIC_EXPERIMENTS
+        and args.experiment not in UNET_SEM_V5_QUERY_EXPERIMENTS
+    ):
         raise ValueError(
             "Frozen UNET-SEM experiments have no segmentation loss to quality-weight."
         )
@@ -4574,6 +4825,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             *(
                 []
                 if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS
+                and args.experiment.upper() not in UNET_SEM_V5_QUERY_EXPERIMENTS
                 else args.mask_target_keys
             ),
             *(
@@ -4854,6 +5106,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 *(
                     []
                     if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS
+                    and args.experiment.upper() not in UNET_SEM_V5_QUERY_EXPERIMENTS
                     else args.mask_target_keys
                 ),
                 *(

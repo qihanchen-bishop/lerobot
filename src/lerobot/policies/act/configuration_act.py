@@ -135,6 +135,7 @@ class ACTConfig(PreTrainedConfig):
     separate_gripper_head: bool = False
     metric_mode: str | None = None
     metric_dim: int = 2
+    metric_token_output_dims: list[int] | None = None
     image_camera_ids: list[int] | None = None
     image_camera_embedding_mode: str = "default"
     image_camera_embedding_std: float = 0.02
@@ -178,6 +179,20 @@ class ACTConfig(PreTrainedConfig):
             )
         if self.metric_dim <= 0:
             raise ValueError(f"`metric_dim` must be positive. Got {self.metric_dim}.")
+        if self.metric_token_output_dims is not None:
+            if self.metric_mode != "encoder_tokens":
+                raise ValueError(
+                    "`metric_token_output_dims` is only supported with metric_mode='encoder_tokens'."
+                )
+            if len(self.metric_token_output_dims) != self.metric_dim:
+                raise ValueError(
+                    "`metric_token_output_dims` must contain one output width per metric token; "
+                    f"got {self.metric_token_output_dims} for metric_dim={self.metric_dim}."
+                )
+            if any(width <= 0 for width in self.metric_token_output_dims):
+                raise ValueError(
+                    f"`metric_token_output_dims` values must be positive, got {self.metric_token_output_dims}."
+                )
         if self.action_representation not in {"absolute", "anchor_offset"}:
             raise ValueError(
                 "`action_representation` must be 'absolute' or 'anchor_offset'. "
