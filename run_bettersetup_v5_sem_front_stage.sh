@@ -8,7 +8,9 @@ cd "$PROJECT_ROOT"
 
 PYTHON_BIN="${PYTHON_BIN:-/home/qihan/miniconda3/envs/lerobot/bin/python}"
 DATASET_ROOT="${DATASET_ROOT:-/home/qihan/data/lerobot/data/bettersetup_v5}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/train}"
+TRAIN_ROOT="${TRAIN_ROOT:-${OUTPUT_ROOT:-outputs/train}}"
+SEMANTIC_OUTPUT_ROOT="${SEMANTIC_OUTPUT_ROOT:-$TRAIN_ROOT/semantic}"
+STAGE_OUTPUT_ROOT="${STAGE_OUTPUT_ROOT:-$TRAIN_ROOT/stage}"
 STEPS="${STEPS:-100000}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
 NUM_WORKERS="${NUM_WORKERS:-16}"
@@ -33,10 +35,10 @@ if [[ "$DRY_RUN" != 0 && "$DRY_RUN" != 1 ]]; then
     exit 1
 fi
 
-mkdir -p "$OUTPUT_ROOT/queue_logs"
+mkdir -p "$TRAIN_ROOT/queue_logs"
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
-LOG_FILE="$OUTPUT_ROOT/queue_logs/bettersetup_v5_sem_front_stage_${RUN_ID}.log"
-exec 9>"$OUTPUT_ROOT/.bettersetup_v5_sem_front_stage.lock"
+LOG_FILE="$TRAIN_ROOT/queue_logs/bettersetup_v5_sem_front_stage_${RUN_ID}.log"
+exec 9>"$TRAIN_ROOT/.bettersetup_v5_sem_front_stage.lock"
 if ! flock -n 9; then
     echo "The bettersetup_v5 semantic/front-stage queue is already running." >&2
     exit 1
@@ -99,19 +101,19 @@ run_experiment() {
 echo "Queue log: $LOG_FILE"
 echo "Device: $DEVICE"
 
-run_experiment UNET-SEM-V5-FS "$OUTPUT_ROOT/UNET-SEM-v5-front-side-bettersetup-v5" \
+run_experiment UNET-SEM-V5-FS "$SEMANTIC_OUTPUT_ROOT/UNET-SEM-v5-front-side-bettersetup-v5" \
     --experiment UNET-SEM-V5-FS \
     --rgb-keys observation.images.front observation.images.side \
     --mask-target-keys "${FRONT_MASK_KEYS[@]}" "${SIDE_MASK_KEYS[@]}" \
     --pretrained-segmentation-checkpoints "$FRONT_MODEL" "$SIDE_MODEL"
 
-run_experiment STAGE-SIMPLE-V5-F-RGB "$OUTPUT_ROOT/STAGE-SIMPLE-v5-front-RGB-bettersetup-v5" \
+run_experiment STAGE-SIMPLE-V5-F-RGB "$STAGE_OUTPUT_ROOT/STAGE-SIMPLE-v5-front-RGB-bettersetup-v5" \
     --experiment STAGE-SIMPLE-V5-F-RGB \
     --rgb-keys observation.images.front \
     --mask-target-keys "${FRONT_MASK_KEYS[@]}" \
     --pretrained-segmentation-checkpoints "$FRONT_MODEL"
 
-run_experiment STAGE-SIMPLE-V5-F-UNETSEM "$OUTPUT_ROOT/STAGE-SIMPLE-v5-front-UNETSEM-bettersetup-v5" \
+run_experiment STAGE-SIMPLE-V5-F-UNETSEM "$STAGE_OUTPUT_ROOT/STAGE-SIMPLE-v5-front-UNETSEM-bettersetup-v5" \
     --experiment STAGE-SIMPLE-V5-F-UNETSEM \
     --rgb-keys observation.images.front \
     --mask-target-keys "${FRONT_MASK_KEYS[@]}" \

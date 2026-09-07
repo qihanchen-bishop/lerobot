@@ -8,7 +8,8 @@ cd "$PROJECT_ROOT"
 
 PYTHON_BIN="${PYTHON_BIN:-/home/qihan/miniconda3/envs/lerobot/bin/python}"
 DATASET_ROOT="${DATASET_ROOT:-/home/qihan/data/lerobot/data/bettersetup_v5}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_ROOT/outputs/train/delta}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_ROOT/outputs/train/semantic}"
+QUALITY_DIR="${QUALITY_DIR:-$DATASET_ROOT/segmentation_quality}"
 STEPS="${STEPS:-100000}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
 NUM_WORKERS="${NUM_WORKERS:-16}"
@@ -19,8 +20,8 @@ FRONT_MODEL="$DATASET_ROOT/models/unet_front_v4_r1/best.pt"
 SIDE_MODEL="$DATASET_ROOT/models/unet_side/best.pt"
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 LOG_DIR="$OUTPUT_ROOT/queue_logs"
-LOG_FILE="$LOG_DIR/bettersetup_v5_unet_sem_delta_${RUN_ID}.log"
-LOCK_FILE="$OUTPUT_ROOT/.bettersetup_v5_unet_sem_delta_queue.lock"
+LOG_FILE="$LOG_DIR/bettersetup_v5_qtoken_${RUN_ID}.log"
+LOCK_FILE="$OUTPUT_ROOT/.bettersetup_v5_qtoken_queue.lock"
 
 FRONT_MASK_KEYS=(
     observation.images.front_occluder
@@ -40,7 +41,7 @@ SIDE_MASK_KEYS=(
 mkdir -p "$LOG_DIR"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-for required_path in "$PYTHON_BIN" "$DATASET_ROOT" "$FRONT_MODEL" "$SIDE_MODEL"; do
+for required_path in "$PYTHON_BIN" "$DATASET_ROOT" "$QUALITY_DIR" "$FRONT_MODEL" "$SIDE_MODEL"; do
     if [[ ! -e "$required_path" ]]; then
         echo "Required path not found: $required_path" >&2
         exit 1
@@ -60,7 +61,7 @@ fi
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
-    echo "Another bettersetup_v5 UNET semantic delta queue is already running: $LOCK_FILE" >&2
+    echo "Another bettersetup_v5 query-token queue is already running: $LOCK_FILE" >&2
     exit 1
 fi
 
@@ -72,10 +73,9 @@ latest_checkpoint() {
 }
 
 run_experiment() {
-    local job_name="$1"
-    local experiment="$2"
-    local action_target="$3"
-    local view_mode="$4"
+    local experiment="$1"
+    local job_name="$2"
+    local view_mode="$3"
     local output_dir="$OUTPUT_ROOT/$job_name"
     local final_checkpoint="$output_dir/checkpoint_step_$(printf '%06d' "$STEPS")/training_state.pt"
     local -a view_args
@@ -104,8 +104,11 @@ run_experiment() {
         --repo-id bettersetup_v5
         "${view_args[@]}"
         --state-keys observation.state
-        --act-action-target "$action_target"
-        --act-follower-state-key observation.state
+        --act-action-target dataset_action
+        --mask-quality-dir "$QUALITY_DIR"
+        --mask-quality-weighting soft
+        --mask-quality-full-score 0.95
+        --metric-loss-weight 1.0
         --output-dir "$output_dir"
         --steps "$STEPS"
         --seed 1000
@@ -124,8 +127,7 @@ run_experiment() {
     echo "================================================================"
     echo "Starting: $job_name"
     echo "Experiment: $experiment"
-    echo "Action target: $action_target"
-    echo "Views: $view_mode"
+    echo "Views: $view_mode; query supervision: front only"
     echo "Output: $output_dir"
     echo "================================================================"
 
@@ -152,60 +154,29 @@ run_experiment() {
     printf 'Command:'
     printf ' %q' "${command[@]}"
     printf '\n'
+    [[ "$DRY_RUN" == "1" ]] || "${command[@]}"
 
-    if [[ "$DRY_RUN" == "1" ]]; then
-        return
-    fi
-
-    "${command[@]}"
-
-    if [[ ! -f "$final_checkpoint" ]]; then
-        echo "Training returned successfully but no final checkpoint was found for $job_name." >&2
+    if [[ "$DRY_RUN" == "0" && ! -f "$final_checkpoint" ]]; then
+        echo "Training returned without final checkpoint: $final_checkpoint" >&2
         exit 1
     fi
-    echo "Finished: $job_name"
 }
 
-on_exit() {
-    local status=$?
-    echo
-    if [[ "$status" -eq 0 ]]; then
-        echo "UNET semantic delta queue completed successfully."
-    else
-        echo "UNET semantic delta queue stopped with exit code $status." >&2
-    fi
-    echo "Log: $LOG_FILE"
-}
-trap on_exit EXIT
+trap 'status=$?; echo; echo "Queue exit status: $status"; echo "Log: $LOG_FILE"' EXIT
 
-echo "Run ID: $RUN_ID"
 echo "Dataset: $DATASET_ROOT"
 echo "Steps per experiment: $STEPS"
 echo "Device: $DEVICE"
 echo "Dry run: $DRY_RUN"
 
-# Every target is derived from observation.state (follower); dataset action (leader) is not supervision.
-# Single-view experiments run first, followed by their dual-view counterparts.
 run_experiment \
-    UNET-SEM-V5-FDelta-F-bettersetup-v5 \
-    UNET-SEM-V5-F \
-    follower_delta \
+    UNET-SEM-V5-F-QTOKEN \
+    UNET-SEM-v5-front-QToken-bettersetup-v5 \
     front
 
 run_experiment \
-    UNET-SEM-V5-FAnchorDelta-F-bettersetup-v5 \
-    UNET-SEM-V5-F \
-    follower_anchor_delta \
-    front
-
-run_experiment \
-    UNET-SEM-V5-FDelta-FS-bettersetup-v5 \
-    UNET-SEM-V5-FS \
-    follower_delta \
+    UNET-SEM-V5-FS-QTOKEN \
+    UNET-SEM-v5-front-side-QToken-bettersetup-v5 \
     front-side
 
-run_experiment \
-    UNET-SEM-V5-FAnchorDelta-FS-bettersetup-v5 \
-    UNET-SEM-V5-FS \
-    follower_anchor_delta \
-    front-side
+echo "[$(date --iso-8601=seconds)] Queue completed."

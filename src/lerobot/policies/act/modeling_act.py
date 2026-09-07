@@ -870,7 +870,15 @@ class ACT(nn.Module):
             n_1d_tokens += 1
         if self.config.metric_mode == "encoder_tokens":
             self.encoder_metric_token_embed = nn.Embedding(config.metric_dim, config.dim_model)
-            self.metric_head = nn.Linear(config.dim_model, 1)
+            if config.metric_token_output_dims is None:
+                self.metric_head = nn.Linear(config.dim_model, 1)
+                self.metric_heads = None
+            else:
+                self.metric_head = None
+                self.metric_heads = nn.ModuleList(
+                    nn.Linear(config.dim_model, output_dim)
+                    for output_dim in config.metric_token_output_dims
+                )
             n_1d_tokens += config.metric_dim
         elif self.config.metric_mode == "decoder_autoregressive":
             self.decoder_metric_input_proj = nn.Linear(config.metric_dim, config.dim_model)
@@ -1142,7 +1150,13 @@ class ACT(nn.Module):
         if self.config.metric_mode == "encoder_tokens":
             metric_out = encoder_out[metric_token_start : metric_token_start + self.config.metric_dim]
             metric_out = metric_out.transpose(0, 1)
-            aux_outputs[METRIC_PRED] = self.metric_head(metric_out).squeeze(-1)
+            if self.metric_heads is None:
+                aux_outputs[METRIC_PRED] = self.metric_head(metric_out).squeeze(-1)
+            else:
+                aux_outputs[METRIC_PRED] = torch.cat(
+                    [head(metric_out[:, index]) for index, head in enumerate(self.metric_heads)],
+                    dim=-1,
+                )
 
         # TODO(rcadene, alexander-soare): remove call to `device` ; precompute and use buffer
         decoder_in = torch.zeros(

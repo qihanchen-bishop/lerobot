@@ -16,8 +16,8 @@ class StubMaskACTPolicy(torch.nn.Module):
         super().__init__()
         self.weight = torch.nn.Parameter(torch.ones(2))
         self.register_buffer("semantic_palette_view_0", torch.arange(21).reshape(7, 3))
-        self._semantic_palette_buffer_names = ["semantic_palette_view_0"]
         self.register_buffer("semantic_class_weights_view_0", torch.arange(7, dtype=torch.float32))
+        self._semantic_palette_buffer_names = ["semantic_palette_view_0"]
         self._semantic_class_weight_buffer_names = ["semantic_class_weights_view_0"]
 
 
