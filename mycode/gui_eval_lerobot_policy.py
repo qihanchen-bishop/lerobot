@@ -59,6 +59,10 @@ SEGMENTATION_VOTE_WINDOW = 7
 SEGMENTATION_VOTE_REQUIRED = 4
 RESULTS_FILENAME = "eval_results.jsonl"
 POLICY_TYPES_WITH_VARIANTS = {"act", "mask_act"}
+DELTA_ACTION_TARGET_VARIANTS = {
+    "follower_delta": "DELTA",
+    "follower_anchor_delta": "ANCHOR-DELTA",
+}
 DEFAULT_TRIALS_PER_GRID = 2
 DEFAULT_LEFT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E122511-if00"
 DEFAULT_RIGHT_FOLLOWER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E119029-if00"
@@ -2093,6 +2097,11 @@ class EvalPolicyApp:
             return None
         run_name = relative.parts[0]
         normalized = run_name.lower()
+        if normalized == "delta" and len(relative.parts) > 1:
+            delta_run_name = relative.parts[1]
+            if delta_run_name.lower() in {"delta_fs", "anchordelta_fs"}:
+                return delta_run_name
+            return None
         if not normalized.startswith("newsetup") or any(
             marker in normalized for marker in embedding_markers
         ):
@@ -2385,11 +2394,17 @@ class EvalPolicyApp:
             )
         elif isinstance(prediction_steps, int):
             self.vars["prediction_steps"].set(str(prediction_steps))
-            replan_steps = (
-                min(DEFAULT_ACT_REPLAN_STEPS, prediction_steps)
-                if self.vars["policy_type"].get().strip() == "act"
-                else prediction_steps
+            action_target = (
+                str(data.get("action_target") or "dataset_action").lower()
+                if data
+                else "dataset_action"
             )
+            if action_target in DELTA_ACTION_TARGET_VARIANTS:
+                replan_steps = prediction_steps
+            elif self.vars["policy_type"].get().strip() == "act":
+                replan_steps = min(DEFAULT_ACT_REPLAN_STEPS, prediction_steps)
+            else:
+                replan_steps = prediction_steps
             self.vars["n_action_steps"].set(str(replan_steps))
             self.vars["fusion_steps"].set("0")
             self.vars["fusion_history_weight"].set("0")
@@ -2802,22 +2817,30 @@ class EvalPolicyApp:
                     return None
                 if str(config.get("type", "")).lower() != "act":
                     return None
+                input_features = config.get("input_features")
+                visual_features = (
+                    {
+                        key
+                        for key, feature in input_features.items()
+                        if isinstance(feature, dict)
+                        and str(feature.get("type", "")).upper() == "VISUAL"
+                    }
+                    if isinstance(input_features, dict)
+                    else set()
+                )
+                action_target = str(config.get("action_target") or "dataset_action").lower()
+                delta_variant = DELTA_ACTION_TARGET_VARIANTS.get(action_target)
+                if delta_variant is not None:
+                    view_suffix = "FS" if "observation.images.side" in visual_features else "F"
+                    return f"{delta_variant}-{view_suffix}"
                 try:
                     run_name = current.resolve().relative_to(DEFAULT_OUTPUT_ROOT.resolve()).parts[0]
                 except (OSError, ValueError, IndexError):
                     return None
                 if not run_name.lower().startswith("newsetup"):
                     return None
-                input_features = config.get("input_features")
-                if isinstance(input_features, dict):
-                    visual_features = {
-                        key
-                        for key, feature in input_features.items()
-                        if isinstance(feature, dict)
-                        and str(feature.get("type", "")).upper() == "VISUAL"
-                    }
-                    if visual_features == {"observation.images.front"}:
-                        return "ACT-SINGLE-FRONT"
+                if visual_features == {"observation.images.front"}:
+                    return "ACT-SINGLE-FRONT"
                 camera_ids = config.get("image_camera_ids")
                 if not isinstance(camera_ids, list) or not camera_ids:
                     return "ACT"
@@ -3941,6 +3964,24 @@ class EvalPolicyApp:
         else:
             policy_cfg = PreTrainedConfig.from_pretrained(checkpoint)
             policy_cfg.pretrained_path = checkpoint
+        action_target = str(getattr(policy_cfg, "action_target", "dataset_action"))
+        self.active_eval_metadata["action_target"] = action_target
+        if action_target in DELTA_ACTION_TARGET_VARIANTS:
+            decoder = (
+                "cumulative_one_step_delta_from_current_follower_state"
+                if action_target == "follower_delta"
+                else "fixed_planning_frame_delta_from_current_follower_state"
+            )
+            self.active_eval_metadata.update(
+                {
+                    "action_decoder": decoder,
+                    "policy_output_after_decode": "absolute_follower_joint_target",
+                }
+            )
+            self.log_queue.put(
+                f"[ACT DELTA] target={action_target}, decoder={decoder}; "
+                "the policy converts normalized deltas to an absolute action chunk before GUI postprocessing."
+            )
         self._apply_action_step_override(policy_cfg)
         if mask_act_checkpoint and details["experiment"].upper() == "SSACT-1":
             policy_device = next(policy.parameters()).device

@@ -37,7 +37,7 @@ def _load_mask_act_state_dict_compatibly(
     model: MaskACTPolicy,
     state_dict: dict[str, torch.Tensor],
 ) -> list[str]:
-    """Load learned weights strictly while allowing newly derived palette buffers."""
+    """Load learned weights strictly while allowing newly derived semantic buffers."""
     incompatible = model.load_state_dict(state_dict, strict=False)
     allowed_missing = {
         *getattr(model, "_semantic_palette_buffer_names", ()),

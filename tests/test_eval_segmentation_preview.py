@@ -76,6 +76,43 @@ class EvalSegmentationPreviewTest(unittest.TestCase):
             self.assertEqual(app.vars["prediction_steps"].get(), "60")
             self.assertEqual(app.vars["n_action_steps"].get(), "30")
 
+    def test_follower_delta_checkpoint_executes_the_complete_trained_chunk_by_default(self):
+        with TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory)
+            (checkpoint / "config.json").write_text(
+                json.dumps(
+                    {
+                        "chunk_size": 60,
+                        "n_action_steps": 60,
+                        "action_target": "follower_delta",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            app = object.__new__(EvalPolicyApp)
+            app.vars = {
+                key: StubVariable(value)
+                for key, value in {
+                    "policy_type": "act",
+                    "model_chunk_size": "N/A",
+                    "prediction_steps": "",
+                    "n_action_steps": "",
+                    "fusion_steps": "0",
+                    "fusion_history_weight": "0",
+                    "num_inference_steps": "",
+                    "noise_scheduler_type": "checkpoint",
+                    "execution_mode": "synchronous",
+                    "camera_read_mode": "wait_new_frame",
+                }.items()
+            }
+            app.use_amp = StubVariable(False)
+            app._append_log = lambda _message: None
+
+            app._refresh_action_chunk_settings(checkpoint)
+
+            self.assertEqual(app.vars["prediction_steps"].get(), "60")
+            self.assertEqual(app.vars["n_action_steps"].get(), "60")
+
     def test_model_parameter_statistics_reports_counts_and_memory(self):
         class StubTensor:
             def __init__(self, count, bytes_per_value, requires_grad=False):
@@ -255,12 +292,14 @@ class EvalSegmentationPreviewTest(unittest.TestCase):
 
         self.assertEqual(folder, "autoreplan__sync__pred-60__fusion-0-w0__amp-off")
 
-    def test_config_presets_only_show_newsetup_non_embedding_runs(self):
+    def test_config_presets_show_newsetup_and_delta_non_embedding_runs(self):
         presets = EvalPolicyApp._newsetup_config_presets(PROJECT_ROOT / "mycode")
 
         for name in ("SS5_RGB_F", "SS5_U_F", "SS5_U_FS", "AI5_RGB_F"):
             self.assertIn(name, presets)
         self.assertIn("ACT_NEWSETUP", presets)
+        self.assertIn("DELTA_FS", presets)
+        self.assertIn("ANCHOR_DELTA_FS", presets)
         self.assertNotIn("ACT", presets)
         self.assertFalse(any("CE" in name or "VIEWFUS" in name for name in presets))
         self.assertNotIn("auto_replan_bettersetup", presets)
@@ -281,6 +320,32 @@ class EvalSegmentationPreviewTest(unittest.TestCase):
             EvalPolicyApp._visible_newsetup_run_name(
                 PROJECT_ROOT / "outputs/train/newsetup_CE_gated/100000/pretrained_model"
             )
+        )
+        self.assertEqual(
+            EvalPolicyApp._visible_newsetup_run_name(
+                PROJECT_ROOT / "outputs/train/delta/Delta_FS/100000/pretrained_model"
+            ),
+            "Delta_FS",
+        )
+        self.assertEqual(
+            EvalPolicyApp._visible_newsetup_run_name(
+                PROJECT_ROOT / "outputs/train/delta/AnchorDelta_FS/100000/pretrained_model"
+            ),
+            "AnchorDelta_FS",
+        )
+
+    def test_delta_act_variants_encode_target_and_view_layout(self):
+        self.assertEqual(
+            EvalPolicyApp._act_variant_from_checkpoint(
+                PROJECT_ROOT / "outputs/train/delta/Delta_FS/100000/pretrained_model"
+            ),
+            "DELTA-FS",
+        )
+        self.assertEqual(
+            EvalPolicyApp._act_variant_from_checkpoint(
+                PROJECT_ROOT / "outputs/train/delta/AnchorDelta_FS/100000/pretrained_model"
+            ),
+            "ANCHOR-DELTA-FS",
         )
 
     def test_decision_and_segmentation_recording_features_follow_rgb_views(self):
