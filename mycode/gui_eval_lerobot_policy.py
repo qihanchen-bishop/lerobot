@@ -2097,6 +2097,8 @@ class EvalPolicyApp:
             return None
         run_name = relative.parts[0]
         normalized = run_name.lower()
+        if normalized == "qtoken_fs":
+            return run_name
         if normalized == "delta" and len(relative.parts) > 1:
             delta_run_name = relative.parts[1]
             if delta_run_name.lower() in {"delta_fs", "anchordelta_fs"}:
