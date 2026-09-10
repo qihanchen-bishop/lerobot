@@ -768,6 +768,9 @@ class EvalPolicyApp:
             "dataset_repo_id": tk.StringVar(value="seeed/eval_test"),
             "dataset_root": tk.StringVar(value=str(DEFAULT_EVAL_ROOT)),
             "save_subfolder": tk.StringVar(value=""),
+            "residual_mode": tk.StringVar(value="off"),
+            "residual_path": tk.StringVar(value=""),
+            "residual_status": tk.StringVar(value="Off"),
             "task": tk.StringVar(value=TASK_CHOICES[0]),
             "episode_time_s": tk.StringVar(value=str(DEFAULT_EPISODE_TIME_S)),
             "fps": tk.StringVar(value="30"),
@@ -1410,6 +1413,20 @@ class EvalPolicyApp:
         ttk.Entry(top, textvariable=self.vars["fusion_history_weight"], width=12).grid(
             row=row, column=3, sticky=tk.W
         )
+
+        row += 1
+        ttk.Label(top, text="ACT residual").grid(row=row, column=0, sticky=tk.W)
+        residual_mode = ttk.Combobox(top, textvariable=self.vars["residual_mode"],
+                                    values=("off", "mlp", "gru"), state="readonly", width=12)
+        residual_mode.grid(row=row, column=1, sticky=tk.W)
+        residual_mode.bind("<<ComboboxSelected>>", self._select_residual_mode)
+        ttk.Label(top, textvariable=self.vars["residual_status"]).grid(
+            row=row, column=2, columnspan=2, sticky=tk.W)
+        row += 1
+        ttk.Label(top, text="Residual weights").grid(row=row, column=0, sticky=tk.W)
+        ttk.Entry(top, textvariable=self.vars["residual_path"]).grid(
+            row=row, column=1, columnspan=2, sticky=tk.EW)
+        ttk.Button(top, text="Browse", command=self._browse_residual).grid(row=row, column=3, sticky=tk.W)
 
         row += 1
         ttk.Label(top, text="SSACT semantic servo").grid(
@@ -2160,7 +2177,39 @@ class EvalPolicyApp:
         self.vars["status"].set(f"Loaded config preset: {path.name}")
         self._append_log(f"[CONFIG] Loaded {path}")
 
+    def _browse_residual(self) -> None:
+        selected = filedialog.askopenfilename(
+            title="Residual checkpoint", filetypes=[("PyTorch checkpoint", "*.pt")])
+        if selected:
+            self.vars["residual_path"].set(selected)
+
+    def _select_residual_mode(self, _event=None) -> None:
+        mode = self.vars["residual_mode"].get()
+        if mode == "off":
+            self.vars["residual_status"].set("Off")
+            if self.vars["save_subfolder"].get() in {"SF-v2-A-MPL", "SF-v2-A-GRU"}:
+                self.vars["save_subfolder"].set("ACT")
+            return
+        experiment = self._mask_act_experiment_from_checkpoint(self.vars["checkpoint_path"].get())
+        family = {"UNET-SEM-V5-FS": "B", "UNET-SEM-V5-FS-QTOKEN": "C"}.get(experiment, "A")
+        suffix = "GRU" if mode == "gru" else "MPL"
+        self.vars["save_subfolder"].set(f"SF-v2-{family}-{suffix}")
+        subdir = "gru8" if mode == "gru" else "mlp"
+        path = DEFAULT_OUTPUT_ROOT / "resual" / f"SF-v2-S6-D3-H9-{family}-FS" / subdir / "best.pt"
+        self.vars["residual_path"].set(str(path))
+        self.vars["execution_mode"].set("asynchronous")
+        self.vars["n_action_steps"].set("30")
+        self.vars["prediction_steps"].set("60")
+        self.vars["fps"].set("30")
+        self.vars["fusion_steps"].set("0")
+        self.vars["fusion_history_weight"].set("0")
+        self.use_amp.set(False)
+        self.enable_auto_replan.set(False)
+        self.vars["residual_status"].set("Selected; loads at Start")
+
     def _apply_config_preset(self, config: dict[str, Any]) -> None:
+        self.vars["residual_mode"].set(config.get("residual_mode", "off"))
+        self.vars["residual_path"].set(config.get("residual_path", ""))
         # Older presets predate this opt-in feature and must continue to use fixed replanning.
         self.enable_auto_replan.set(bool(config.get("enable_auto_replan", False)))
         string_keys = (
@@ -2673,6 +2722,8 @@ class EvalPolicyApp:
             "ssact_max_execution_steps": int(self.vars["ssact_max_execution_steps"].get()),
             "ssact_max_action_residual": float(self.vars["ssact_max_action_residual"].get()),
             "lock_grippers": bool(self.lock_grippers.get()),
+            "residual_mode": self.vars["residual_mode"].get(),
+            "residual_path": self.vars["residual_path"].get().strip(),
         }
 
     @staticmethod
@@ -2696,6 +2747,10 @@ class EvalPolicyApp:
         history_weight = f"{float(configuration.get('fusion_history_weight', 0.0)):g}".replace(".", "p")
         parts.append(f"fusion-{int(configuration.get('fusion_steps', 0))}-w{history_weight}")
         parts.append("amp-on" if configuration.get("use_amp") else "amp-off")
+        if configuration.get("residual_mode", "off") != "off":
+            from residual_eval import checkpoint_identity
+            identity = checkpoint_identity(configuration["residual_path"])[:12]
+            parts.append(f"residual-{configuration['residual_mode']}-{identity}")
         if configuration.get("ssact_servo_mode") != "off" or configuration.get("ssact_adaptive_horizon"):
             parts.append(f"servo-{configuration.get('ssact_servo_mode', 'off')}")
             if configuration.get("ssact_adaptive_horizon"):
@@ -2709,7 +2764,11 @@ class EvalPolicyApp:
         root = self._base_save_root()
         if self._uses_partitioned_eval_layout(root):
             root /= self._view_layout_name()
-        return root / policy_type
+        path = root / policy_type
+        residual_mode = self.vars.get("residual_mode")
+        if residual_mode is not None and residual_mode.get() != "off":
+            path = root / "act" / "resual"
+        return path
 
     def _refresh_save_subfolder_options(self, *_args: Any) -> None:
         if not hasattr(self, "save_subfolder_combo"):
@@ -4127,6 +4186,7 @@ class EvalPolicyApp:
             )
 
         dataset = None
+        residual_runtime = None
         replan_executor: ThreadPoolExecutor | None = None
         last_action_log_t = 0.0
         try:
@@ -4170,6 +4230,15 @@ class EvalPolicyApp:
                     },
                 )
             model_statistics = self._model_parameter_statistics(policy)
+            if runtime_configuration.get("residual_mode", "off") != "off":
+                from residual_eval import ACTResidualRuntime
+                residual_runtime = ACTResidualRuntime(
+                    runtime_configuration["residual_path"], runtime_configuration["residual_mode"],
+                    policy, preprocessor, postprocessor, policy_state_names, policy_action_names,
+                    {**runtime_configuration, "fps": fps},
+                )
+                self.active_eval_metadata["residual"] = residual_runtime.metadata
+                self.log_queue.put("[RESIDUAL] Loaded " + json.dumps(residual_runtime.metadata))
             self.active_eval_metadata["model_statistics"] = model_statistics
             self.log_queue.put("__MODEL_STATS__|" + json.dumps(model_statistics))
             self.log_queue.put(
@@ -4319,7 +4388,7 @@ class EvalPolicyApp:
                     import cv2
                     import numpy as np
 
-                    latest_masks = getattr(policy, "latest_inference_mask_preview", None)
+                    latest_masks = getattr(residual_runtime or policy, "latest_inference_mask_preview", None)
                     model_masks = latest_masks() if callable(latest_masks) else {}
                     overlays, _summaries = self._render_model_mask_previews(model_masks)
                     for recording_key, view in segmentation_recording_views.items():
@@ -4647,7 +4716,23 @@ class EvalPolicyApp:
                     )
                     observation_history.append(copy(policy_observation_frame))
                     observation_ready = time.perf_counter()
-                    if planner is None:
+                    if residual_runtime is not None:
+                        prepared = prepare_observation_for_inference(
+                            copy(policy_observation_frame), policy_device, task, robot.robot_type)
+                        view_times = [getattr(robot.cameras.get(view), "latest_timestamp", None)
+                                      for view in ("front", "side")]
+                        if any(t is None for t in view_times):
+                            raise RuntimeError("ACT residual requires timestamped front/side OpenCV cameras")
+                        action_values, report = residual_runtime.step(prepared, view_times)
+                        report["control_step"] = control_step
+                        if report.get("event") == "plan" and report.get("accepted"):
+                            record_latest_policy_segmentation()
+                        if report.get("scheduled") == "plan":
+                            record_decision_observation(observation_frame)
+                        with (run_dataset_root / "residual_runtime.jsonl").open("a", encoding="utf-8") as stream:
+                            stream.write(json.dumps(report) + "\n")
+                        self.log_queue.put("__RESIDUAL__|" + json.dumps(report))
+                    elif planner is None:
                         action_queue = getattr(policy, "_action_queue", None)
                         diffusion_queues = getattr(policy, "_queues", {})
                         will_infer_chunk = (
@@ -4739,10 +4824,16 @@ class EvalPolicyApp:
                         action_dict,
                         prefix=ACTION,
                     )
-                    semantic_frame = self._latest_policy_semantic_frame(
-                        policy,
-                        semantic_recording_features,
-                    )
+                    if residual_runtime is not None and not residual_runtime.semantic_frames:
+                        import numpy as np
+                        semantic_frame = {
+                            key: np.zeros_like(observation_frame[key.removesuffix("_semantic")])
+                            for key in semantic_recording_features
+                        }
+                    else:
+                        semantic_frame = self._latest_policy_semantic_frame(
+                            residual_runtime or policy, semantic_recording_features,
+                        )
                     auxiliary_frame = held_auxiliary_recording_frame(observation_frame)
                     dataset.add_frame(
                         {
@@ -4755,7 +4846,7 @@ class EvalPolicyApp:
                     )
 
                     loop_s = max(time.perf_counter() - loop_t, 1e-6)
-                    latest_masks = getattr(policy, "latest_inference_mask_preview", None)
+                    latest_masks = getattr(residual_runtime or policy, "latest_inference_mask_preview", None)
                     model_masks = latest_masks() if callable(latest_masks) else {}
                     self._put_preview(
                         raw_obs,
@@ -4802,12 +4893,19 @@ class EvalPolicyApp:
                 dataset.save_episode()
                 self.log_queue.put("Policy episode data saved. Robot remains connected.")
         finally:
+            if residual_runtime is not None:
+                residual_runtime.close()
             if replan_executor is not None:
                 replan_executor.shutdown(wait=True, cancel_futures=True)
             if dataset is not None:
                 dataset.finalize()
 
     def _validate_eval_settings(self) -> None:
+        if self.vars["residual_mode"].get() != "off":
+            if self.vars["policy_type"].get() not in {"act", "mask_act"}:
+                raise ValueError("Residual evaluation requires ACT or a supported semantic ACT base policy")
+            if not Path(self.vars["residual_path"].get()).is_file():
+                raise ValueError("Select an existing residual .pt checkpoint")
         self._sync_segmentation_model_for_checkpoint()
         trained_with_side = self._sync_side_camera_for_checkpoint(required=True)
         self.vars["camera_read_mode"].set(DEFAULT_CAMERA_READ_MODE)
@@ -6212,7 +6310,13 @@ class EvalPolicyApp:
                 message = self.log_queue.get_nowait()
             except queue.Empty:
                 break
-            if message.startswith("__MODEL_STATS__|"):
+            if message.startswith("__RESIDUAL__|"):
+                report = json.loads(message.split("|", 1)[1])
+                magnitude = max((abs(x) for x in report.get("residual", [])), default=0.0)
+                self.vars["residual_status"].set(
+                    f"{'Applied' if report['applied'] else 'Base/hold'} | max {magnitude:.3f} | "
+                    f"history {report['history_length']}")
+            elif message.startswith("__MODEL_STATS__|"):
                 statistics = json.loads(message.split("|", 1)[1])
                 parameter_count = int(statistics["parameter_count"])
                 trainable_count = int(statistics["trainable_parameter_count"])

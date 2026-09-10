@@ -209,6 +209,8 @@ class EvalSegmentationPreviewTest(unittest.TestCase):
             "save_subfolder": StubVariable(""),
             "policy_type": StubVariable("act"),
             "checkpoint_path": StubVariable("/tmp/checkpoint"),
+            "residual_mode": StubVariable("off"),
+            "residual_path": StubVariable(""),
             "prediction_steps": StubVariable("60"),
             "n_action_steps": StubVariable("20"),
             "num_inference_steps": StubVariable(""),
