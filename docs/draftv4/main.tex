@@ -1,0 +1,48 @@
+% Chinese working draft. Replace xeCJK for the final English submission.
+\documentclass[journal,10pt]{IEEEtran}
+\usepackage{amsmath,amssymb,bm,mathtools}
+\usepackage{booktabs,array}
+\usepackage{xeCJK}
+\setmainfont{NimbusRoman}[
+ Path=/usr/share/fonts/opentype/urw-base35/,
+ Extension=.otf,UprightFont=*-Regular,BoldFont=*-Bold,
+ ItalicFont=*-Italic,BoldItalicFont=*-BoldItalic,
+ SmallCapsFont=*-Regular]
+\setCJKmainfont[AutoFakeBold=true,AutoFakeSlant=true,SmallCapsFont={Droid Sans Fallback}]{Droid Sans Fallback}
+\setCJKsansfont{Droid Sans Fallback}
+\setCJKmonofont{Droid Sans Fallback}
+\usepackage{cite}
+\usepackage[hidelinks]{hyperref}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\F}{\mathcal{F}}
+\newcommand{\G}{\mathcal{G}}
+\newcommand{\norm}[1]{\lVert#1\rVert}
+\newcommand{\inner}[2]{\langle#1,#2\rangle}
+\newcommand{\ind}{\mathbf{1}}
+\DeclareMathOperator{\clip}{clip}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\argmin}{arg\,min}
+\newtheorem{assumption}{假设}
+\newtheorem{proposition}{命题}
+\newtheorem{corollary}{推论}
+\newtheorem{remark}{说明}
+\renewcommand{\IEEEproofname}{证明}
+\renewcommand{\refname}{参考文献}
+\title{面向双臂遮挡操作的语义进展表示与历史条件动作块修正}
+\author{}
+% Anonymous working manuscript; introduction/related work/experiments intentionally empty.
+\begin{document}
+\maketitle
+\section{引言}
+\label{sec:intro}
+\section{相关工作}
+\label{sec:related}
+\input{theory}
+\input{method}
+\section{实验}
+\label{sec:experiments}
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+\end{document}

@@ -1,0 +1,64 @@
+% Fifth Chinese working draft. Earlier drafts are preserved.
+\documentclass[journal,10pt]{IEEEtran}
+\usepackage{amsmath,amssymb,bm,mathtools,booktabs,array}
+\usepackage{xeCJK}
+\setmainfont{NimbusRoman}[
+ Path=/usr/share/fonts/opentype/urw-base35/,
+ Extension=.otf,UprightFont=*-Regular,BoldFont=*-Bold,
+ ItalicFont=*-Italic,BoldItalicFont=*-BoldItalic,SmallCapsFont=*-Regular]
+\setCJKmainfont[AutoFakeBold=true,AutoFakeSlant=true,SmallCapsFont={Droid Sans Fallback}]{Droid Sans Fallback}
+\setCJKsansfont{Droid Sans Fallback}
+\setCJKmonofont{Droid Sans Fallback}
+\usepackage{cite}
+\usepackage[hidelinks]{hyperref}
+\newcommand{\E}{\mathbb E}
+\newcommand{\Prob}{\mathbb P}
+\newcommand{\R}{\mathbb R}
+\newcommand{\norm}[1]{\lVert#1\rVert}
+\newcommand{\inner}[2]{\langle#1,#2\rangle}
+\newcommand{\ind}{\mathbf 1}
+\DeclareMathOperator{\clip}{clip}
+\newtheorem{proposition}{命题}
+\renewcommand{\IEEEproofname}{证明}
+\renewcommand{\refname}{参考文献}
+\title{Semantic-Guided Imitation Learning with History-Conditioned Feedback:\\Analysis, Framework, and Experimental Validation}
+\author{}
+\begin{document}
+\maketitle
+\begin{abstract}
+双臂遮挡交互操作需要在非线性接触与动态可见性变化中完成多阶段目标。
+初步实机实验观察到语义输入、几何监督查询和历史条件残差带来的任务收益。
+本文以这些现象为出发点，研究哪些机制能够解释收益，并指导下一步受控验证。
+首先将任务定义为视觉可评估的对象关系和环境状态条件，不预设网络分工；
+在这一目标下，利用有限时域性能差分恒等式，建立动作误差与任务失败概率之间的条件性界，
+显式区分泛化、状态覆盖和动作误差的任务敏感性；并用反例说明完整覆盖仍不足以保证策略排序一致。
+随后，分析确定性语义输入与几何监督查询token作为归纳偏置的作用，
+以及最新观测和短期历史能够被残差预测器利用的条件。
+最后，讨论动作时间集成的偏差与相关性，说明频繁观测并不等于有效纠偏。
+这些分析用于解释质量驱动自动标注、语义与几何监督ACT、冻结基础策略的历史条件残差框架，
+并明确已有结果尚缺少的对照，而不把事后分析当作实验前已经证明的保证。
+本文给出可验证的充分条件，而不宣称语义、特定网络结构或动作误差降低自动保证任务成功。
+实机收益由独立任务评测确定，理论用于明确其可能机制与失效边界。
+\end{abstract}
+\begin{IEEEkeywords}
+模仿学习，任务成功率，语义表示，几何监督，历史条件残差
+\end{IEEEkeywords}
+\input{introduction}
+\input{task}
+\input{theory}
+\input{representation}
+\input{feedback}
+\input{method}
+\input{experiments}
+\section{讨论}
+语义先验主要减少无关外观引起的学习困难，不能凭空补足未见的接触动力学或失败恢复示范。
+几何量不是完整任务状态，记忆也可能学习错误的历史相关性。
+本文既不将监督残差称为离线强化学习，也不把残差限幅称为稳定性约束。
+性能差分、条件期望分解等是已有理论工具；本文的推导是针对当前系统的条件性分析，
+不是把这些工具本身包装为新的理论贡献。最终贡献应由方法、数据效率、
+跨任务闭环收益和机制验证共同支撑。
+\appendices
+\input{appendix}
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+\end{document}

@@ -1,0 +1,206 @@
+\section{方法}
+\label{sec:method}
+
+\subsection{分阶段构建与信息流}
+
+系统依次构建语义标签、轻量分割器、基础语义策略和历史残差模块。
+各阶段的监督来源与可训练参数分开管理；不是同时端到端优化全部模块。
+动作块策略采用ACT\cite{zhao2023act}。
+执行期修正与已有动作块修正研究共享问题背景\cite{a2c2}，
+本文不将一般的残差相加或慢快结构本身定义为独有机制。
+
+训练时，自动标签用于分割学习和几何监督；推理时仅使用新RGB、关节及
+策略执行记录。离线双向传播使用未来视频，不会直接作为在线输入。
+全流程应保留独立测试episode，避免标签模型、基础策略和残差模型的
+不同划分被混称为全系统未见数据泛化。
+
+\subsection{自主提示与质量驱动标签迭代}
+
+首先依据类别说明和代表性视频帧生成离散JSON框/点提示，渲染后进行少量人工审核。
+对小目标暴露、接触、再遮挡等边界补充正点、相邻类负点和经审核的可见区间。
+SAM2\cite{ravi2024sam2}以提示传播标签；保存正反两个方向结果与合成语义图，
+每个像素只标当前可见表面，不能将接触的目标与工具合为同一类。
+
+每帧每类计算邻帧IoU较小值 $T$、相邻面积log变化最大值 $A$、
+归一化质心位移最大值 $C$、有效连通域数 $N$、双向IoU $B$。
+以各类诊断阈值归一化，有
+\begin{align}
+ s_T&=\clip(T/\tau_T,0,1),\nonumber\\
+ s_A&=\clip(1-A/\tau_A,0,1),\nonumber\\
+ s_C&=\clip(1-C/\tau_C,0,1),\nonumber\\
+ s_N&=\clip(N_{\max}/\max(N,1),0,1),\nonumber\\
+ s_B&=\clip(B/\tau_B,0,1),\nonumber\\
+ q&=(s_T+s_A+s_C+s_N+s_B)/5.
+ \label{eq:quality}
+\end{align}
+双向数据缺失时，当前实现设 $s_B=1$，另存可用性标志；
+不得将缺失视为实际测得一致。预期可见却无mask、碎裂、低双向一致性等
+异常独立保存，不能被高均分覆盖。
+
+门控输出接受、自动重试或人工复核。当前默认接受分数0.75、低分阈值0.55、
+接受双向IoU 0.8；仅有时序/面积变化且双向IoU至少0.9、无结构异常时，
+可保护真实转场。问题帧合并成带上下文片段，增加锚点后重跑，默认两次
+自动重试后仍失败才转人工。阈值是诊断设置，不是式\eqref{eq:weighted_bias}
+所要求的无偏性证明。
+
+通过审核/门控的mask转为检测框，训练分视角YOLO提示器，再扩展到更多视频。
+若一帧真实存在的正类未通过，不将其作为遗漏该类别的检测训练样本。
+每轮保留提示、权重、评分和人工override，最后验证视频对齐、mask互斥与数据加载。
+这里减少的是额外语义标注成本，不是取消示范采集和人工审核。
+
+\subsection{冻结U-Net与共享视觉编码}
+
+使用离线标签分别训练front和side轻量TinyUNet。
+当前front含背景共7类：背景、遮挡物、目标、区域、工具、左右臂；
+side含背景共5类，不单独标注机械臂。共享类别具有相同语义颜色。
+两个分割器以完整视野RGB缩放到 $480\times270$ 并使用ImageNet归一化。
+分割训练采用类别加权交叉熵及可配置前景Dice，实际权重由模型配置固定。
+该独立训练器不因此自动具有逐帧质量加权通路。
+
+将冻结分割器输出的logits转为概率
+$P_t^v=\operatorname{softmax}(l_t^v)$，再按固定调色板
+$c_k\in[0,1]^3$ 生成
+\begin{equation}
+ S_t^v(u)=\sum_k P_t^v(k,u)c_k.
+ \label{eq:semantic_rgb}
+\end{equation}
+它保留颜色混合，不先做argmax；多通道到3通道的压缩不可保证可逆。
+原RGB与语义RGB分别经共享ResNet18及投影，得到独立token序列。
+双视角共有四路视觉输入，不在像素或特征层预先相加。
+
+当前版本不加camera/modality embedding，使用ACT原位置编码。
+U-Net在策略学习期间冻结；动作或几何loss不更新它。
+没有显式三维配准、遮挡补全或动作监督微调分割模块。
+
+\subsection{几何监督的语义Query Token}
+
+增加三个可学习初始向量 $e_i\in\R^{512}$，与latent、关节及视觉token
+共同输入ACT encoder，得到当前观察相关的隐藏特征 $z_i$。
+它们是encoder自注意力参与者，不是固定的几何数值输入。
+三个线性头 $d_i(z_i)$ 的输出维度分别为1、1、2；
+动作decoder同时读取包含这些token的完整encoder上下文。
+
+几何监督只从front训练标签生成。令目标、区域mask质心为 $c_O,c_R$，
+图像宽高为 $W,H_I$，则
+\begin{align}
+ G_1&=|M_O|/(WH_I),\nonumber\\
+ G_2&=\frac{\norm{c_O-c_R}}{\sqrt{(W-1)^2+(H_I-1)^2}},\nonumber\\
+ G_3&=\bar c_O-\bar e_{T,L}\in[-1,1]^2.
+ \label{eq:geometry_targets}
+\end{align}
+其中横纵坐标分别按宽高归一化。$\bar e_{T,L}$ 是在该归一化坐标内
+拟合tool mask的PCA主轴，取投影极值确定两端，再选择图像x较小的端点。
+它不是工具质心，也不保证等于物理有效接触端。
+
+目标缺失时仍监督 $G_1=0$；组成关系的任一mask缺失时屏蔽 $G_2$ 或 $G_3$。
+用 $v_i$ 表示有效性，类质量映射为
+\begin{equation}
+ w(q)=\min(q/0.95,1),\quad q\in[0,1].
+\end{equation}
+面积组使用目标权重；距离和向量组分别使用两相关类别权重的最小值。
+令元素权重为 $\omega_{bi}$，则
+\begin{equation}
+ L_G=\frac13\sum_{g=1}^3
+ \frac{\sum_{b,i\in g}\omega_{bi}\,
+       \ell_{0.01}(\widehat G_{bi}-\widetilde G_{bi})}
+      {\max(1,\sum_{b,i\in g}\omega_{bi})},
+ \label{eq:geometry_loss}
+\end{equation}
+其中 $\ell_\beta$ 为Smooth L1。先组内归一化，避免二维向量仅因维度更多
+而占双倍组权重。总损失为
+\begin{equation}
+ L_{\mathrm{base}}=L_{\mathrm{ACT,L1}}
+ +\lambda_{\mathrm{KL}}L_{\mathrm{KL}}+\lambda_G L_G,
+\end{equation}
+当前 $\lambda_G=1$。训练使用示范动作的VAE分支，推理不访问专家未来动作。
+
+该监督使几何可读出，未显式监督注意力图，也未强制动作decoder只由几何决定。
+因此命题\ref{prop:geometry}的读出误差不可忽略。
+本模块不直接输出任务完成布尔值，不把质心距离当作完整区域包含判据。
+
+\subsection{当前观察、慢语义与历史缓存}
+
+基础策略训练完成后冻结全部权重。残差变体A使用普通双RGB ACT；
+B使用双视角U-Net语义ACT；C使用双视角QToken ACT。
+每次快更新只编码新front/side图像，完整视野缩放到 $320\times180$，
+复用冻结ResNet并空间池化为每视角 $2\times3\times512$，合计6144维。
+
+B额外从最新两路分割概率提取池化概率、面积、质心、置信度、可见性和
+目标--区域/目标--工具质心关系，共138维。几何无效时零占位加validity，
+不把零当作有效距离。该处工具关系不同于式\eqref{eq:geometry_targets}的端点向量。
+
+C通过原几何头的输入获取三个512维query隐藏状态，附三个数值有效标志，
+共1539维。它们绑定基础计划身份，只在对应计划生效后使用；
+不是每次快更新重新产生query。当前RGB是新观察，query是慢语义上下文。
+数值有效不表示目标可见或语义正确。
+
+控制上下文 $c_t$ 包含follower关节、因果估计速度、上一条已发送指令、
+对应未来基础动作及其与当前关节的差、槽位有效性、计划年龄、观察间隔、
+切换标志和目标延迟。v2纳入9个基础动作，10关节时共223维。
+训练时上一条指令取示范；运行时取实际返回指令，这一分布差异不被隐藏。
+
+缓存最近 $W_h=8$ 条 $(f_i,c_i)$，每次在该窗口内从零状态计算
+\begin{align}
+ x_i&=\rho_\theta([\alpha_\theta(f_i),c_i]),\nonumber\\
+ h_i&=\operatorname{GRU}_\theta(x_i,h_{i-1}),\quad h_{\mathrm{start}-1}=0.
+ \label{eq:gru}
+\end{align}
+视觉投影及输入投影为128维，GRU为单层hidden128。
+历史视觉特征不重复编码；但GRU每次重算窗口，不跨调用无限保留隐藏状态。
+正常5Hz下历史首尾约1.4秒；间隔超过0.3秒或任务reset时清空。
+
+\subsection{有界残差监督与分阶段训练}
+
+残差头输出 $H\times n_a$ 调整量，在原生命令空间定义
+\begin{equation}
+ \delta a_{t,j}=b\odot\tanh([W_r h_t+c_r]_j),
+ \quad \widehat a_{t,j}=a^{\mathrm{base}}_{t,j}+\delta a_{t,j}.
+\end{equation}
+初始 $W_r,c_r$ 为零，
+$b_i=\clip(\operatorname{P95}_{\mathrm{train}}|a_i^{\mathrm{demo}}-a_i^{\mathrm{base}}|,0.05,5)$。
+数据值为校准后的原生命令单位，不称作角度。
+限幅不替代位置、速度、加速度或碰撞安全约束。
+
+以 $m_{bj}$ 表示有效目标槽位，残差损失为
+\begin{equation}
+ L_R=\frac{\sum_{b,j,i}m_{bj}
+ \left[\ell_{0.1}\!\left(\frac{\widehat a_{bji}-a^{\mathrm{demo}}_{bji}}{\sigma_i}\right)
+ +\lambda_R\left(\frac{\delta a_{bji}}{\sigma_i}\right)^2\right]}
+ {n_a\max(1,\sum_{b,j}m_{bj})},
+ \label{eq:residual_loss}
+\end{equation}
+其中 $\lambda_R=10^{-3}$。监督为原数据集leader action，而非future follower state差。
+仅训练新增投影、GRU和残差头。固定特征离线按episode缓存，保留配置和源模型指纹；
+训练/验证按episode分开，历史不跨轨迹，尾部目标mask无效。
+
+训练使用AdamW、学习率 $10^{-4}$、weight decay $10^{-4}$、batch128、梯度裁剪1，
+最多50轮、验证连续8轮无改善早停。best按验证标准差缩放MAE选择。
+因此平方风险命题提供解释而非实际优化等价性。A的当前记录MLP作为无窗口对照，
+仍含速度和上一动作，不能称作完全无时间信息。
+
+\subsection{计划绑定、重叠更新与失效处理}
+
+当前配置为 $\Delta=1/30$ 秒、$K=60$、慢观察间隔30帧，
+$s=6,d=3,H=9$。例如第6帧观察对应第9--17帧，第12帧对应第15--23帧。
+式\eqref{eq:late_prefix}决定迟到时丢弃的前缀；相邻预测重叠3帧。
+每次都以原基础计划相加，不在已经修正的动作上累加新残差。
+
+结果必须携带plan ID、目标槽位和原观察时间。新结果只覆盖同计划同目标时间
+的未执行槽位；每个旧槽位保留自己的时间，防止被新结果错误续期。
+新计划生效时清空旧残差；不同步、重复、非有限或过旧观察不视为新反馈。
+结果返回时最大观察年龄0.15秒，已接受残差使用年龄上限0.4秒，
+后者覆盖最远 $11/30$ 秒目标，与命题\ref{prop:coverage}一致。
+
+慢计划ready时间至少包含设定的3帧延迟，并在shadow中考虑实际测得的慢推理耗时。
+新计划未到时仅继续有效旧计划；基础计划也失效时返回无命令。
+实际机器人遇到无命令的安全处置必须由硬件控制层另行定义。
+当前代码提供离线训练与shadow数组输出，不将其等同于已部署的并发实时控制器。
+
+\subsection{方法与理论假设的对应}
+
+标签迭代针对式\eqref{eq:label_noise}的真实几何噪声，但评分未经概率校准；
+几何辅助监督针对式\eqref{eq:geometry_bound}中的读出能力，不能自动保证动作利用；
+窗口GRU近似历史信息，其收益要求式\eqref{eq:gru_condition}成立；
+零初始有界输出允许保留基础策略，但实际改善需要式\eqref{eq:residual_condition}；
+时间戳、计划绑定与覆盖检查用于保证分析中修正对应的是同一个目标动作。
+上述映射明确了设计意图与待检验条件，不以模块存在代替条件成立。

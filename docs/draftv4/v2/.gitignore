@@ -1,0 +1,9 @@
+# Downloaded papers are local reading copies, not redistribution artifacts.
+/literature/*.pdf
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.xdv
+*.synctex.gz

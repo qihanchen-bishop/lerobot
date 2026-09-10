@@ -1,0 +1,79 @@
+\section{主要推导}
+\subsection{有限时域性能差分}
+令 $V_T^E(x_T)=\ind\{\Psi=0\}$，状态包含评价终端事件所需的记录。
+Bellman关系为
+$Q_t^E(x,a)=\E[V_{t+1}^E(x_{t+1})\mid x,a]$。
+因此沿 $\pi$ 的轨迹，
+\begin{align*}
+ \sum_t\E_\pi A_t^E(x_t,\pi(x_t))
+ &=\sum_t\E_\pi[V_{t+1}^E(x_{t+1})-V_t^E(x_t)]\\
+ &=\E_\pi V_T^E-\E_{x_0}V_0^E\\
+ &=F(\pi)-F(\pi_E).
+\end{align*}
+这里以终端状态的指示变量定义价值；环境随机性由条件期望积分。
+相同初始分布是最后一步成立的必要条件。
+随后
+\begin{align*}
+ F(\pi)-F(\pi_E)
+ &\le TL\E_{\bar d_\pi}\norm{e_\pi}\\
+ &\le TL\sqrt{\E_{\bar d_\pi}\norm{e_\pi}^2}\\
+ &\le TL\sqrt{C\epsilon_E},
+\end{align*}
+得到式\eqref{eq:successbound}。
+在覆盖混合的两部分分别使用此论证和 $A_t^E\le1$，
+得到式\eqref{eq:uncovered}。
+
+\subsection{何时训练误差可以进入该界}
+例如，预先固定的有限策略集合含 $M_{\Pi}$ 个候选，
+每条专家轨迹的平均平方损失位于 $[0,B_\ell]$，
+$n$ 条轨迹独立采样。Hoeffding不等式及联合界给出
+\begin{equation}
+ g_\delta=B_\ell\sqrt{\frac{\log(M_{\Pi}/\delta)}{2n}}.
+\end{equation}
+此时可对数据选择的候选使用式\eqref{eq:empbound}。
+这只是说明独立轨迹、复杂度和有界损失如何进入分析，
+不将神经网络无限假设类替换成实验组数，也不为本项目报告该数值证书。
+已有训练log的L1加KL总和不等于这里的平方动作风险。
+如需比较，须额外在同一未见episode、相同目标槽位与归一化下重算指标。
+
+\subsection{几何表示界}
+条件期望的最小二乘性质给出
+\[
+ a_Q\le\E\norm{m_{\mathcal O}-f(\widehat G,C)}^2.
+\]
+由 $L^2$ 三角不等式及Lipschitz性质，
+\[
+ \sqrt{a_Q}\le\sqrt{\epsilon_{\rm suf}}+L_G\sqrt{\epsilon_G}.
+\]
+代入式\eqref{eq:decomp}即得式\eqref{eq:geometry}。
+可见关系受mask有效域限制时，所有期望应在同一有效域条件化，
+并额外保留无效域风险，不把该局部界直接宣称为全分布结论。
+
+\subsection{残差投影恒等式}
+嵌套信息与条件期望正交性给出
+\begin{align*}
+ \E\norm{E-r}^2
+ &=\E\norm{E-m_h}^2+\E\norm{m_h-m_U}^2\\
+ &\quad+\E\norm{m_U-r}^2,\\
+ \E\norm E^2
+ &=\E\norm{E-m_h}^2+\E\norm{m_h}^2,\\
+ \E\norm{E-m_c}^2
+ &=\E\norm{E-m_h}^2+\E\norm{m_h-m_c}^2.
+\end{align*}
+两两相减得到式\eqref{eq:resgain}--\eqref{eq:rescompare}。
+这些恒等式要求同一评价分布与同一目标时刻；
+对不同策略自主产生的轨迹分别算出的风险，不能直接套用。
+
+\subsection{反馈时序的适用条件}
+控制周期为 $\Delta$，第 $t$ 次观察的修正目标为
+$t+d,\ldots,t+d+H-1$，快更新间隔为 $s$。
+若实际端到端延迟为 $\ell$，且执行在槽位边界对齐，
+迟到前缀长度可保守记为
+\[
+ k=\min\{H,\max(0,\lceil\ell/\Delta\rceil-d)\}.
+\]
+同一计划内若连续轮次均满足 $k<H$ 且 $s+k\le H$，
+则从可用起点看可维持修正区间覆盖。
+额外的结果年龄限制、调度丢帧或计划切换仍可能使覆盖失效，
+所以该关系不等于实机实时保证。结果必须绑定目标槽位；
+把迟到修正整体向后平移会破坏训练的目标对齐。

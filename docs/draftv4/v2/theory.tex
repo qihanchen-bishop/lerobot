@@ -1,0 +1,265 @@
+\section{问题定义与性能改进的条件}
+\label{sec:analysis}
+\subsection{统一任务目标，不预设网络结构}
+机器人需要在遮挡与接触变化下完成暴露、分离、运输和遮挡物恢复。
+令隐状态为 $x_t$，可得观测为 $o_t=(I_t,q_t)$，其中 $I_t$ 可包含一个或多个
+视角的图像，$q_t$ 为实际执行臂关节状态。环境满足未知的
+$x_{t+1}=f(x_t,u_t,\xi_t)$、$o_t=h(x_t,\nu_t)$。
+令 $\mathcal H_t$ 表示截至 $t$ 可得的因果观测、任务条件与已执行指令记录。
+任务目标是学习策略 $\pi$，提高任务完成概率
+\begin{equation}
+ J(\pi)=\Prob_\pi\{\Psi(x_{0:T},u_{0:T-1})=1\},
+ \label{eq:taskobjective}
+\end{equation}
+其中 $\Psi$ 表示任务要求及失败约束，不由固定时间阶段替代。
+输入模态、内部表示、记忆单元和动作参数化均是实现该目标的选择，
+不属于问题定义的前提。
+
+训练给定示范观测与指令。以训练动作标准差构成正对角矩阵 $D$，
+对固定预测时刻 $\tau$ 定义 $Y=D^{-1}a^{\mathrm{demo}}_\tau$。
+可以逐槽预测或联合预测动作块，以下先分析相同 $\tau$ 的监督风险
+\begin{equation}
+ R(p)=\E_\mu\norm{Y-p}^2.
+ \label{eq:risk}
+\end{equation}
+假设评价分布 $\mu$ 固定，各变量二阶可积，训练后的参数固定，预测仅依赖
+允许的因果信息；或等价地，所有期望条件于训练数据与训练随机性。
+示范指令不是唯一最优控制。式\eqref{eq:risk}是模仿学习的代理目标，
+与式\eqref{eq:taskobjective}不同；实际L1或Smooth L1训练亦不等同于平方风险优化。
+后文的保证指固定分布上的平方风险，不把它自动提升为任务成功率或稳定性保证。
+
+\subsection{统一分析：信息、表示与动作读出}
+令 $\mathcal O$ 为所比较模型允许访问的信息并集生成的$\sigma$代数，
+$m_{\mathcal O}=\E[Y\mid\mathcal O]$。
+一个训练后的模型经编码得到 $Z$，实际动作为 $p(Z)$。
+以 $m_Z=\E[Y\mid Z]$ 定义
+\begin{align}
+ a_Z&=\E\norm{m_{\mathcal O}-m_Z}^2,\nonumber\\
+ e_Z&=\E\norm{p(Z)-m_Z}^2.
+ \label{eq:reprerrors}
+\end{align}
+$a_Z$ 表示编码后无法恢复的动作相关信息，$e_Z$ 包含有限数据、动作头表达能力及
+优化不足造成的读出误差。由条件期望正交性\cite{shalizi2020prediction}，
+\begin{equation}
+ R(p)=R(m_{\mathcal O})+a_Z+e_Z.
+ \label{eq:representation}
+\end{equation}
+因此任意两种表示的实际风险差为
+\begin{equation}
+ R(p_0)-R(p_1)=(a_{Z_0}-a_{Z_1})+(e_{Z_0}-e_{Z_1}).
+ \label{eq:reprcompare}
+\end{equation}
+不要求两个已训练表示具有包含关系。信息更丰富、语义更清晰或记忆更长，都需要
+落实为这两类误差的净改善；仅增加模块数量不能推出净改善。
+
+\subsection{路径一：RGB观测何时提高预测性能}
+令 $X$ 为基线已有输入，$I$ 为新加入的原始RGB观测。
+$X$ 可以是关节与任务条件，也可以包含已有视角或较早图像；因此该分析也适用于
+补充视角或加入更新图像。定义 $m_X=\E[Y\mid X]$、
+$m_{XI}=\E[Y\mid X,I]$，以及实际预测 $p_0(X),p_1(X,I)$ 的
+误差 $\varepsilon_0=\E\norm{p_0-m_X}^2$、
+$\varepsilon_1=\E\norm{p_1-m_{XI}}^2$。
+\begin{proposition}[新增RGB的实际改进条件]
+\label{prop:rgb}
+对相同目标与评价分布，有
+\begin{align}
+ R(p_0)-R(p_1)
+ &=\Delta_I+\varepsilon_0-\varepsilon_1,\nonumber\\
+ \Delta_I&=\E\norm{m_{XI}-m_X}^2\geq0.
+ \label{eq:rgbbenefit}
+\end{align}
+故 $\varepsilon_1-\varepsilon_0<\Delta_I$ 时实际模型严格改善。
+\end{proposition}
+证明由嵌套条件期望分解得到，见附录。理想预测器不因新增RGB而变差；
+严格理想收益要求RGB使条件动作均值发生变化，而不仅是图像包含更多像素。
+例如相同关节状态下，目标在工具不同侧需要不同指令，能够区分目标位置的图像
+可以减小观测歧义。但完全冗余、不同步或无关RGB可能使 $\Delta_I=0$，
+有限训练误差也可能抵消信息收益。若保留原输入允许模型忽略新增RGB，
+只能保证总体最优假设类不劣，不能保证实际优化自动达到它。
+
+\emph{原RGB与语义RGB必须区分。}若新增的是分割概率经调色板生成的
+语义RGB图 $S=g(I)$，且 $I$ 已在 $X$ 中，则
+\begin{equation}
+ \sigma(X,S)=\sigma(X),\quad \E[Y\mid X,S]=\E[Y\mid X].
+ \label{eq:noinfo}
+\end{equation}
+这时不能套用严格新增观测收益；收益只能来自式\eqref{eq:reprcompare}中的
+表示或读出误差降低。预训练分割引入的是由额外标签学到的先验，
+固定分割器后并不创造图像原本没有的信息。
+
+\subsection{路径二：语义图与几何监督token的作用}
+原RGB保留完整可见细节；语义图显式组织对象类别和空间范围；
+几何监督token进一步要求特定的任务关系能够从内部表示读出。
+三者对应不同层次，不能把输入分割图与对query添加监督混成一个操作。
+
+令 $G$ 为真实任务几何，$C$ 为必要控制条件。考虑存在一个对几何输入为
+$L_G$-Lipschitz的函数 $f_G$，满足近似任务相关性
+\begin{equation}
+ \E\norm{m_{\mathcal O}-f_G(G,C)}^2\leq\epsilon_{\mathrm{suf}}.
+ \label{eq:geoerrors}
+\end{equation}
+不要求 $G$ 单独足以决定动作；$\epsilon_{\mathrm{suf}}$ 明确容纳未表示的接触、姿态
+和历史因素。在接触模式切换附近，该平滑性可能仅局部成立。
+设实际语义/query表示为 $Z_Q$，其允许输入包括 $C$，
+辅助头给出 $\widehat G=d(Z_Q)$，定义
+$\epsilon_G=\E\norm{\widehat G-G}^2$。
+实际策略读出误差为 $e_Q=\E\norm{p_Q-\E[Y\mid Z_Q]}^2$。
+
+\begin{proposition}[几何监督表示的比较保证]
+\label{prop:geometry}
+上述条件下，定义
+$U_G=(\sqrt{\epsilon_{\mathrm{suf}}}+L_G\sqrt{\epsilon_G})^2$，则
+\begin{equation}
+ R(p_Q)-R(m_{\mathcal O})\leq U_G+e_Q.
+ \label{eq:geobound}
+\end{equation}
+若基线表示 $Z_0$ 的信息损失有下界 $a_{Z_0}\geq\delta_0>0$，且
+\begin{equation}
+ U_G+e_Q<\delta_0,
+ \label{eq:geoguarantee}
+\end{equation}
+则 $R(p_Q)<R(p_0)$，不论基线自身读出误差是否为零。
+\end{proposition}
+\begin{IEEEproof}
+$f_G(\widehat G,C)$ 对 $Z_Q$ 可测，故条件均值读出的最优性给出
+$a_{Z_Q}\leq\E\norm{m_{\mathcal O}-f_G(\widehat G,C)}^2\leq U_G$；
+后一不等式由 $L^2$ 三角不等式及Lipschitz条件得到。
+式\eqref{eq:representation}推出式\eqref{eq:geobound}。
+基线风险满足 $R(p_0)-R(m_{\mathcal O})=a_{Z_0}+e_{Z_0}\geq\delta_0$，
+故式\eqref{eq:geoguarantee}给出严格比较。
+\end{IEEEproof}
+
+这个比较用本方法的\emph{上界}对基线的\emph{下界}，而非比较两个上界。
+一个足以产生 $\delta_0$ 的情形是：基线压缩了动作相关的对象关系，
+把需要不同动作的情况映射成相同表示；附录给出双模式混叠的定量下界。
+这并不声称现有RGB ACT必然发生这种混叠。如果基线已经保留充分信息，
+$a_{Z_0}$ 可以为零，此保证便不能用于它；实际收益仍可能来自读出更容易，
+但必须由式\eqref{eq:reprcompare}另行分析。
+
+该命题可分别应用于RGB到语义RGB表示、语义表示到几何监督query表示的比较，
+每次需要使用各自基线与方法的误差条件，不能把第一步的下界直接用于第二步。
+语义标签相同但query监督不同的情况，主要区别在于关系可读出性和动作读出误差，
+而非新增类别信息。
+
+\emph{为什么是带特定监督的query？}设三个encoder query状态为 $z_i$，
+几何头为 $d_i$，动作decoder读取包括这些query的上下文。
+对平方几何损失，其针对第 $i$ 个query状态的直接梯度为
+\begin{equation}
+ \nabla_{z_i}L_i
+ =2J_{d_i}(z_i)^\top(d_i(z_i)-\widetilde G_i).
+ \label{eq:querygradient}
+\end{equation}
+因此每个query接受一个可检验的关系读出约束，而非仅依赖动作loss自发分工；
+共享encoder训练使这个约束影响其从图像聚合的特征。实际Smooth L1将误差梯度
+替换为对应分段导数，监督目标仍是几何可读出性。
+将这些状态保留在动作decoder的可访问上下文中，提供利用所学关系的计算路径。
+这解释了\emph{关系监督加可访问token}这一设计的作用，但不证明特定attention形式
+或恰好三个query优于所有其他结构，也不直接监督注意力图。
+对于理想梯度更新，附录还给出辅助几何更新相对仅动作更新的局部下降条件：
+几何更新必须与动作下降方向足够一致，收益才能超过二阶曲率代价。
+因此几何监督既可能改善表示，也可能产生负迁移；任务loss的权重不能由语义正确
+这一事实单独决定。
+
+若动作头忽略query，几何仍可准确但 $e_Q$ 未必小，严格改进条件不能仅由几何loss
+推得。因此，保留 $e_Q$ 比假定辅助监督必然改变动作更必要。
+语义图压缩成三通道通常不可逆，共享ImageNet编码器也没有一般最优性保证；
+命题约束的是最终表示质量，不能把它当成这些具体工程选择的独立证明。
+
+若监督来自伪标签 $\widetilde G=G+\eta$，则
+\begin{equation}
+ \epsilon_G\leq2\E\norm{\widehat G-\widetilde G}^2+2\E\norm\eta^2.
+ \label{eq:noise}
+\end{equation}
+由此，低训练loss必须与标签真实误差共同考察。质量诊断、局部重试和少量人工复核
+针对后者；软权重不自动使标签无偏，其选择偏差见附录。
+对仅在对象可见时才可定义的距离关系，几何误差与比较界应在相应有效条件分布上使用。
+不可见样本不受该辅助loss约束，不能把可见子集上的保证直接扩展成全任务保证；
+总体风险还需加上无效子集的风险。面积为零可定义，与缺失的距离不是同一情形。
+若进展事件确实可表示为 $p_E(G)=\ind\{\phi(G)\geq0\}$，且 $\phi$ 为
+$L_\phi$-Lipschitz，则任意 $\gamma>0$ 满足
+\begin{equation}
+ \Prob[p_E(\widehat G)\ne p_E(G)]
+ \leq\Prob[|\phi(G)|\leq\gamma]+L_\phi^2\epsilon_G/\gamma^2.
+ \label{eq:margin}
+\end{equation}
+这是有事件裕量时的可靠性界，不表示面积与质心距离已经完整表达任务完成。
+
+\subsection{路径三：历史条件GRU残差何时改善动作}
+令 $B$ 为已有模型对同一目标 $Y$ 的预测，$e=Y-B$ 为待修正误差。
+此处才选择 $B+r$ 作为动作参数化；它不改变任务或监督目标。
+令 $\mathcal F_C$ 为当前输入、基础动作和控制上下文，
+$\mathcal F_H$ 为加入因果历史后的信息，$\mathcal F_C\subseteq\mathcal F_H$。
+定义 $m_C=\E[e\mid\mathcal F_C]$、$m_H=\E[e\mid\mathcal F_H]$。
+由同一正交性有
+\begin{equation}
+ R(B+m_C)-R(B+m_H)=\E\norm{m_H-m_C}^2
+ \eqqcolon\Delta_H.
+ \label{eq:historygain}
+\end{equation}
+如果历史区分了当前画面相似但需要不同纠正的运动/接触情况，$\Delta_H>0$。
+历史仅改变预测方差、不改变条件均值时，平方风险下该增益仍可为零。
+当前上下文若已有速度或上一指令，这里的增益只指额外历史记录，而不是全部时间信息。
+
+GRU把历史编码成 $h_t$，实际可用信息为
+$\mathcal T=\sigma(B,C_t,h_t)\subseteq\mathcal F_H$。
+记 $m_\mathcal T=\E[e\mid\mathcal T]$，定义
+\begin{align}
+ \epsilon_{\mathrm{enc}}&=\E\norm{m_H-m_\mathcal T}^2,\nonumber\\
+ \epsilon_{\mathrm{res}}&=\E\norm{r-m_\mathcal T}^2.
+ \label{eq:reserrors}
+\end{align}
+前者包含观测特征压缩、短窗口与记忆编码损失，后者包含残差函数类及训练误差。
+
+\begin{proposition}[实际GRU残差的条件性保证]
+\label{prop:gru}
+对 $\mathcal T$ 可测的实际残差，有
+\begin{align}
+ R(B)-R(B+r)
+ &=\E\norm{m_H}^2-\epsilon_{\mathrm{enc}}-\epsilon_{\mathrm{res}},
+ \label{eq:unified}\\
+ R(B+r)-R(B+m_C)
+ &=\epsilon_{\mathrm{enc}}+\epsilon_{\mathrm{res}}-\Delta_H.
+ \label{eq:grucompare}
+\end{align}
+故编码与拟合误差之和小于可预测残差能量时，实际残差严格优于基础模型；
+若更强地小于 $\Delta_H$，则严格优于最优的当前输入残差。
+\end{proposition}
+\begin{IEEEproof}
+$e-m_H$ 与所有平方可积历史可测函数正交，且
+$m_H-m_\mathcal T$ 与所有平方可积 $\mathcal T$ 可测函数正交，故
+$R(B+r)=\E\norm{e-m_H}^2+\epsilon_{\mathrm{enc}}+\epsilon_{\mathrm{res}}$。
+将 $R(B)=\E\norm e^2$ 正交展开得到首式，结合式\eqref{eq:historygain}得到次式。
+\end{IEEEproof}
+
+GRU的门控提供选择性保留历史与更新状态的参数化路径；它的理论角色是逼近与
+纠偏相关的历史统计量，而非凭架构名称获得优势。若存在统计量 $s_t$ 使
+$m_H=F(s_t,B,C_t)$，$F$ 对 $s_t$ 为 $L_s$-Lipschitz，且从GRU表示中可读出
+$\widehat s_t$、$\E\norm{\widehat s_t-s_t}^2\leq\epsilon_s$，则
+\begin{equation}
+ \epsilon_{\mathrm{enc}}\leq L_s^2\epsilon_s.
+ \label{eq:grustat}
+\end{equation}
+于是 $L_s^2\epsilon_s+\epsilon_{\mathrm{res}}<\Delta_H$ 是一个结构化的充分条件。
+证明同几何读出候选函数的投影论证。不假设GRU一定学到该统计量，
+也不以此证明GRU优于LSTM或Transformer。
+
+残差参数化让已有解 $r=0$ 可直接保留，并把监督集中到基础误差；
+在无限表达能力下，它与直接预测动作具有相同的最优能力。
+严格收益依赖学习到的条件误差，而非加法本身。可直接测量的等价条件为
+\begin{equation}
+ R(B)-R(B+r)=2\E\inner{Y-B}{r}-\E\norm r^2>0.
+ \label{eq:alignment}
+\end{equation}
+限幅减少过大修正的可用范围，却不保证每次修正方向正确。
+时间错位或陈旧观测会改变残差条件与编码误差；对应时间管理放在方法与附录，
+不再作为任务定义或第四个独立研究目标。
+
+\subsection{三个已观察到的收益对应何种保证}
+实机结果已支持三个设计在当前测试任务中的效果，本节说明这些效果何时具有
+一致的数学解释，而不将它们重述为尚未实现的设想。
+新增原RGB的保证来自条件均值信息收益超过实现代价；
+语义RGB与几何query的保证来自任务相关表示误差及读出误差的净降低；
+历史GRU残差的保证来自可预测误差能量超过编码和拟合损失。
+这些是有明确条件的比较结论，并非从既有成功率反推所有假设必然成立。
+基础概率恒等式不是本文新的数学发现，具体贡献应体现为这些条件指导的监督、
+信息路径与纠偏实现，以及对实机收益来源的解释。

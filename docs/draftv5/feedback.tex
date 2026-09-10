@@ -1,0 +1,119 @@
+\section{新观测如何转化为有效纠偏}
+\noindent\textbf{本节结论与推导路径。}
+上一节改善已有观察的任务相关表示，但不能恢复旧观察没有记录的新变化，
+也不能保证单帧几何足以区分动态状态。本节针对这一剩余缺口引入增量信息。
+新观测只有帮助预测当前计划的误差，并产生方向合适、幅度不过大的修正时，
+才会降低动作风险；历史只有提供当前信息之外的可预测残差，且收益超过编码与拟合代价时，
+才会进一步改善纠偏。更高观测频率或采用GRU本身均不构成改进保证。
+本节先以条件期望投影分解当前信息、历史与实际残差预测器的风险，
+再将实际收益写成误差与修正的对齐项减去修正能量；
+随后通过时间集成的偏差与协方差分解，说明频繁查询为何仍可能受到旧计划偏差影响，
+最后给出动作风险改善转化为任务成功率改善所需的更强任务方向条件。
+相应实验应控制基础策略与实际延迟，并通过历史对照及修正方向诊断检验收益来源。
+
+本节先在固定评价分布上分析实际动作修正。
+若需强调上一节的高敏感状态，可在同一 $\mu_w$ 下重新定义全部条件期望与风险；
+在覆盖和参考动作对齐等条件下，所得动作风险再进入式\eqref{eq:weightedtaskbound}。
+这保持了共同的任务目标，但不将离线回放分布直接当作纠偏后的闭环分布。
+
+\subsection{历史条件残差的可利用信息}
+固定评价分布及目标时刻，令 $B$ 为归一化基础动作，$E=Y-B$。
+$\mathcal F_c$ 包含最新观察、当前关节及计划上下文，
+$\mathcal F_h\supseteq\mathcal F_c$ 再包含因果历史。
+定义 $m_c=\E[E\mid\mathcal F_c]$，$m_h=\E[E\mid\mathcal F_h]$。
+理想历史残差比理想当前帧残差减少的风险为
+\begin{equation}
+ \Delta_h=\E\norm{m_h-m_c}^2.
+ \label{eq:historygain}
+\end{equation}
+同一当前画面但不同的接近速度、接触前后状态或过去遮挡记录，
+若需要不同修正，$\Delta_h$ 可能为正；重复帧或无关历史则不保证收益。
+
+令GRU与其其他输入产生信息 $\mathcal U\subseteq\mathcal F_h$，
+实际残差 $r$ 为 $\mathcal U$ 可测，$m_U=\E[E\mid\mathcal U]$。
+\begin{proposition}[历史编码与残差收益]
+设 $\epsilon_{\rm enc}=\E\norm{m_h-m_U}^2$，
+$\epsilon_{\rm fit}=\E\norm{r-m_U}^2$，则
+\begin{align}
+ R(B)-R(B+r)
+ &=\E\norm{m_h}^2-\epsilon_{\rm enc}-\epsilon_{\rm fit},\label{eq:resgain}\\
+ R(B+r)-R(B+m_c)
+ &=\epsilon_{\rm enc}+\epsilon_{\rm fit}-\Delta_h.\label{eq:rescompare}
+\end{align}
+\end{proposition}
+历史中的可预测残差必须超过编码和拟合代价才能改善。
+GRU是实现选择；这里不存在GRU必然优于LSTM或Transformer的结论。
+有界残差与正则可能牺牲拟合最优性，其影响包含在 $\epsilon_{\rm fit}$ 中。
+最新观测的收益也可用式\eqref{eq:newinfo}分析，但必须与相同目标时间的旧信息比较。
+对任意实际残差，还可直接检验
+\begin{equation}
+ R(B)-R(B+r)=2\E\inner{E}{r}-\E\norm r^2.
+ \label{eq:alignment}
+\end{equation}
+修正方向与误差不一致，或修正过大，均可能恶化动作风险。
+
+\subsection{为何频繁ACT与时间集成可能效果不好}
+ACT时间集成聚合同一执行时刻的多次预测\cite{zhao2023act}。
+令 $\widehat u_{\tau|k}$ 为第 $k$ 次查询对 $\tau$ 的预测，
+$w_k\ge0,\sum_kw_k=1$，则
+\begin{equation}
+ u_\tau^{\rm TE}=\sum_kw_k\widehat u_{\tau|k}.
+\end{equation}
+它确实使用新观测，因此不能把残差优势归因于基线没有实时信息。
+相对同一参考动作 $u_\tau^*$，令预测误差为 $b_k+\xi_k$，
+$\E\xi_k=0$。对固定权重，
+\begin{equation}
+ \E\norm{u_\tau^{\rm TE}-u_\tau^*}^2
+ =\norm{\sum_kw_k b_k}^2+
+ \sum_{k,l}w_kw_l\operatorname{tr}\operatorname{Cov}(\xi_k,\xi_l).
+ \label{eq:te}
+\end{equation}
+相关误差的方差降低有限，且旧预测在接触变化后可能带有系统偏差。
+若旧预测为 $a$、新预测与当前正确目标均为 $b$，
+旧预测总权重为 $\alpha$，则时间集成误差为
+\begin{equation}
+ \norm{u^{\rm TE}-b}^2=\alpha^2\norm{a-b}^2.
+ \label{eq:stale}
+\end{equation}
+此外，不同接触方案的平均动作未必对应有效接触路径。
+但不能据此宣称平均总会变差：平方范数凸性保证
+\begin{equation}
+ \norm{\sum_kw_ke_k}^2\le\sum_kw_k\norm{e_k}^2,
+\end{equation}
+它只是未保证优于最新或最好的单次预测，也未保证任务成功。
+
+当前仓库的时间集成权重以最旧预测为索引0，
+$w_i\propto\exp(-mi)$；正 $m$ 更偏向旧预测，$m=0$ 为均匀平均。
+该实现特征不能替代实机配置核查：必须知道部署是否启用TE、实际系数、
+查询频率和结果年龄，才可解释某次失败。
+用户观察到的较差表现与式\eqref{eq:stale}相容，但尚非其因果证据。
+
+\subsection{残差的区别与任务改进边界}
+残差显式条件于正在执行的计划，学习该计划在新证据下应改多少；
+它不要求每次独立重选完整动作模式。
+时间集成保留的是多次预测的加权记忆，不等于学习了观察历史的状态估计。
+若直接预测器具有同样的信息、函数能力、训练目标及算力，
+$B+r$ 与直接动作预测可互相参数化，不存在表达能力上的普遍优越性。
+冻结基础策略、零初始化、有界局部更新和匹配时序的监督是归纳偏置，
+不是无条件改进保证。残差同样可能受到时延、错误记忆和覆盖缺失影响。
+
+对任务成功率，设 $Q_t^B$ 是基础控制器的失败代价，
+在归一化动作 $b$ 周围二阶光滑，Hessian上界为 $M$。
+则
+\begin{equation}
+ A_t^B(x,b+r)\le
+ \nabla_b Q_t^B(x,b)^\top r+\tfrac M2\norm r^2.
+ \label{eq:taskres}
+\end{equation}
+若右侧在修正后控制器的访问分布上跨时刻求期望严格为负，
+式\eqref{eq:strict}给出成功率严格提升。
+这要求修正沿\emph{任务风险下降方向}，比式\eqref{eq:alignment}更强。
+当前监督残差没有学习 $Q^B$，不能声称已验证此条件；
+小动作误差与局部任务风险方向一致的接触模式、覆盖及安全裕量需要实验支撑。
+限幅也不能独自保证该条件。
+
+训练只含成功示范时，纠偏器学习的是示范观测下基础预测的残差。
+模型自主偏离后，同时间索引的示范指令未必仍是合适恢复动作；
+没有反事实恢复标签就不能承诺大范围恢复。
+离线回放检验式\eqref{eq:alignment}，闭环测试另行检验修正后分布及任务后果，
+两者必须分开。
