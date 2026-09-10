@@ -1,0 +1,60 @@
+% Chinese second working draft; original draft remains in the parent directory.
+\documentclass[journal,10pt]{IEEEtran}
+\usepackage{amsmath,amssymb,bm,mathtools,booktabs,array}
+\usepackage{xeCJK}
+\setmainfont{NimbusRoman}[
+ Path=/usr/share/fonts/opentype/urw-base35/,
+ Extension=.otf,UprightFont=*-Regular,BoldFont=*-Bold,
+ ItalicFont=*-Italic,BoldItalicFont=*-BoldItalic,SmallCapsFont=*-Regular]
+\setCJKmainfont[AutoFakeBold=true,AutoFakeSlant=true,SmallCapsFont={Droid Sans Fallback}]{Droid Sans Fallback}
+\setCJKsansfont{Droid Sans Fallback}
+\setCJKmonofont{Droid Sans Fallback}
+\usepackage{cite}
+\usepackage[hidelinks]{hyperref}
+\newcommand{\E}{\mathbb E}
+\newcommand{\Prob}{\mathbb P}
+\newcommand{\R}{\mathbb R}
+\newcommand{\norm}[1]{\lVert#1\rVert}
+\newcommand{\inner}[2]{\langle#1,#2\rangle}
+\newcommand{\ind}{\mathbf 1}
+\DeclareMathOperator{\clip}{clip}
+\newtheorem{proposition}{命题}
+\renewcommand{\IEEEproofname}{证明}
+\renewcommand{\refname}{参考文献}
+\title{面向遮挡接触操作的语义进展表示\\与历史条件动作块纠偏}
+\author{}
+\begin{document}
+\maketitle
+\begin{abstract}
+遮挡接触操作要求机器人不仅生成连贯运动，还要区分目标暴露、接触与运输等任务状态，
+并在动作块执行期间响应环境变化。本文研究在有限示范、较少额外语义标注及受限在线计算下，
+如何增强模仿策略的任务完成能力，而不预设特定网络分工。
+针对同一动作预测目标，我们给出新增RGB的条件均值收益、几何监督表示的比较界，
+以及历史条件残差的风险改进条件，明确表示与拟合误差可能抵消理论收益。
+分析导向一个分阶段学习框架：质量驱动的自动语义标注产生几何监督，
+冻结分割器与几何监督查询token构建慢策略，再以最新视觉、控制上下文及历史缓存学习
+绑定目标执行时间的有界动作残差。本文明确这些分析不保证任意分割、任意记忆网络或任意
+残差都改善任务成功率。实机评估已观察到语义输入、任务相关token和GRU残差的效果；
+本文以条件性理论解释这些收益，并组织跨平台与受控对照验证其适用范围。
+\end{abstract}
+\begin{IEEEkeywords}
+模仿学习，遮挡操作，语义表示，动作块，历史条件残差
+\end{IEEEkeywords}
+\input{introduction}
+\section{相关工作}
+% A comprehensive novelty review is intentionally left for a later revision.
+\input{theory}
+\input{method}
+\input{experiments}
+\section{讨论与适用边界}
+本方法适用于目标关系能够由视觉近似表达、至少部分关键变化在反馈窗口内可观测，
+且基础策略误差仍处于局部可修正范围的任务。双视角可以增加真实观测信息，但本实现不恢复
+三维状态或不可见表面；相机布局改变需要重新验证。接触力、材料状态及完全遮挡目标可能
+无法由当前几何量辨别；示范缺少失败恢复时，残差不具备任意状态恢复能力。
+共享视觉编码、三通道语义映射和GRU均是实现选择，不是理论唯一解。
+理论分析约束论证与实验，不将平方动作误差改善等同于闭环稳定性、碰撞安全或必然完成。
+\appendices
+\input{appendix}
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+\end{document}

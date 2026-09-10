@@ -1,0 +1,322 @@
+\section{问题定义与条件性理论分析}
+\label{sec:theory}
+
+\subsection{任务、观测与分析范围}
+
+考虑双臂暴露、分离、目标运输与遮挡物恢复任务。令环境隐状态为
+$x_t$，可用相机图像与机器人关节观测为
+$o_t=(\{I_t^v\}_{v\in\mathcal V},q_t)$。环境按
+\begin{equation}
+ x_{t+1}=f(x_t,u_t,\xi_t),\qquad o_t=h(x_t,\nu_t)
+\end{equation}
+演化，其中接触、形变和遮挡使得 $o_t$ 通常不足以唯一确定 $x_t$。
+该表达只定义问题，不假设已知 $f,h$，也不使用它们进行控制计算。
+暴露等阶段可由任务谓词描述，但全局进展不必是单调标量；目标重遮挡、
+接触失败等情况可能产生局部倒退。本文不把三个图像几何量定义为完整隐状态。
+
+慢策略在观测索引 $k$ 输出长度 $K$ 的基础动作块
+$B^{(k)}=(b_{k,0},\ldots,b_{k,K-1})$。
+快分支在 $t\geq k$ 观察后，为目标时刻
+$\tau=t+d+j$、$j=0,\ldots,H-1$ 预测残差。
+目标动作索引、计划身份及观察时刻均是模型条件，而不是事后对齐的自由变量。
+以下推导固定一个目标槽位，块级结论通过在有效槽位上求期望得到。
+
+设 $D=\diag(\sigma_1,\ldots,\sigma_{n_a})$，其中
+$\sigma_j>0$ 仅由训练动作统计确定。分析在标准差缩放的动作空间进行，
+$Y=D^{-1}a^{\mathrm{demo}}_\tau$、$B=D^{-1}b^{(k)}_\tau$。
+不减动作均值，因为残差为差值。$Y$ 是示范指令，不宣称等于唯一最优控制。
+
+\begin{assumption}[固定分布与因果性]
+\label{ass:distribution}
+对一个固定的评价分布 $\mu$，以下涉及的动作、几何、标签噪声和预测
+均具有有限二阶矩。
+各模型训练完成后参数固定；或等价地，所有期望条件于训练集。
+模型在观察时刻只能使用当时可得的图像、关节、已发送动作和已生效计划，
+不得使用未来专家动作、未来图像或尚未完成的新计划。
+\end{assumption}
+
+本节主要研究平方动作风险
+\begin{equation}
+ \mathcal R_\mu(\pi)=\E_\mu\norm{Y-\pi}^2.
+ \label{eq:risk}
+\end{equation}
+它允许给出精确分解，但不等于后文使用的 Smooth L1 训练损失，
+也不等于实机成功率。不同策略诱导的闭环状态分布通常不同；
+固定 $\mu$ 下的改进不能直接推广至所有闭环轨迹。
+条件期望的正交投影性质是下述风险分析的基础\cite{shalizi2020prediction}。
+
+\subsection{语义表示不创造观测信息}
+
+设固定分割器产生 $S=g_\psi(I)$。令 $X$ 包含当前RGB及需要的其余观测。
+由于 $S$ 对 $X$ 可测，有
+\begin{equation}
+ \sigma(X,S)=\sigma(X),\qquad
+ \E[Y\mid X,S]=\E[Y\mid X].
+ \label{eq:semantic_no_information}
+\end{equation}
+当互信息有限时，亦有 $I(Y;X,S)=I(Y;X)$，符合数据处理不等式
+\cite{mezard2009information}。因此不能声称同帧分割增加了理想观察者的信息量，
+或消除了完全遮挡引起的不可辨识性。
+
+语义分支的作用在于将额外标签中学到的先验带入有限样本策略训练。
+其潜在收益是学习任务相关表示的归纳偏置，而不是无条件的信息增益。
+预训练知识固定后，式\eqref{eq:semantic_no_information}仍成立。
+
+\subsection{几何可读出误差与动作风险的条件性联系}
+
+令 $\mathcal O$ 为指定时刻允许使用的完整观测集合，
+$m(\mathcal O)=\E[Y\mid\mathcal O]$。
+令 $G$ 为从可靠语义定义出的任务相关几何，$C$ 为关节、目标时间和其他控制条件。
+不假设 $G$ 单独足以决定动作。
+
+\begin{assumption}[近似任务相关性与局部平滑性]
+\label{ass:semantic}
+存在函数 $f_G$，使得
+\begin{equation}
+ \E\norm{m(\mathcal O)-f_G(G,C)}^2\leq\epsilon_{\mathrm{suf}},
+ \label{eq:sufficiency}
+\end{equation}
+且在所分析的任务域内，对几何输入满足一致的Lipschitz条件
+\begin{equation}
+ \norm{f_G(g,C)-f_G(g',C)}\leq L_G\norm{g-g'}.
+\end{equation}
+令 $Z$ 为策略表示，几何预测为 $\widehat G=d_\omega(Z)$，
+$\E\norm{\widehat G-G}^2\leq\epsilon_G$。
+对实际动作读出 $\widehat\pi$，还需要
+\begin{equation}
+ \E\norm{\widehat\pi-f_G(\widehat G,C)}^2\leq\epsilon_{\mathrm{read}}.
+ \label{eq:readout}
+\end{equation}
+\end{assumption}
+
+式\eqref{eq:readout}明确要求动作分支确实使用与几何一致的信息；
+仅训练辅助头不自动满足它。接触模式切换附近可能不存在小的统一 $L_G$，
+因此分析应局限于适用的任务域，或分模式进行。
+
+\begin{proposition}[几何表示的风险上界]
+\label{prop:geometry}
+在假设\ref{ass:distribution}--\ref{ass:semantic}下，
+若 $\widehat\pi$ 对 $\mathcal O$ 可测，则
+\begin{align}
+ \mathcal R_\mu(\widehat\pi)-\mathcal R_\mu(m)
+ &\leq 3\epsilon_{\mathrm{suf}}+3L_G^2\epsilon_G
+       +3\epsilon_{\mathrm{read}}.
+ \label{eq:geometry_bound}
+\end{align}
+\end{proposition}
+\begin{IEEEproof}
+条件期望正交性给出
+$\mathcal R_\mu(\widehat\pi)-\mathcal R_\mu(m)
+=\E\norm{\widehat\pi-m}^2$。
+将括号内差值分解为
+$\widehat\pi-f_G(\widehat G,C)$、
+$f_G(\widehat G,C)-f_G(G,C)$、
+$f_G(G,C)-m$ 三项，使用
+$\norm{a+b+c}^2\leq3(\norm a^2+\norm b^2+\norm c^2)$
+及Lipschitz条件即得。
+\end{IEEEproof}
+
+此界说明需要同时控制几何误差、几何不充分性和动作读出误差，
+而不是只降低辅助loss。它不是语义优于RGB的比较定理；
+两个方法上界的大小不同，也不能据此比较实际风险。
+本实现的ACT直接读取全部encoder特征，未硬编码为 $f_G(\widehat G,C)$，
+故 $\epsilon_{\mathrm{read}}$ 必须通过机制分析约束，不能删除。
+
+若训练几何标签为 $\widetilde G=G+\eta$，则
+\begin{equation}
+ \E\norm{\widehat G-G}^2
+ \leq 2\E\norm{\widehat G-\widetilde G}^2+2\E\norm\eta^2.
+ \label{eq:label_noise}
+\end{equation}
+由此可见，拟合伪标签的误差小，并不保证对真实几何误差小。
+标签质量需要独立审核，不能仅用网络对同一伪标签的一致性证实。
+
+\subsection{几何与进展判定：有间隔才可稳健}
+
+某一进展事件若确实可由 $p(G)=\ind\{\phi(G)\geq0\}$ 表示，
+且 $\phi$ 为 $L_\phi$-Lipschitz，则对任意 $\gamma>0$，
+\begin{equation}
+ \Prob\{p(\widehat G)\ne p(G)\}
+ \leq\Prob\{|\phi(G)|\leq\gamma\}
+      +\frac{L_\phi^2\epsilon_G}{\gamma^2}.
+ \label{eq:margin}
+\end{equation}
+证明：在 $|\phi(G)|>\gamma$ 的集合上，错误翻转要求
+$L_\phi\norm{\widehat G-G}>\gamma$，再用Markov不等式并加上边界集合概率。
+该式将事件边界模糊性和几何估计误差分开。
+
+但不是任意进展事件都满足这个表示条件。目标质心进入区域，
+不等于整个目标都进入区域；面积为零也无法区分从未暴露和重新遮挡。
+若事件依赖历史，可将 $G$ 扩展为相应历史关系，代价是重新检验误差与间隔条件。
+式\eqref{eq:margin}不把当前三个query自动提升为完整阶段/完成判定器。
+
+\subsection{质量加权何时可靠，何时产生选择偏差}
+
+设 $V$ 为辅助预测输入，$W\in[0,1]$ 为标签质量与有效性权重，
+并在 $\E[W\mid V]>0$ 的支持集考虑平方损失。
+对 $\widetilde G$ 的加权总体最优预测为
+\begin{equation}
+ f_W(V)=\frac{\E[W\widetilde G\mid V]}{\E[W\mid V]}.
+ \label{eq:weighted_optimum}
+\end{equation}
+由条件加权二次函数求导可得。与真实条件均值的差为
+\begin{align}
+ f_W(V)-\E[G\mid V]
+ ={}&\frac{\operatorname{Cov}(W,G\mid V)}{\E[W\mid V]}
+       +\frac{\E[W\eta\mid V]}{\E[W\mid V]}.
+ \label{eq:weighted_bias}
+\end{align}
+向量协方差按分量定义。
+加权噪声条件均值为零且权重不改变真实条件均值时，式\eqref{eq:weighted_bias}
+为零；否则门控可能偏向容易、静止或可见样本，改变学习目标。
+
+这里给出的是偏差条件，不宣称满足条件就比不加权有更低有限样本方差。
+当前SAM2质量分数是启发式诊断，未被证明为逆噪声方差或正确概率；
+实际组归一化Smooth L1也不等同于式\eqref{eq:weighted_optimum}。
+该分析用于明确质量加权需要验证的条件，而非为任意权重提供保证。
+
+\subsection{历史信息的价值与GRU压缩的代价}
+
+固定同一目标动作 $Y$。令 $\F$ 包含当前观察、基础计划和目标索引，
+$\G$ 在此基础上加入因果历史，因此 $\F\subseteq\G$。
+定义 $m_\F=\E[Y\mid\F]$、$m_\G=\E[Y\mid\G]$。
+
+\begin{proposition}[历史的最优风险收益]
+\label{prop:history}
+在假设\ref{ass:distribution}下，
+\begin{equation}
+ \mathcal R_\mu(m_\F)-\mathcal R_\mu(m_\G)
+ =\E\norm{m_\G-m_\F}^2\eqqcolon\Delta_{\mathrm{hist}}\geq0.
+ \label{eq:history}
+\end{equation}
+严格改进当且仅当两个条件均值以正概率不同。
+\end{proposition}
+\begin{IEEEproof}
+展开 $Y-m_\F=(Y-m_\G)+(m_\G-m_\F)$。
+后项对 $\G$ 可测，前项条件于 $\G$ 的均值为零，交叉项期望消失。
+\end{IEEEproof}
+
+对两个隐藏模式的简单例子，若给定同一当前观察，模式等概率，
+对应示范均值为 $y_1,y_2$，且历史完全辨别模式，则
+$\Delta_{\mathrm{hist}}=\norm{y_1-y_2}^2/4$。
+这说明在观测混叠下，当前观察策略存在不可避免的均值预测损失；
+不说明每个任务必有这样的模式，也不说明均值动作是安全动作。
+
+GRU是对历史的压缩，并非完整历史本身。
+设实际保留的信息 $\mathcal T=\sigma(C_t,Z_t^{\mathrm{GRU}})\subseteq\G$，
+$m_\mathcal T=\E[Y\mid\mathcal T]$。
+不要求 $\F\subseteq\mathcal T$，因GRU可能连当前信息也压缩损失。
+对可测预测器 $\widehat\pi_\mathcal T$，定义
+\begin{align}
+ \epsilon_{\mathrm{comp}}&=\E\norm{m_\G-m_\mathcal T}^2,\nonumber\\
+ \epsilon_{\mathrm{fit}}&=\E\norm{\widehat\pi_\mathcal T-m_\mathcal T}^2.
+\end{align}
+两次正交分解给出精确关系
+\begin{equation}
+ \mathcal R_\mu(\widehat\pi_\mathcal T)-\mathcal R_\mu(m_\F)
+ =\epsilon_{\mathrm{comp}}+\epsilon_{\mathrm{fit}}-\Delta_{\mathrm{hist}}.
+ \label{eq:gru_condition}
+\end{equation}
+因此GRU预测优于理想当前观察预测的充分且必要条件是
+$\epsilon_{\mathrm{comp}}+\epsilon_{\mathrm{fit}}<\Delta_{\mathrm{hist}}$。
+这是信息与误差条件，不是GRU架构优于LSTM/Transformer的结论。
+有限样本、短历史、错误记忆或观测冗余均可能使条件不满足。
+
+\subsection{实时残差的精确改进条件}
+
+令 $e=Y-B$，残差可用信息为 $U$，其中包含基础动作和相同目标索引。
+对任意平方可积残差 $r(U)$，展开平方得
+\begin{equation}
+ \mathcal R_\mu(B)-\mathcal R_\mu(B+r)
+ =2\E\inner e r-\E\norm r^2.
+ \label{eq:alignment}
+\end{equation}
+故方向相关性必须足以抵消幅度代价，错误或过大的修正会增加风险。
+
+令 $m_e(U)=\E[e\mid U]$，再次使用正交性有
+\begin{equation}
+ \mathcal R_\mu(B)-\mathcal R_\mu(B+r)
+ =\E\norm{m_e}^2-\E\norm{r-m_e}^2.
+ \label{eq:residual_condition}
+\end{equation}
+无约束的最优残差为 $m_e$；严格改善需要可预测误差能量大于残差逼近误差。
+历史或新观察的作用是改变可预测的条件误差，但同时也可能增加估计难度。
+
+\begin{proposition}[有界最优残差]
+\label{prop:bounded}
+设 $\mathcal C=\{r:|r_j|\leq\beta_j\}$，$\beta_j>0$。
+在总体平方风险上，最佳有界残差为
+$r_{\mathcal C}(U)=\Pi_{\mathcal C}(m_e(U))$。
+其风险不高于零残差；若 $m_e$ 以正概率非零，则严格低于零残差。
+\end{proposition}
+\begin{IEEEproof}
+给定 $U$ 后，目标为与 $r$ 无关的条件方差加
+$\norm{m_e-r}^2$，故最优解是欧氏投影。
+因 $0\in\mathcal C$，投影不比零差；盒内含零的邻域，
+当 $m_e\ne0$ 时可沿其方向取足够小的非零步得到严格改善。
+\end{IEEEproof}
+
+零残差属于模型类，因此其他损失下的总体最优值也不劣于基础策略，
+但这只是可行集包含关系。零初始化、经验风险下降或使用tanh不保证
+实际学到投影解，更不保证在新分布下优于基础策略。
+
+\subsection{推理延迟与重叠预测的覆盖条件}
+
+控制周期为 $\Delta>0$，$s,H$ 为正整数，$d$ 为非负整数。
+观察时刻为 $t_n=t_0+ns\Delta$，
+端到端结果可用延迟为 $\ell_n$。一轮目标槽位为
+\begin{equation}
+ \mathcal J_n=\{t_n+(d+j)\Delta:j=0,\ldots,H-1\}.
+\end{equation}
+采用明确约定：结果在某控制槽截止时刻或之前可用才允许该槽使用。
+同一基础计划内，不考虑额外有效性拒绝时，过期前缀数为
+\begin{equation}
+ k_n=\min\{H,\max(0,\lceil\ell_n/\Delta\rceil-d)\}.
+ \label{eq:late_prefix}
+\end{equation}
+这是把目标槽位与结果完成时间比较的直接结果，不得将第一个迟到残差
+平移到下一动作来改变式\eqref{eq:late_prefix}。
+
+\begin{proposition}[及时覆盖与重叠容错]
+\label{prop:coverage}
+若计划身份不变、观察同步、结果通过有效性检查、所有轮次
+$\ell_n\leq d\Delta$，则从首个修正槽开始连续覆盖当且仅当 $H\geq s$。
+在前一轮全部目标有效时，当前轮跳过前缀 $k_n$ 后仍能与前轮无缝衔接的条件为
+$s+k_n\leq H$，并要求 $k_n<H$。
+\end{proposition}
+\begin{IEEEproof}
+前轮最后槽为 $t_n+(d+H-1)\Delta$，下轮首个有效槽为
+$t_n+(s+d+k_{n+1})\Delta$。后者不晚于前者的下一槽
+当且仅当 $s+k_{n+1}\leq H$。及时情形 $k_{n+1}=0$ 即得首项。
+\end{IEEEproof}
+
+该容错结论只针对相邻轮次，不保证连续丢帧后仍覆盖，也不跨计划继承残差。
+若缓存还受最大年龄 $T_r$ 限制，要完整保留本轮预测需
+$T_r\geq(d+H-1)\Delta$；历史断流阈值也必须大于正常观察间隔。
+计算调度、相机传输和机器人通信均计入 $\ell_n$，不能用模型平均耗时替代。
+
+\subsection{从离线动作风险到闭环任务结果的边界}
+
+以上性质均不依赖学习到的接触动力学，但因此也不提供收敛定理。
+若额外假设两条轨迹在同一噪声耦合下满足
+\begin{equation}
+ \norm{x_{t+1}-x'_{t+1}}
+ \leq L_x\norm{x_t-x'_t}+L_u\norm{u_t-u'_t},
+\end{equation}
+则递推可得
+\begin{equation}
+ \norm{x_T-x'_T}\leq L_x^T\norm{x_0-x'_0}
+ +L_u\sum_{i=0}^{T-1}L_x^{T-1-i}\norm{u_i-u'_i}.
+\end{equation}
+但离线平均动作风险下降不提供每条闭环轨迹的右侧上界；
+接触切换还可能破坏适用的Lipschitz假设。
+要从此推至任务成功，尚需在策略访问状态上控制误差，并证明成功集合具有足够裕量。
+本工作不使用上述附加假设宣称稳定性或成功保证。
+
+\subsection{分析的可检验结论}
+
+理论分析指出四类应独立检验的条件：几何可读出与动作利用之间的联系；
+历史辨识收益与压缩损失的平衡；残差方向、幅度与基础误差的关系；
+端到端延迟是否满足目标时间预算。质量权重还需检查其选择偏差。
+这些是条件性机制解释，标准投影与不等式不是本文声称新发现的数学定理。
+条件成立程度及实机结果留待实验部分报告，不用假设替代证据。

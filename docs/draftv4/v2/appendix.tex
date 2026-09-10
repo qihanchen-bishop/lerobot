@@ -1,0 +1,94 @@
+\section{统一分解、RGB增益与混叠下界}
+对任意 $Z$ 可测预测 $p$，条件期望正交性给出
+$R(p)=R(m_Z)+\E\norm{p-m_Z}^2$。
+再对 $\sigma(Z)\subseteq\mathcal O$ 使用正交性，即得式\eqref{eq:representation}。
+对 $\sigma(X)\subseteq\sigma(X,I)$，同理
+$R(m_X)-R(m_{XI})=\E\norm{m_{XI}-m_X}^2$，
+加上两模型各自误差即得命题\ref{prop:rgb}。
+
+命题\ref{prop:geometry}所需的基线下界可以由动作相关的表示混叠得到。
+假设存在 $Z_0$ 可测事件 $A$，$\Prob(A)=\rho>0$；在 $A$ 上，给定 $Z_0$ 后，
+$m_{\mathcal O}$ 等概率取 $u_1(Z_0),u_2(Z_0)$，且二者距离至少 $d_0>0$。
+则条件方差为 $\norm{u_1-u_2}^2/4$，故
+\begin{equation}
+ a_{Z_0}=\E\norm{m_{\mathcal O}-m_{Z_0}}^2\geq\rho d_0^2/4.
+ \label{eq:aliaslower}
+\end{equation}
+如果语义/query表示能以足够小的误差区分这两类关系，满足
+$U_G+e_Q<\rho d_0^2/4$，便获得严格风险改善。
+这个例子限定的是基线\emph{表示}混叠，不声称完整RGB本身无法辨别两者。
+若原图也完全一样且没有额外历史/视角，则确定性语义不能凭空消除该歧义。
+
+对事件界\eqref{eq:margin}，在 $|\phi(G)|>\gamma$ 时，判定翻转要求
+$L_\phi\norm{\widehat G-G}>\gamma$；由Markov不等式再加阈值邻域概率可得。
+
+\section{query辅助监督的局部优化条件}
+令 $A(\theta)$ 为动作损失，$G(\theta)$ 为几何辅助损失。
+在可微且 $\nabla A$ 在相关更新线段上为 $L_A$-Lipschitz的区域，考虑理想梯度更新
+$\theta_a=\theta-\eta\nabla A(\theta)$ 与
+$\theta_q=\theta_a-\eta\lambda\nabla G(\theta)$，其中 $\eta,\lambda>0$。
+从 $\theta_a$ 沿第二项积分梯度并使用Lipschitz界，有
+\begin{align}
+ A(\theta_q)-A(\theta_a)
+ \leq{}&-\eta\lambda\inner{\nabla A(\theta_a)}{\nabla G(\theta)}\nonumber\\
+ &+\tfrac12 L_A\eta^2\lambda^2\norm{\nabla G(\theta)}^2.
+ \label{eq:auxdescent}
+\end{align}
+因此若两梯度内积大于
+$L_A\eta\lambda\norm{\nabla G(\theta)}^2/2$，联合更新的动作损失
+严格低于同一步的仅动作更新。这里直接比较实际 $A(\theta_q)$ 和 $A(\theta_a)$，
+不是比较两个分别计算的下降上界。
+query几何头提供这种辅助梯度的明确来源，但不保证内积为正。
+该条件是局部优化结论；用于经验loss时不等于泛化保证，也不保证整个训练轨迹。
+当前自适应优化器不等于上述理想梯度更新，若检查其实际一步效果需使用对应的
+有效参数更新和相同优化器状态，而不能照搬 $\eta\lambda\nabla G$。
+
+\section{质量加权的偏差与有界残差}
+对辅助输入 $V$、权重 $W\in[0,1]$，在 $\E[W\mid V]>0$ 的支持集上，
+加权平方损失的总体最优解为
+\begin{equation}
+ f_W(V)=\frac{\E[W\widetilde G\mid V]}{\E[W\mid V]}.
+\end{equation}
+若 $\widetilde G=G+\eta$，则
+\begin{equation}
+ f_W-\E[G\mid V]
+ =\frac{\operatorname{Cov}(W,G\mid V)+\E[W\eta\mid V]}{\E[W\mid V]}.
+ \label{eq:weightbias}
+\end{equation}
+因此高质量筛选可能同时降低噪声并偏向容易样本，不能只保留前一种解释。
+这是平方损失的总体诊断，非实际组归一化Smooth L1的等价解。
+
+令残差条件均值为 $m_\mathcal T$，条件正交性给出
+\begin{equation}
+ R(B)-R(B+r)=\E\norm{m_\mathcal T}^2-\E\norm{r-m_\mathcal T}^2.
+\end{equation}
+如果残差限定在含零的盒 $\mathcal C$，平方风险总体最优解为
+$\Pi_{\mathcal C}(m_\mathcal T)$，因零可行而不劣于基础策略。
+有限数据训练不一定达到该解，tanh限幅也不保证每个状态的改进。
+
+\section{时间对齐的实现条件}
+控制周期为 $\Delta$，观察间隔为 $s$ 帧，预测从观察后第 $d$ 帧开始的 $H$ 个残差。
+结果到达延迟为 $\ell$，仅在目标槽截止时刻或之前可用才允许使用，则过期前缀为
+\begin{equation}
+ k=\min\{H,\max(0,\lceil\ell/\Delta\rceil-d)\}.
+ \label{eq:delay}
+\end{equation}
+第 $n$ 轮目标区间为 $[ns+d,ns+d+H-1]$。下一轮首个未过期槽为
+$(n+1)s+d+k$；不晚于前轮末槽的下一帧要求
+\begin{equation}
+ s+k\leq H,\qquad k<H.
+ \label{eq:coverage}
+\end{equation}
+它假设前轮完整有效、无跨计划切换和额外年龄拒绝。
+发生额外失效时统计真实覆盖，不能继续引用理想连续覆盖结论。
+所有比较均使用同一基础动作 $B$ 与同一目标 $Y$；
+错位应用不是在原推导中简单增加一点残差噪声，而是改变了监督与执行对应关系。
+
+\section{动作风险保证与任务成功保证的区别}
+式\eqref{eq:taskobjective}涉及策略诱导的闭环状态分布；本文风险比较使用固定 $\mu$。
+局部动作MSE下降不能直接证明更高成功率：某些小误差可能发生在关键接触点，
+另一些大误差在自由空间可能无害；多模态示范的条件均值也未必是安全动作。
+要进一步证明任务成功，需要额外的可控性、接触模式、误差传播、成功集合裕量及
+策略访问分布约束。当前不具备这些已验证前提，因此不制造全局收敛定理。
+已经得到的实机收益是任务级证据；本节理论为其提供条件性机制解释，而不是用
+未经成立的动力学假设替代该证据。

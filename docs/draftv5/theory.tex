@@ -1,0 +1,159 @@
+\section{动作误差何时与任务完成一致}
+\noindent\textbf{本节结论与推导路径。}
+当参考专家可靠、部署状态被示范分布充分覆盖、动作误差能够泛化，
+且任务对动作偏差的敏感程度受控时，较小的动作风险能够支持更好的任务成功率下界，
+但不能保证两个策略的实际成功率按平均动作误差排序。
+本节先用有限时域性能差分恒等式，将失败概率差写成部署分布下的任务优势累积；
+再通过动作敏感性、分布覆盖及泛化条件，将其上界转换为可泛化动作误差的函数；
+随后用完整覆盖下的反例及状态相关敏感性，说明任务更依赖哪些状态上的预测准确性。
+现实中的有限数据、有限覆盖和有损观察难以满足理想保证，
+因此下一节研究语义及几何监督能否改善任务相关表示，
+再下一节研究更新观察和历史能否补足执行中的信息缺失。
+三者处理不同缺口，不把新增模块当作自动恢复所有理想条件的手段。
+
+\subsection{任务目标与分析假设}
+任务在固定时域 $T$ 内运行，成功事件为 $\Psi=1$，失败包含超时和预先指定的违规条件。
+所有策略使用同一初始分布、环境转移和成功判据：
+\begin{equation}
+ J(\pi)=\Prob_\pi(\Psi=1),\qquad F(\pi)=1-J(\pi).
+ \label{eq:success}
+\end{equation}
+为建立条件性结果，令 $x_t$ 为共同的充分决策状态，$\pi(x_t)$ 为实际执行指令。
+必要的任务记忆、计划和时序状态可纳入 $x_t$，使终端事件可由增广状态表达。
+这不声称单帧RGB满足Markov性。若只能使用有损观测或记忆编码，
+其信息缺失须另行计入，不能在应用理论时省略。
+
+参考策略 $\pi_E$ 假设为定义在所考察状态上的确定性专家。
+参考策略不必全局最优，但须有可接受的 $J(\pi_E)$。
+示范存在互相矛盾的动作模式时，动作条件均值不必仍是有效专家，
+此时不能把平方误差最优解直接代入下面的专家假设。
+令 $D$ 为固定的正对角动作尺度矩阵，定义
+\begin{equation}
+ e_\pi(x)=D^{-1}(\pi(x)-\pi_E(x)).
+\end{equation}
+$D$ 来自训练集，所有比较沿用相同尺度；归一化并不代表各关节具有相同任务代价。
+以下讨论执行时刻的动作误差，不默认全动作块各槽位平均误差等于实际执行误差。
+
+令 $Q_t^E(x,a)$ 表示在 $x$ 执行 $a$ 后始终遵循专家的终端失败概率，
+$V_t^E(x)=Q_t^E(x,\pi_E(x))$，$A_t^E=Q_t^E-V_t^E$。
+$d_\pi^t$ 为执行策略 $\pi$ 的状态分布，$\bar d_\pi$ 为 $(t,x)$ 的均匀时间混合。
+由性能差分恒等式的有限时域形式，
+\begin{equation}
+ F(\pi)-F(\pi_E)
+ =\sum_{t=0}^{T-1}\E_{d_\pi^t} A_t^E(x,\pi(x)).
+ \label{eq:pd}
+\end{equation}
+附录给出证明。等式的对象是\emph{闭环访问分布下、按任务后果衡量的误差}，
+不是训练集的平均动作距离。
+
+\subsection{覆盖、泛化与任务敏感性的共同作用}
+记专家分布平方动作风险为
+$\epsilon_E=\E_{\bar d_E}\norm{e_\pi}^2$。
+假设部署分布被专家分布控制，且动作偏离引起的任务风险有界：
+\begin{align}
+ \bar d_\pi&\ll\bar d_E,\quad
+ \frac{d\bar d_\pi}{d\bar d_E}\le C, \label{eq:coverage}\\
+ A_t^E(x,a)&\le L\norm{D^{-1}(a-\pi_E(x))}. \label{eq:sensitivity}
+\end{align}
+$C$ 表示覆盖程度而非样本条数，$L$ 表示任务对动作偏差的敏感程度。
+覆盖假设要求相关状态及其频率，不只是物体初始位置网格齐全。
+完整连续历史包含确定性动作时，两策略的历史分布甚至可能互相奇异；
+因此不能未经验证就在全历史空间假定有限 $C$。
+采用低维状态近似虽方便，也必须检查其充分性。
+接触不连续、硬阈值成功事件或悬崖式失败附近，有限且有用的 $L$ 也可能不存在。
+
+\begin{proposition}[动作风险到成功率的条件性界]
+若式\eqref{eq:coverage}--\eqref{eq:sensitivity}成立，则
+\begin{equation}
+ J(\pi)\ge J(\pi_E)-TL\sqrt{C\epsilon_E}.
+ \label{eq:successbound}
+\end{equation}
+若以至少 $1-\delta$ 的概率有
+$\epsilon_E\le\widehat\epsilon_E+g_\delta$，则同概率下
+\begin{equation}
+ J(\pi)\ge J(\pi_E)-TL\sqrt{C(\widehat\epsilon_E+g_\delta)}.
+ \label{eq:empbound}
+\end{equation}
+下界可截断到零。
+\end{proposition}
+由式\eqref{eq:pd}、Cauchy--Schwarz及密度比界立即得到，详见附录。
+式\eqref{eq:empbound}中的 $g_\delta$ 不可忽略：
+训练误差下降但泛化间隙扩大，不给出更强保证。
+若仅有同轨迹相邻帧上的随机划分，不能把帧数当作独立样本数。
+该界也可能很松，本文不以未知的 $C,L$ 生成数值成功率预测。
+
+覆盖不全时，设
+$\bar d_\pi=(1-\kappa)d_{\rm cov}+\kappa d_{\rm out}$，
+其中 $d_{\rm cov}\le C\bar d_E$，式\eqref{eq:sensitivity}只在覆盖部分成立。
+利用终端失败优势至多为1，
+\begin{equation}
+ F(\pi)-F(\pi_E)
+ \le T\big[(1-\kappa)L\sqrt{C\epsilon_E}+\kappa\big].
+ \label{eq:uncovered}
+\end{equation}
+覆盖域内误差趋零仍不能消除域外项。
+这里 $\kappa$ 是未覆盖的平均访问质量，不是每条轨迹必然失败概率，
+故保留保守的 $T$ 因子。更换策略也会改变 $C$ 和 $\kappa$。
+
+\subsection{更小误差不等于更高成功率}
+\emph{下界改善不等于两个真实成功率的单调排序。}
+即使 $T=1$ 且训练测试分布完全一致，结论仍不成立。
+设两个状态等概率出现，专家均输出零，状态1的失败概率为
+$\min(1,100a^2)$，状态2任意动作均成功。
+策略P分别输出 $(0.1,0)$，策略Q输出 $(0,0.2)$，则
+\begin{equation}
+ \epsilon_P=0.005<0.020=\epsilon_Q,\qquad
+ J(P)=0.5<1=J(Q).
+ \label{eq:counterexample}
+\end{equation}
+这不是覆盖缺失，而是误差发生位置及后果不同。
+在实际任务中，工具接触前后的少量误差可能比自由运动误差重要得多。
+
+严格的策略改进条件应相对于当前基线 $\pi_0$ 的任务优势描述：
+\begin{equation}
+ \sum_t\E_{d_{\pi_1}^t}A_t^{\pi_0}(x,\pi_1(x))<0
+ \quad\Longrightarrow\quad J(\pi_1)>J(\pi_0).
+ \label{eq:strict}
+\end{equation}
+普通L1/MSE没有直接监督该条件。
+只有额外建立代理损失与任务优势的关系，并控制访问分布变化，才可谈一致性。
+本文的合理主张是：\emph{降低可泛化的、任务相关的执行误差，是提高成功率的支持路径，
+而非充分的模型排名规则。}
+
+\subsection{从理想保证到实际缺口}
+前面的保证指出三个现实困难。
+\emph{有限数据与表征学习困难：}即使某类控制关系在示范中出现，
+有限样本也未必足以使模型从高维外观中发现并保留该关系；低训练误差不等于低泛化误差。
+\emph{覆盖不全：}外观组合缺失与控制状态缺失不同，
+前者可能通过不变先验缓解，后者不能仅靠重新编码已知图像补全。
+\emph{观察与执行不同步：}生成动作时的观察可能不充分或已经过时，
+即使图像表示准确，也不能表达尚未观察到的后续变化。
+这些缺口分别引出表示监督与增量反馈，但尚未解释为何应强调某些语义关系。
+
+为连接关键状态与表示选择，将式\eqref{eq:sensitivity}的统一常数细化为
+非负的状态相关敏感性 $w(t,x)$：
+\begin{equation}
+ A_t^E(x,a)\le w(t,x)\norm{D^{-1}(a-\pi_E(x))}.
+ \label{eq:statesensitivity}
+\end{equation}
+定义 $\epsilon_{E,w}=\E_{\bar d_E}[w\norm{e_\pi}^2]$，
+$\bar w_\pi=\E_{\bar d_\pi}w$，假设这些量有限。
+由加权Cauchy--Schwarz及同一覆盖条件，
+\begin{align}
+ F(\pi)-F(\pi_E)
+ &\le T\E_{\bar d_\pi}[w\norm{e_\pi}]\nonumber\\
+ &\le T\sqrt{\bar w_\pi C\epsilon_{E,w}}.
+ \label{eq:weightedtaskbound}
+\end{align}
+取 $w\equiv L$ 即回到式\eqref{eq:successbound}。
+这说明高敏感状态上的误差对该保证影响更大，
+而不只是这些状态应在叙述上被称为关键。
+这里 $w$ 是分析中的任务敏感性，不是现有训练的权重，
+更不是SAM2标签质量分数；关键事件标记也不自动等于已估计的 $w$。
+
+由此得到下一节的明确问题：\emph{如果高敏感状态下需要区分的控制关系，
+能够由可靠语义几何表示，辅助监督能否减少这些状态上的表示与动作误差？}
+关系在视觉上显著并不足够，还必须对动作有用。
+若关键差异来自视觉不能区分的隐变量，或来自完全未见的控制规律，
+语义表示并不能解决它。式\eqref{eq:weightedtaskbound}提供需要改善的风险对象，
+而不是直接证明语义或QToken已经改善了它。

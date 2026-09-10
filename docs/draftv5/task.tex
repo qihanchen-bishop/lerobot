@@ -1,0 +1,86 @@
+\section{问题定义：视觉可评估的交互任务}
+\label{sec:task}
+\subsection{部分可观测的非线性交互}
+考虑机器人通过动作改变环境状态与可见性的交互任务。
+以 $s_t$ 为物理隐状态，$c_t$ 为离散交互模式，
+$u_t$ 为一个或多个执行器的联合动作，
+$o_t=(I_t^{1:V},q_t)$ 为 $V\ge1$ 个视角及本体观测，可写为
+\begin{align}
+ s_{t+1}&=f_{c_t}(s_t,u_t,\xi_t),\nonumber\\
+ c_{t+1}&=\chi(s_t,c_t,u_t,\xi_t),\\
+ I_t^v&=h_v(s_t,\nu_t),\quad v=1,\ldots,V.\nonumber
+\end{align}
+不预设已知动力学、固定接触模式或可直接观测的完整状态。
+遮挡使任务相关信息的可见性随交互改变，连续形变与模式切换使动力学可能非线性、
+非光滑。同一当前观察可能对应不同的隐藏运动状态。
+联合动作允许多个执行器通过共享环境耦合，而不将其限制为独立控制。
+
+策略依据因果信息
+$\mathcal H_t=(o_{0:t},u_{0:t-1})$ 及任务条件 $\ell$ 生成指令。
+此处不指定输入模态的编码方式、记忆架构、阶段头或动作块分工。
+交互模式 $c_t$ 与任务阶段也不相同：前者描述局部动力学，后者描述任务进展。
+多阶段任务可由多个条件及其时间关系表达，不要求预先固定阶段数。
+
+\subsection{抽象任务函数与视觉评价}
+令 $z_t$ 为理想的任务相关评价变量，
+$\ell$ 指定任务谓词、时间范围及可选的顺序约束。
+定义
+\begin{equation}
+ \Psi_\ell=\Phi_\ell(z_{0:T}),\qquad
+ J_\ell(\pi)=\E_\pi[\Phi_\ell(z_{0:T})],
+ \label{eq:visualtask}
+\end{equation}
+其中 $\Phi_\ell:\mathcal Z^{T+1}\to\{0,1\}$ 是任务完成函数。
+不同任务改变 $\Phi_\ell$ 的具体形式，而保持学习目标为提高 $J_\ell$。
+若任务只要求时限内某一时刻满足条件，则是上述定义的特例：
+\begin{equation}
+ \Phi_\ell(z_{0:T})
+ =\ind\{\exists t\le T:\ g_{\ell,j}(z_t)\ge0,\ \forall j\}.
+ \label{eq:genericgoal}
+\end{equation}
+需要顺序或保持要求时，改用相应的时序组合；
+不把一种具体操作的过程顺序强加给所有任务。
+谓词组合与裕量评价可参考时序逻辑的信号解释\cite{fainekos2009}，
+但本方法不因此假设配备逻辑规划器。
+
+称任务为\emph{视觉可评估}，是指在声明的观测条件与评价域内，
+存在函数 $\mathcal V_\ell$，使理想视觉历史 $I^{\star,1:V}_{0:T}$ 足以区分完成事件：
+\begin{equation}
+ \Phi_\ell(z_{0:T})=\mathcal V_\ell(I_{0:T}^{\star,1:V}).
+ \label{eq:visassumption}
+\end{equation}
+式\eqref{eq:visassumption}是适用条件，不是所有物理任务的事实。
+若成功与失败的两个物理过程产生不可区分的视觉历史，
+则任何纯视觉评价器均不能保证辨别，必须增加观测或限制评价域。
+实际带噪观测与学习到的评价器只近似满足该关系：
+$\widehat z_{0:T}=\mathcal E(I_{0:T}^{1:V})$，
+$\widehat\Psi_\ell=\Phi_\ell(\widehat z_{0:T})$。
+观测不足时应允许评价未确定，而不是把缺失估计直接当作成功。
+
+评价变量不必是策略的充分控制状态。
+即使完成条件能从当前图像确定，选择怎样运动仍可能需要速度、接触或历史信息。
+因此，\emph{视觉可评价完成、单帧可判别完成、单帧足以决策}是三个不同命题。
+任务评价器也不必作为策略在线输入；它可以独立用于实验验证。
+
+\subsection{表示误差与任务判别可靠性}
+在共同可评估域上，设
+$\Phi_\ell(z)=\ind\{\rho_\ell(z)\ge0\}$，
+其中 $z$ 简记整段评价变量，
+任务裕量满足
+$|\rho_\ell(z)-\rho_\ell(\widehat z)|\le L_\rho\|z-\widehat z\|$。
+连续谓词裕量的有限次min/max组合是一个适用例子，
+但非连续谓词不自动满足该假设。
+对任意 $\gamma>0$，
+\begin{equation}
+ \Prob(\widehat\Psi_\ell\ne\Psi_\ell)
+ \le\Prob(|\rho_\ell(z)|\le\gamma)
+ +\frac{L_\rho^2\E\|z-\widehat z\|^2}{\gamma^2}.
+ \label{eq:visualmargin}
+\end{equation}
+若真实裕量超过 $\gamma$ 且误差小于 $\gamma/L_\rho$，
+符号不变；联合界与Markov不等式给出此式。
+它表明判别错误取决于任务相关表示误差与边界附近的样本质量，
+而不只是整体视觉重建或像素分类精度。
+这是评价可靠性界，不是策略完成概率改进定理：
+可靠辨认状态仍须配合适当的动作与执行反馈。
+实际任务的谓词、阈值及评价域仅在实验章节实例化。
