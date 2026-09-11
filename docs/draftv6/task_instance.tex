@@ -1,0 +1,36 @@
+\subsubsection{Bimanual Exposure and Execution}
+评价首先在参考视角定义完整目标区域足迹 $R^\star$，
+并令 $\Omega$ 为该参考视角的整幅图像域。
+令 $O_t^\star$ 为目标完整投影，$C_t$ 为遮挡布料投影。
+当目标完整可评估且 $|O_t^\star|>0$ 时，定义
+\begin{align}
+ p_{\rm in}(t)&=\ind\{O_t^\star\subseteq R^\star\},\\
+ a_C(t)&=|C_t\cap\Omega|/|\Omega|,\\
+ p_{\rm restore}(t)&=\ind\{a_C(t)\ge\theta_C\}.
+\end{align}
+$R^\star$ 不是当前可见region类别mask：
+互斥分割使object与可见region不重叠，直接求交会误判。
+固定目标区域可由无遮挡参考帧独立标注；相机或区域移动时须重新估计。
+仅有局部可见的目标mask也不能替代 $O_t^\star$ 来证明整个物体已进入区域。
+
+当前布料复原\emph{不会重新遮挡目标物体}，复原指标是布料在画面中的面积占比，
+不是目标被遮挡比例，也不是默认裁剪桌面ROI后的占比。
+按这一要求，任务在规定时限内满足下式即可完成：
+\begin{equation}
+ \Phi_\ell(z_{0:T})=
+ \ind\{\exists\,t\le T:
+ p_{\rm in}(t)=1\ \land\ p_{\rm restore}(t)=1\}.
+ \label{eq:completiontask}
+\end{equation}
+两项必须在同一完成时刻成立：不能仅凭初始布料面积较大，
+也不能凭曾经入区但随后又移出的记录判成功。
+若协议另要求连续 $d_C$ 帧确认，则在同一窗口内检验这两个谓词，
+并要求窗口终点不超过 $T$；未指定持续时间时不默认添加这一要求。
+\draftnote{待补：统一时限 $T$、布料画面覆盖阈值 $\theta_C$ 与持续确认窗口 $d_C$，不沿用未经核实的历史阈值。}
+
+若最终物体与目标区域均可清晰评价，式\eqref{eq:completiontask}的两个谓词
+可以由同一参考帧判定，不必依赖假设的最终目标遮挡。
+执行中被机械臂临时遮挡仍可能导致评价证据不足，但不能把这种局部情况
+混同于任务要求布料最后重新遮住物体。
+暴露、分离、推动和复原是有助于解释行为的过程事件；
+并非所有任务都必须采用同一组过程标签，更不要求在问题定义中指定阶段头。

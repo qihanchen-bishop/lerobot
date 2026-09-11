@@ -1,0 +1,49 @@
+\documentclass[journal,10pt]{IEEEtran}
+\usepackage{amsmath,amssymb,bm,mathtools,booktabs,array}
+\usepackage{xeCJK}
+\setmainfont{NimbusRoman}[
+ Path=/usr/share/fonts/opentype/urw-base35/,
+ Extension=.otf,UprightFont=*-Regular,BoldFont=*-Bold,
+ ItalicFont=*-Italic,BoldItalicFont=*-BoldItalic,SmallCapsFont=*-Regular]
+\setCJKmainfont[AutoFakeBold=true,AutoFakeSlant=true,SmallCapsFont={Droid Sans Fallback}]{Droid Sans Fallback}
+\setCJKsansfont{Droid Sans Fallback}
+\setCJKmonofont{Droid Sans Fallback}
+\usepackage{xeCJKfntef}
+\usepackage{algorithmic}
+\usepackage{cite}
+\usepackage[hidelinks]{hyperref}
+\newcommand{\draftnote}[1]{\par\smallskip{\small（\CJKunderline{#1}）}\par\smallskip}
+\newcommand{\E}{\mathbb E}
+\newcommand{\Prob}{\mathbb P}
+\newcommand{\R}{\mathbb R}
+\newcommand{\norm}[1]{\lVert#1\rVert}
+\newcommand{\inner}[2]{\langle#1,#2\rangle}
+\newcommand{\ind}{\mathbf 1}
+\DeclareMathOperator{\clip}{clip}
+\newtheorem{proposition}{命题}
+\renewcommand{\IEEEproofname}{证明}
+\renewcommand{\refname}{参考文献}
+\title{Semantic-Guided Imitation Learning with History-Conditioned Feedback}
+\author{}
+\begin{document}
+\maketitle
+\begin{abstract}
+视觉模仿学习在动态交互中既需要提取任务相关信息，也需要响应执行期间的新变化。
+本文研究语义监督、几何查询表示和历史条件反馈改善任务表现的条件。
+首先，在共同任务完成目标下分析模仿误差、分布覆盖与任务敏感性的关系；
+随后讨论确定性语义作为归纳偏置的作用，以及历史残差降低动作风险所需的信息和拟合条件。
+基于这些分析，构建语义增强动作块策略与历史条件残差反馈框架。
+\draftnote{待补：最终实验平台、任务范围、对照结果及定量结论；摘要在完整评测后定稿。}
+\end{abstract}
+\begin{IEEEkeywords}
+Imitation learning, semantic representations, visuomotor control, residual feedback.
+\end{IEEEkeywords}
+\input{introduction}
+\input{related_work}
+\input{analysis}
+\input{method}
+\input{experiments}
+\input{discussion}
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+\end{document}

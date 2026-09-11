@@ -1,0 +1,26 @@
+\section{Experimental Validation}
+\label{sec:experiments}
+\subsection{Platforms, Tasks, and Evaluation Protocol}
+\input{task_instance}
+\draftnote{待补：两个平台的硬件、控制频率、传感器、动作单位、任务实例、数据规模、独立训练种子和评估重复次数。}
+训练初始位置集合为
+\[
+\mathcal P_{\rm tr}=\{(0,0),(0,3),(1,1),(1,2),(2,0),(2,3)\},
+\]
+测试位置为 $\mathcal P_{\rm test}=\{0,1,2\}\times\{0,1,2,3\}$。
+三个物体在十二个位置形成每轮36个条件单元。
+应分别报告已采集位置与未采集初始位置上的结果；该设置不代表未见物体类别或任意动力学泛化。
+\draftnote{待补：各方法每个条件的有效试验次数、失败剔除规则、配对顺序和区间估计方法；独立人工或冻结评估器的审核协议。}
+各策略使用相同示范数据和基础策略训练轮次作为主要比较条件。
+额外语义标签、分割预训练以及残差训练的计算开销须单独披露，
+不将相同基础训练轮次解释为全部资源完全相同。
+\subsection{Overall Performance and Generalization}
+\draftnote{待补结果：各平台与任务的成功次数/总次数、置信区间、完成时间和失败类型；提供相同条件的配对比较，不使用未核验的近似百分比。}
+\subsection{Semantic Inputs and Task-Query Ablations}
+\draftnote{待补实验与结果：固定视角和训练预算，对照RGB、RGB加语义、等量无监督查询、有监督查询；报告几何误差、查询屏蔽后的动作变化及闭环成功率。}
+\subsection{History and Residual Feedback Ablations}
+\draftnote{待补实验与结果：同一冻结基础checkpoint下比较无残差、MLP、GRU；增加等容量对照、历史置乱或重置和延迟扫描，避免将基础策略差异归因于记忆。}
+\subsection{Validation of Analytical Conditions}
+\draftnote{待补实验与结果：统一尺度和槽位的动作MSE/MAE、关键事件分层、语义质量分层、残差对齐项及修正能量；说明离线分布与闭环分布差别。不能通过低训练loss宣称覆盖条件已被证明。}
+\subsection{Runtime and Failure Analysis}
+\draftnote{待补结果：端到端延迟分位数、过期丢弃率、修正覆盖率、推理资源、遮挡与拨空等失败案例；失败视频与分析须能追溯到原始记录。}
