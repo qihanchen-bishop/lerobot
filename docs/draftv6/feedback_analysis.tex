@@ -60,16 +60,16 @@ Encoding a finite action--response history may discard decision-relevant informa
 % 新信息的潜在价值不等于候选修正的实际收益；沿用C的分解，还须扣除反馈表示的信息损失与决策实现误差。
 The potential value of new information is not yet the benefit of a candidate correction.
 Applying the decomposition in~\eqref{eq:taskrepresentationdecomposition} to the feedback representation also accounts for information loss and decision-realization error.
-% 实际反馈表示 $Z_t^{\mathrm{fb}}$ 编码基础计划、缓存查询、RGB、因果历史及候选选择所需运行记录，
-The implemented feedback representation $Z_t^{\mathrm{fb}}$ encodes the base plan, cached queries, RGB inputs, causal history, and runtime records required for candidate selection,
+% 反馈表示是确定目标槽位候选指令所需计划信息、观测、执行历史和运行记录的因果表示。
+Let $Z_t^{\mathrm{fb}}$ be a causal representation of the planning information, observations, execution history, and runtime records needed to determine the target-slot candidate command,
 % 生成信息 $\mathcal U=\sigma(Z_t^{\mathrm{fb}})\subseteq\mathcal F_h$。
 generating $\mathcal U=\sigma(Z_t^{\mathrm{fb}})\subseteq\mathcal F_h$.
-% 在基础计划有效时，基础查询对应计划观测时刻 $\tau_p$，并在计划内保持不变；
-When the base plan is valid, its queries correspond to the planning observation time $\tau_p$ and remain unchanged within the plan.
-% 候选修正使用最新观测时刻 $\tau_o$ 的图像，作用于槽位 $t$，其中 $\tau_p\le\tau_o\le t$。
-Candidate corrections use images from the latest observation time $\tau_o$ and target slot $t$, where $\tau_p\le\tau_o\le t$.
-% 编码过程中的信息丢失与观测延迟共同限制该表示所保留的信息。
-Information loss during encoding and observation delay jointly limit the information retained by this representation.
+% 沿用C的完整读出前表示约定，候选选择及后处理由该表示可测地决定。
+As in Section~\ref{sec:representationanalysis}, this is the complete pre-readout representation: candidate selection and postprocessing are measurable functions of it.
+% tau_p为有效计划所用观测时刻，tau_o为候选所用最新观测时刻，t为目标执行时刻。
+For a valid plan, let $\tau_p$ be the time of the observation used by that plan, $\tau_o$ the latest observation time used by the candidate, and $t$ the target execution time, with $\tau_p\le\tau_o\le t$.
+% 编码与观测延迟可能限制保留的决策信息。
+Encoding and observation delay may limit the decision-relevant information retained.
 
 % 由该表示生成候选指令 $\widehat u=B+r\in\mathcal A$，
 The representation produces a candidate command $\widehat u=B+r\in\mathcal A$,
@@ -124,9 +124,8 @@ Because the compared outcomes are failure probabilities, $g_t(x)\in[-1,1]$.
 The effective benefit is $\Gamma_{\mathrm{exec},\mu}=\E_\mu[\Lambda g_t(x)]$;
 it depends on which corrections are adopted in time, not merely the overall adoption rate.
 
-% 参照保留相同计算与接收流程，以符合共同过程条件；直接关闭反馈计算可能改变基础计划时序，是不同的系统级比较。
-The output-masked reference retains the same computation and reception process, as required by Assumption~\ref{ass:commonprocess}.
-Skipping feedback computation can change base-plan timing under the shared-worker schedule and therefore defines a different system-level comparison.
+% 参照与修正控制器在共同过程假设下共享计算状态转移律（含接收过程），仅执行修正不同；不要求不同闭环轨迹有相同实际完成时刻。
+The reference and corrected controllers share the same computation-state transition law under Assumption~\ref{ass:commonprocess}, including the reception process, and differ only in the executed correction.
 
 % \begin{proposition}[有效反馈与任务完成]
 \begin{proposition}[Effective feedback and task completion]
@@ -152,8 +151,8 @@ Furthermore, if $Z_t^{\mathrm{fb}}$ admits readouts of an estimate $\widehat G_t
 and these quantities satisfy Assumption~\ref{ass:taskrelations} under $\bar\mu_\pi$, the relation bound in Section~\ref{sec:representationanalysis} applies.
 % 此处 $\delta_G=\E_{\bar\mu_\pi}\norm{G_t-\widehat G_t}$ 及其余关系常数均针对反馈表示与执行时刻；
 Here, $\delta_G=\E_{\bar\mu_\pi}\norm{G_t-\widehat G_t}$ and all other relation constants concern the feedback representation and execution time.
-% 计划时刻 $\tau_p$ 的查询精度不能替代它们（附录~\ref{app:feedbackrelationtime}）。
-Query accuracy at the planning time $\tau_p$ cannot replace these quantities (Appendix~\ref{app:feedbackrelationtime}).
+% 计划时刻的关系估计精度不能替代目标执行时刻的关系估计精度。
+Relation-estimation accuracy at the planning time $\tau_p$ cannot substitute for accuracy at the target execution time $t$ (Appendix~\ref{app:feedbackrelationtime}).
 % 以 $p_{\mathrm{miss}}=\Prob_{\bar\mu_\pi}(\Lambda=0)$ 表示未采用概率，结合时效界得到
 Let $p_{\mathrm{miss}}=\Prob_{\bar\mu_\pi}(\Lambda=0)$ denote the probability of nonadoption. Combining this with the timing bound gives
 \begin{equation}
@@ -177,5 +176,7 @@ If the relation conditions hold only on a valid subdomain, such as visible cases
 % 总体收益还须计入无效子域的贡献，不能直接由式\eqref{eq:endtoendtaskbound}获得保证。
 The overall benefit must also account for the invalid subdomain and cannot be guaranteed directly by~\eqref{eq:endtoendtaskbound}.
 
-% 动作与几何监督本身不确保该充分条件成立；回放迁移与动作诊断见附录。
-Action and geometric supervision alone do not establish this sufficient condition; replay-transfer bounds and action diagnostics are provided in Appendix~\ref{app:feedbackproofs}.
+% 该分析性充分条件不能仅凭模仿与辅助训练损失认证。
+This analytical sufficient condition cannot be certified from imitation and auxiliary training losses alone.
+% 未采用惩罚是保守的：被拒绝的候选未必有益；在r=0约定下，无候选槽位相对于当前候选的局部采用损失为零，仍可计入未采用惩罚。
+The nonadoption penalty is conservative: rejected corrections need not be beneficial, and under the $r=0$ convention a slot with no candidate has zero local adoption loss relative to its defined candidate, yet may still contribute to $p_{\mathrm{miss}}$.
