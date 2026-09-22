@@ -1,86 +1,151 @@
-\subsection{Task and Learning Problem Formulation}
+% 核心观点：研究有限固定示范下的离线视觉动作模仿学习，以视觉可评估的任务完成为部署目标。
+% 叙述逻辑：系统与观测 -> 固定示范和因果策略 -> 区分训练代理与任务目标 -> 视觉可评估性假设。
+% 边界：终局评估可辨识性不推出中间决策充分性；保留已确认英文正文及对应中文注释。
+% \subsection{视觉动作模仿学习}
+\subsection{Visuomotor Imitation Learning}
 \label{sec:task}
-\subsubsection{部分可观测的非线性交互}
-考虑机器人通过动作改变环境状态与可见性的交互任务。
-以 $s_t$ 为物理隐状态，$c_t$ 为离散交互模式，
-$u_t$ 为一个或多个执行器的联合动作，
-$o_t=(I_t^{1:V},q_t)$ 为 $V\ge1$ 个视角及本体观测，可写为
+
+% 我们研究有限、固定机器人示范下的离线视觉动作模仿学习，面向任务完成状态能够通过视觉历史评估的操作任务。
+% 策略基于视觉、本体观测及可用的因果执行历史生成控制指令，部署期间不更新参数或查询专家。
+% 训练以示范动作监督为基础，部署表现以有限时域内的任务完成概率衡量。
+We study offline visuomotor imitation learning from a finite, fixed set of robot demonstrations,
+for manipulation tasks whose completion can be assessed from visual history.
+The policy generates control commands from visual and proprioceptive observations and available causal execution history,
+without parameter updates or expert queries during deployment.
+Training is based on demonstrated actions, whereas deployment performance is measured by the probability of task completion over a finite horizon.
+
+% \subsubsection{系统与观测}
+\subsubsection{System and Observations}
+% 考虑由一个决策策略统一控制的机器人系统，通过各执行器的联合动作完成给定的操作任务。
+% 系统与环境的联合状态 $s_t\in\mathcal S$ 在控制接口接收的指令 $u_t\in\mathcal A$ 的作用下演化，
+% 并产生观测 $o_t$。在包含 $T$ 个控制步的有限时域内，该交互表示为如下部分可观测受控过程：
+Consider a robotic system governed by a single decision policy that performs a given manipulation task
+through the joint actions of its actuators.
+The joint robot--environment state $s_t\in\mathcal S$ evolves under the command
+$u_t\in\mathcal A$ and gives rise to observation $o_t$.
+% 系统观测 $o_t=(I_t^{1:V},q_t)$ 由多视角图像 $I_t^{1:V}=(I_t^1,\ldots,I_t^V)$ 与本体信息 $q_t$ 组成，
+% 其中 $V\ge1$ 为相机数量，$I_t^v$ 为第 $v$ 个视角的图像。
+The observation $o_t=(I_t^{1:V},q_t)$ comprises multi-view images
+$I_t^{1:V}=(I_t^1,\ldots,I_t^V)$ and proprioceptive information $q_t$,
+where $V\ge1$ is the number of cameras and $I_t^v$ is the image from the $v$th view.
+Over a finite horizon of $T$ control steps, this interaction is represented by the following partially observed controlled process:
 \begin{align}
- s_{t+1}&=f_{c_t}(s_t,u_t,\xi_t),\nonumber\\
- c_{t+1}&=\chi(s_t,c_t,u_t,\xi_t),\\
- I_t^v&=h_v(s_t,\nu_t),\quad v=1,\ldots,V.\nonumber
+ s_0&\sim p_0,\nonumber\\
+ s_{t+1}&\sim P(\cdot\mid s_t,u_t),\quad 0\le t<T,\nonumber\\
+ o_t&\sim O(\cdot\mid s_t),\quad 0\le t\le T.
+ \label{eq:interactionmodel}
 \end{align}
-不预设已知动力学、固定接触模式或可直接观测的完整状态。
-遮挡使任务相关信息的可见性随交互改变，连续形变与模式切换使动力学可能非线性、
-非光滑。同一当前观察可能对应不同的隐藏运动状态。
-联合动作允许多个执行器通过共享环境耦合，而不将其限制为独立控制。
+% 其中，$\mathcal S$ 为状态空间，$\mathcal A\subseteq\R^{d_u}$ 为所选机器人控制接口规定的可行指令集合，
+% $d_u$ 为指令维数，$p_0$ 为初始状态分布，$P$ 与 $O$ 分别为状态转移概率核和观测概率核。
+Here, $\mathcal S$ is the state space, $\mathcal A\subseteq\R^{d_u}$ is the admissible command set
+specified by the chosen robot control interface,
+$d_u$ is the command dimension, $p_0$ is the initial-state distribution,
+and $P$ and $O$ are the transition and observation kernels, respectively.
 
-策略依据因果信息
-$\mathcal H_t=(o_{0:t},u_{0:t-1})$ 及任务条件 $\ell$ 生成指令。
-此处不指定输入模态的编码方式、记忆架构、阶段头或动作块分工。
-交互模式 $c_t$ 与任务阶段也不相同：前者描述局部动力学，后者描述任务进展。
-多阶段任务可由多个条件及其时间关系表达，不要求预先固定阶段数。
-
-\subsubsection{抽象任务函数与视觉评价}
-令 $z_t$ 为理想的任务相关评价变量，
-$\ell$ 指定任务谓词、时间范围及可选的顺序约束。
-定义
+% \subsubsection{离线示范与策略}
+\subsubsection{Offline Demonstrations and Policy}
+% 策略从同一操作任务的固定示范集 $\mathcal D=\{\zeta_i\}_{i=1}^{N}$ 中学习，
+% 第 $i$ 条示范轨迹 $\zeta_i$ 记录观测与示范控制指令：
+The policy learns from a fixed demonstration set $\mathcal D=\{\zeta_i\}_{i=1}^{N}$
+for the same manipulation task. The $i$th demonstration trajectory $\zeta_i$ records
+observations and demonstrated control commands:
 \begin{equation}
- \Psi_\ell=\Phi_\ell(z_{0:T}),\qquad
- J_\ell(\pi)=\E_\pi[\Phi_\ell(z_{0:T})],
+ \zeta_i=(o_0^i,u_0^{\mathrm E,i},o_1^i,\ldots,
+ u_{T_i-1}^{\mathrm E,i},o_{T_i}^i).
+ \label{eq:demonstrations}
+\end{equation}
+% 其中，$N$ 为有限的示范条数，$T_i\ge1$ 为第 $i$ 条轨迹的控制步数，上标 $\mathrm E$ 标识示范指令。
+Here, $N$ is the finite number of demonstrations, $T_i\ge1$ is the number of control steps
+in the $i$th trajectory, and the superscript $\mathrm E$ denotes demonstrated commands.
+
+% 部署策略的信息由因果历史 $\mathcal H_t=(o_{0:t},u_{0:t-1},\mathcal R_{0:t})$ 表示，
+% 其中 $\mathcal R_t$ 记录截至当前决策已获得的时间戳、计划及推理接收状态；无此记录时取空。
+% 生成定义在动作集合 $\mathcal A$ 上的联合指令分布，并据此执行 $u_t\sim\pi_\theta(\cdot\mid\mathcal H_t)$。
+% 其中，$\theta$ 为策略的学习参数，$t=0$ 时指令历史为空。
+% 策略可采用单步动作预测、动作块预测或基础动作加残差的形式。
+The information available to the deployed policy $\pi_\theta$ is represented by the causal history
+$\mathcal H_t=(o_{0:t},u_{0:t-1},\mathcal R_{0:t})$,
+where $\mathcal R_t$ records timestamps, plans, and inference-reception status available before the current decision; it is empty when no such records are used.
+The policy produces a joint command distribution over the action set $\mathcal A$,
+from which the executed command is drawn as $u_t\sim\pi_\theta(\cdot\mid\mathcal H_t)$.
+Here, $\theta$ denotes the learned policy parameters;
+the command history is empty at $t=0$.
+The policy may use single-step action prediction, action-chunk prediction, or base actions augmented by learned residuals.
+
+% \subsubsection{学习与任务目标}
+\subsubsection{Learning and Task Objectives}
+% 策略通过示范动作监督进行学习，动作监督目标按实际采样协议加权：
+The policy learns from demonstrated actions, with the action-supervision objective expressed
+as an empirical imitation risk weighted by the sampling protocol:
+\begin{equation}
+ \widehat R_{\mathrm{IL}}(\theta)
+ =\sum_{i=1}^{N}\sum_{t=0}^{T_i-1}w_{it}
+   \mathcal L_{\mathrm{IL}}\!\left(
+   \pi_\theta;\mathcal H_t^i,\zeta_i\right).
+ \label{eq:empiricalilrisk}
+\end{equation}
+% 其中，$\mathcal H_t^i$ 为示范 $\zeta_i$ 在时刻 $t$ 的记录历史，
+% $\mathcal L_{\mathrm{IL}}$ 为衡量策略在该历史下的动作预测与对应示范动作差异的非负损失，
+% $\zeta_i$ 提供相应的监督目标，包括动作块所需的未来动作序列。
+Here, $\mathcal H_t^i$ is the recorded history at time $t$ in demonstration $\zeta_i$,
+and $\mathcal L_{\mathrm{IL}}$ is a nonnegative loss measuring the discrepancy between
+the policy's action predictions at that history and the corresponding demonstrated actions.
+The trajectory $\zeta_i$ supplies the supervision targets, including future action sequences for action-chunk prediction.
+% 其中 $w_{it}\ge0$ 为固定采样权重，总和为1；无效训练索引取零。
+% 当前基础训练按可用帧索引采样，残差训练按构建后的缓存样本采样，不假定轨迹等权。
+The fixed weights satisfy $w_{it}\ge0$ and $\sum_{i,t}w_{it}=1$, with zero weight on excluded indices.
+The current base training samples available frame indices, whereas residual training samples constructed cache records; neither convention implies equal trajectory weighting.
+% 具体动作预测形式、监督时间对齐、损失计算及辅助训练目标在方法部分给出。
+The specific action-prediction forms, temporal alignment of supervision, loss computations,
+and auxiliary training objectives are specified in the method section.
+
+% 部署目标是在有限时域内完成任务。可测的任务完成函数 $\Phi:\mathcal S^{T+1}\to\{0,1\}$
+% 对满足任务规定的终态或时序要求的状态轨迹取 $1$，否则取 $0$。
+% 据此定义完成指示变量 $\Psi$ 与部署策略 $\pi$ 的任务完成概率 $J(\pi)$：
+The deployment objective is to complete the task within the finite horizon.
+The measurable task-completion function $\Phi:\mathcal S^{T+1}\to\{0,1\}$ equals $1$
+for state trajectories satisfying the task's terminal or temporal requirements and $0$ otherwise.
+This defines the completion indicator $\Psi$ and the task-completion probability $J(\pi)$ of the deployed policy $\pi$:
+\begin{equation}
+ \Psi=\Phi(s_{0:T}),\qquad
+ J(\pi)=\Prob_\pi(\Psi=1).
  \label{eq:visualtask}
 \end{equation}
-其中 $\Phi_\ell:\mathcal Z^{T+1}\to\{0,1\}$ 是任务完成函数。
-不同任务改变 $\Phi_\ell$ 的具体形式，而保持学习目标为提高 $J_\ell$。
-若任务只要求时限内某一时刻满足条件，则是上述定义的特例：
-\begin{equation}
- \Phi_\ell(z_{0:T})
- =\ind\{\exists t\le T:\ g_{\ell,j}(z_t)\ge0,\ \forall j\}.
- \label{eq:genericgoal}
-\end{equation}
-需要顺序或保持要求时，改用相应的时序组合；
-不把一种具体操作的过程顺序强加给所有任务。
-谓词组合与裕量评价可参考时序逻辑的信号解释\cite{fainekos2009}，
-但本方法不因此假设配备逻辑规划器。
+% 其中，$\Prob_\pi$ 为系统模型与完整部署策略 $\pi$ 共同诱导的轨迹概率律。
+% 示范监督用于学习策略，任务完成概率 $J(\pi)$ 用于评价其部署表现。
+Here, $\Prob_\pi$ is the trajectory probability law induced jointly by the system model
+and the complete deployed policy $\pi$.
+Demonstration supervision trains the policy, whereas the task-completion probability
+$J(\pi)$ evaluates its deployment performance.
 
-称任务为\emph{视觉可评估}，是指在声明的观测条件与评价域内，
-存在函数 $\mathcal V_\ell$，使理想视觉历史 $I^{\star,1:V}_{0:T}$ 足以区分完成事件：
+% \subsubsection{视觉可评估性}
+\subsubsection{Visual Assessability}
+% 在固定相机配置与评价时域 $T$ 下，评价域
+% $\Omega_{\mathrm{eval}}\subseteq\mathcal S^{T+1}\times\mathcal I^{T+1}$
+% 由预先指定的、符合系统模型及可见性条件的物理轨迹与视觉历史对组成，
+% 其中，$\mathcal I$ 为多视角图像元组 $I_t^{1:V}$ 的取值空间。
+Under a fixed camera configuration and evaluation horizon $T$, the evaluation domain
+$\Omega_{\mathrm{eval}}\subseteq\mathcal S^{T+1}\times\mathcal I^{T+1}$
+consists of prespecified pairs of physical trajectories and visual histories
+consistent with the system model and visibility conditions,
+where $\mathcal I$ is the space of multi-view image tuples $I_t^{1:V}$.
+
+% \begin{assumption}[视觉可评估性]
+\begin{assumption}[Visual assessability]
+\label{ass:visualassessability}
+% 存在可测的视觉判别函数 $\mathcal V:\mathcal I^{T+1}\to\{0,1\}$，
+% 使任意 $(s_{0:T},I_{0:T}^{1:V})\in\Omega_{\mathrm{eval}}$ 均满足
+There exists a measurable visual decision function $\mathcal V:\mathcal I^{T+1}\to\{0,1\}$
+such that, for every $(s_{0:T},I_{0:T}^{1:V})\in\Omega_{\mathrm{eval}}$,
 \begin{equation}
- \Phi_\ell(z_{0:T})=\mathcal V_\ell(I_{0:T}^{\star,1:V}).
+ \Phi(s_{0:T})=\mathcal V(I_{0:T}^{1:V}).
  \label{eq:visassumption}
 \end{equation}
-式\eqref{eq:visassumption}是适用条件，不是所有物理任务的事实。
-若成功与失败的两个物理过程产生不可区分的视觉历史，
-则任何纯视觉评价器均不能保证辨别，必须增加观测或限制评价域。
-实际带噪观测与学习到的评价器只近似满足该关系：
-$\widehat z_{0:T}=\mathcal E(I_{0:T}^{1:V})$，
-$\widehat\Psi_\ell=\Phi_\ell(\widehat z_{0:T})$。
-观测不足时应允许评价未确定，而不是把缺失估计直接当作成功。
+\end{assumption}
 
-评价变量不必是策略的充分控制状态。
-即使完成条件能从当前图像确定，选择怎样运动仍可能需要速度、接触或历史信息。
-因此，\emph{视觉可评价完成、单帧可判别完成、单帧足以决策}是三个不同命题。
-任务评价器也不必作为策略在线输入；它可以独立用于实验验证。
-
-\subsubsection{表示误差与任务判别可靠性}
-在共同可评估域上，设
-$\Phi_\ell(z)=\ind\{\rho_\ell(z)\ge0\}$，
-其中 $z$ 简记整段评价变量，
-任务裕量满足
-$|\rho_\ell(z)-\rho_\ell(\widehat z)|\le L_\rho\|z-\widehat z\|$。
-连续谓词裕量的有限次min/max组合是一个适用例子，
-但非连续谓词不自动满足该假设。
-对任意 $\gamma>0$，
-\begin{equation}
- \Prob(\widehat\Psi_\ell\ne\Psi_\ell)
- \le\Prob(|\rho_\ell(z)|\le\gamma)
- +\frac{L_\rho^2\E\|z-\widehat z\|^2}{\gamma^2}.
- \label{eq:visualmargin}
-\end{equation}
-若真实裕量超过 $\gamma$ 且误差小于 $\gamma/L_\rho$，
-符号不变；联合界与Markov不等式给出此式。
-它表明判别错误取决于任务相关表示误差与边界附近的样本质量，
-而不只是整体视觉重建或像素分类精度。
-这是评价可靠性界，不是策略完成概率改进定理：
-可靠辨认状态仍须配合适当的动作与执行反馈。
-实际任务的谓词、阈值及评价域仅在实验章节实例化。
+% 假设~\ref{ass:visualassessability}仅限定评价域内完成事件的视觉可辨识性，
+% 不要求完整状态可观测，也不意味着中间历史足以确定适当动作。
+% 实际评价器误差的检验及域外轨迹的处理由实验协议另行规定。
+Assumption~\ref{ass:visualassessability} only specifies visual identifiability of completion within the evaluation domain;
+it neither requires full-state observability nor implies that intermediate histories suffice to determine appropriate actions.
+The experimental protocol separately specifies assessment of practical evaluator errors and treatment of trajectories outside the domain.

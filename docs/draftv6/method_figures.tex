@@ -1,0 +1,59 @@
+% 原生矢量机制示意，不是实测架构性能图；坐标不代表实测延迟。
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm,>=Latex,font=\small,
+ block/.style={draw,align=center,minimum height=.65cm,text width=2.8cm},
+ flow/.style={->,line width=.5pt}]
+\node[block] (rgb) at (1.5,3.2) {多视角RGB与本体};
+\node[block] (seg) at (1.5,2.0) {冻结分割器\\软语义图};
+\node[block] (enc) at (5.2,3.2) {联合编码器\\RGB + 语义 + 查询};
+\node[block] (query) at (9,3.2) {任务关系q-token\\计划时刻$\tau_p$};
+\node[block] (act) at (12.8,3.2) {动作解码器\\基础动作块};
+\node[block,dashed] (aux) at (9,4.5) {关系辅助头与伪标签\\仅训练监督};
+\node[block] (history) at (5.2,.4) {最新RGB、本体\\因果执行历史};
+\node[block] (gru) at (9,.4) {有限窗口GRU\\槽位残差预测};
+\node[block] (exec) at (12.8,.4) {计划/时效校验\\执行$B_t+\Lambda_t r_t$};
+\draw[flow] (rgb)--(enc);
+\draw[flow] (rgb.south)--node[right]{RGB}(seg.north);
+\draw[flow] (seg.east)-|(enc.south);
+\draw[flow] (enc)--(query);
+\draw[flow] (enc.north)--(5.2,5.5)--node[above]{完整编码上下文}(12.8,5.5)--(act.north);
+\draw[flow,dashed] (query)--(aux);
+\draw[flow] (query)--node[right]{缓存查询}(gru);
+\draw[flow] (history)--(gru);
+\draw[flow] (gru)--(exec);
+\draw[flow] (act)--node[right]{基础计划与槽位}(exec);
+\draw[flow] (act.south west)--(gru.north east);
+\node[align=center,text width=3cm] at (1.5,.4) {分阶段训练：\\分割器 $\to$ 基础策略\\$\to$ 残差分支};
+\end{tikzpicture}
+\caption{方法机制示意。保留RGB并加入软语义与关系监督；训练残差时冻结分割器及基础策略。
+虚线分支是关系辅助监督，不在部署时计算关系控制律。历史记录包含形成时的计划上下文；
+反馈使用缓存查询与最新证据预测未来槽位的动作修正。基础和反馈推理共享线程，并非图中两条路径独立并发。}
+\label{fig:architecture}
+\end{figure*}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm,>=Latex,font=\scriptsize]
+\draw[->] (0,2.0)--(8,2.0) node[below left]{时间};
+\node[above] at (1.7,2) {$\tau_p$};
+\node[above] at (3.8,2) {$\tau_o$};
+\node[above] at (5.8,2) {$t$};
+\draw (1.7,1.9)--(1.7,2.1);
+\draw (3.8,1.9)--(3.8,2.1);
+\draw (5.8,1.9)--(5.8,2.1);
+\node[anchor=west] at (0,1.4) {推理线程};
+\draw (1.7,1.05) rectangle (3.7,1.7);
+\node at (2.7,1.38) {基础更新（优先）};
+\draw (3.8,1.05) rectangle (5.3,1.7);
+\node at (4.55,1.38) {反馈推理};
+\node[anchor=west] at (0,.35) {控制循环};
+\draw[->] (1.7,.35)--(7.8,.35);
+\node[above] at (3.5,.35) {持续执行缓存计划};
+\draw[->] (5.3,1.05)--(5.8,.35);
+\node[align=left,anchor=west] at (5.9,.95) {槽位有效\!：采用\\迟到/过期：丢弃};
+\end{tikzpicture}
+\caption{共享线程的时序示意，非实测延迟。$\tau_p$为缓存计划的观测时刻，$\tau_o$为反馈所用观测时刻，$t$为目标槽位。
+基础任务占用期间反馈等待；接收时重新核对计划编号和槽位。同计划重叠候选最后合格者覆盖旧值，不累加。}
+\label{fig:scheduling}
+\end{figure}

@@ -1,7 +1,16 @@
+% 核心观点：有限示范下的改进须连接任务信息、实际决策与闭环后果，而非停留在动作误差。
+% 叙述逻辑：A定义学习与任务目标；B建立动作误差与任务后果的条件性联系；
+% C分析RGB+语义和任务关系监督保留决策信息的条件；
+% D依次分析历史证据的潜在价值、残差实现、及时采用与闭环任务收益。
+% 下面comment环境保留早期讨论备忘；当前论证以四个输入文件正文及相应证明为准。
 \section{Problem Formulation and Theoretical Analysis}
 \label{sec:analysis}
 \begin{comment}
 visuomotor imitation learning
+
+
+
+
 任务定义是这样定义，但是要强调我们的成立前提是这个任务的结果是可以被视觉评估
 
 有限机器人示范下的离线视觉运动模仿学习，面向完成条件可通过视觉历史评估的操作任务。
@@ -21,6 +30,7 @@ visuomotor imitation learning
 
 在一切开始之前，先想清楚，要研究的问题是什么。
 我觉得需要限定进来，因为我们研究的并不是一般的模仿学习
+我的想法就是模仿学习的训练，是基于与模仿动作的动作误差来优化的，但是这种误差其实并不能保证在实际中的表现
 
 1 DAgger的想法是出现错误机器人进一步执行，会改变整个过程，所以需要处理机器人没遇到的状态迭代，进行在线学习对吧
 2 Tu 等人的论文等人的想法是上面的进一步分析，有些影响会逐渐变大，有些影响是会衰减的，增量稳定性的概念，初始状态差异，输入扰动，对后续的轨迹的影响
@@ -45,16 +55,18 @@ visuomotor imitation learning
 
 \end{comment}
 
+% 本章先限定离线视觉动作学习的对象与任务评价条件，
+% 再分析动作拟合与实际任务表现之间的差距。
+% 后续以动作的任务后果为共同尺度，
+% 讨论任务关系与执行上下文应保留什么信息，以及历史条件反馈如何将其用于实际控制。
+% 本章研究有限示范下的任务表现改善，先建立动作误差与任务后果的条件性联系，再分析两条互补机制。
+% 本节研究有限示范下任务表现改善的条件。首先建立动作误差与任务失败概率的联系，并分析表示空间中的风险迁移；
+% 随后讨论任务关系的保留如何约束决策损失，以及历史信息如何通过及时执行的残差修正转化为闭环任务收益。
+This section studies conditions for improving task performance from limited demonstrations.
+We first relate action error to task-failure probability and analyze risk transfer through representations.
+We then examine how preserving task relations bounds decision loss and how historical information can yield closed-loop task benefits through timely residual corrections.
+
 \input{formulation}
 \input{action_analysis}
 \input{representation_analysis}
 \input{feedback_analysis}
-\subsection{Testable Implications}
-分析给出三个需要分别检验的环节，而非用单一成功率验证全部假设。
-首先，在统一动作尺度、执行槽位和独立轨迹上比较动作风险，
-并区分接触等关键事件附近与普通状态的误差，以检验平均误差的解释边界。
-其次，语义与查询的收益应同时体现为相关几何可读出、策略确实利用该表示以及闭环行为改善；
-仅降低辅助损失不足以完成这一论证。
-最后，历史反馈应在同一冻结基础策略上检验残差与误差的对齐、历史的增量贡献和延迟鲁棒性。
-上述实验可支持机制解释，但不能从有限样本证明全状态空间的覆盖或稳定性假设。
-\draftnote{待补：各命题对应的实验编号、预注册比较项及判定标准；未知的覆盖常数和敏感性常数不填入推测数值。}

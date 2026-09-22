@@ -1,0 +1,207 @@
+{
+  "checked": "2026-09-16",
+  "note": "20 canonical PDFs; 8 legacy root paths are relative symlinks. Existing source pages do not pin PDF revisions.",
+  "papers": [
+    {
+      "file": "01_imitation_theory/01_DAgger_Ross_AISTATS_2011.pdf",
+      "pages": 9,
+      "sha256": "17bdd6e049e64f09010b322f9e2d4fb5c744c33ff7ac99b4c4561e39bd9082a7",
+      "source_url": "https://proceedings.mlr.press/v15/ross11a.html",
+      "downloaded_this_turn": false,
+      "checked": "2026-09-16",
+      "extraction_warning": "Bad annotation destination (repeated); extraction succeeded.",
+      "source_type": "existing_source_page"
+    },
+    {
+      "file": "01_imitation_theory/02_Stability_Constrained_IL_Tu_L4DC_2022.pdf",
+      "pages": 12,
+      "sha256": "5c9f3c1dadd6bd0f7a6ed552bb47f07a3737f90c79ce9f636901e3fc9bfb1636",
+      "source_url": "https://proceedings.mlr.press/v168/tu22a.html",
+      "downloaded_this_turn": false,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "existing_source_page"
+    },
+    {
+      "file": "01_imitation_theory/03_TaSIL_Pfrommer_NeurIPS_2022.pdf",
+      "pages": 13,
+      "sha256": "108236067ac91f2515e7ba58cdb1a99d9416c2896ddad76f7d8394071bbfcbc0",
+      "source_url": "https://papers.neurips.cc/paper_files/paper/2022/hash/7f10c3d66c3b7863a9cda255dcac5bb7-Abstract-Conference.html",
+      "downloaded_this_turn": false,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "existing_source_page"
+    },
+    {
+      "file": "02_task_representations/04_DBC_Zhang_ICLR_2021.pdf",
+      "pages": 16,
+      "sha256": "8322d722f58393f703be8cbc7c24de360a028926db6843feb0e2adc3a392b952",
+      "source_url": "https://arxiv.org/abs/2006.10742v2",
+      "version_verified_from_pdf": "arXiv:2006.10742v2, 7 Apr 2021",
+      "downloaded_this_turn": false,
+      "checked": "2026-09-16",
+      "extraction_warning": "xref 756 reconstruction warning; extraction succeeded; PDF page 3 visually checked.",
+      "source_type": "existing_source_page"
+    },
+    {
+      "file": "02_task_representations/05_Causal_Confusion_deHaan_NeurIPS_2019.pdf",
+      "pages": 12,
+      "sha256": "2462ef0682f80a5d5f204113a6e838ec9322fcb4853c831f08cd6a07f4e2352b",
+      "source_url": "https://papers.neurips.cc/paper_files/paper/2019/hash/947018640bf36a2bb609d3557a285329-Abstract.html",
+      "downloaded_this_turn": false,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "existing_source_page"
+    },
+    {
+      "file": "03_history_information/06_AIS_Subramanian_JMLR_2022.pdf",
+      "pages": 83,
+      "sha256": "247d75b379d18f5355921a1ca2884551210927e7bfa6e9d6878e0ee24a8ec8f5",
+      "source_url": "https://www.jmlr.org/papers/v23/20-1165.html",
+      "downloaded_this_turn": false,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "existing_source_page"
+    },
+    {
+      "file": "05_formulation_writing/07_Hypothesis_Misspecification_Bobu_TRO_2020.pdf",
+      "pages": 21,
+      "sha256": "81ff8d5b8c8614ae8dc01dba3821a9589b10ecb284d3570eb0b16107a83cb269",
+      "source_url": "https://arxiv.org/abs/2002.00941v2",
+      "downloaded_this_turn": false,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "existing_source_page"
+    },
+    {
+      "file": "01_imitation_theory/08_TRPO_Schulman_ICML_2015.pdf",
+      "pages": 9,
+      "sha256": "8e959ae88caeb6d8bdcc92763bc3ff766edff826aa4eb5b96b58a4a56b56ce47",
+      "source_url": "https://proceedings.mlr.press/v37/schulman15.html",
+      "downloaded_this_turn": false,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "existing_source_page"
+    },
+    {
+      "file": "02_task_representations/09_Transporter_Zeng_CoRL_2020.pdf",
+      "pages": 22,
+      "sha256": "fc28aa1593d49611035fdaab33e522917cddfd2e3d4da5d369db4dff99178b66",
+      "source_url": "https://proceedings.mlr.press/v155/zeng21a/zeng21a.pdf",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "download_url"
+    },
+    {
+      "file": "02_task_representations/10_VIOLA_Zhu_CoRL_2022.pdf",
+      "pages": 12,
+      "sha256": "e4a88a9ab14513e04abdc3a07e700e61ffe9cee09e58d5c5ad3be16f9ac26cce",
+      "source_url": "https://proceedings.mlr.press/v205/zhu23a/zhu23a.pdf",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "download_url"
+    },
+    {
+      "file": "02_task_representations/11_TIA_Fu_ICML_2021.pdf",
+      "pages": 12,
+      "sha256": "47018070940e868ee3ebeb361c75be2ade41edf11955269297b4ccd1eaecba1d",
+      "source_url": "https://proceedings.mlr.press/v139/fu21b/fu21b.pdf",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": "Invalid Font Weight (repeated); extraction succeeded.",
+      "source_type": "download_url"
+    },
+    {
+      "file": "02_task_representations/12_XIRL_Zakka_CoRL_2021.pdf",
+      "pages": 10,
+      "sha256": "84cabe57dab647b773b9657e9b828c88e97c2f7fc349dcd9734bc1a1d9d728b8",
+      "source_url": "https://proceedings.mlr.press/v164/zakka22a/zakka22a.pdf",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "download_url"
+    },
+    {
+      "file": "03_history_information/13_Fighting_Copycat_Wen_NeurIPS_2020.pdf",
+      "pages": 12,
+      "sha256": "b838ac134eade769ab67df64d76fd60464b4fda227092b65a6cdf995052152f7",
+      "source_url": "https://proceedings.neurips.cc/paper_files/paper/2020/file/1b113258af3968aaf3969ca67e744ff8-Paper.pdf",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "download_url"
+    },
+    {
+      "file": "03_history_information/14_RAP_Chuang_ECCV_2022.pdf",
+      "pages": 18,
+      "sha256": "913fc87b3a55990c5057a46ed447ee1755931de4d58eb5b2f479554f2c22a38c",
+      "source_url": "https://www.ecva.net/papers/eccv_2022/papers_ECCV/papers/136990386.pdf",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "download_url"
+    },
+    {
+      "file": "04_chunk_feedback/15_ACT_Zhao_RSS_2023.pdf",
+      "pages": 19,
+      "sha256": "8ba87afc999609ed38bf254aa974607aa2a838a812c50fc6b44d0d74052d4fb8",
+      "source_url": "https://www.roboticsproceedings.org/rss19/p016.pdf",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "download_url"
+    },
+    {
+      "file": "04_chunk_feedback/16_RTC_Black_NeurIPS_2025.pdf",
+      "pages": 25,
+      "sha256": "05bdeba6335cd0adea5b7929f1a19ac44414f3cdb912d8dc6fd63ab628f99faf",
+      "source_url": "https://proceedings.neurips.cc/paper_files/paper/2025/file/300ccb2187dedd4edcc07f7e76d8e553-Paper-Conference.pdf",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "download_url"
+    },
+    {
+      "file": "04_chunk_feedback/17_A2C2_Sendai_arXiv_2025_v1.pdf",
+      "pages": 17,
+      "sha256": "9f6b485d08378a4c78d01efcbc80dd534c4f9db486aa4c52faf180acb9df95a9",
+      "source_url": "https://arxiv.org/pdf/2509.23224v1",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "download_url"
+    },
+    {
+      "file": "04_chunk_feedback/18_Residual_RL_Johannink_arXiv_2018_v2.pdf",
+      "pages": 8,
+      "sha256": "c6279120f9e0a799a9d7a943a5624a5738250e588f99c5fc8a9fac28e2039641",
+      "source_url": "https://arxiv.org/pdf/1812.03201v2",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "download_url"
+    },
+    {
+      "file": "01_imitation_theory/19_Value_Aggregation_Cheng_AISTATS_2018.pdf",
+      "pages": 9,
+      "sha256": "ebe0b419a3a46c629cd2fa955ae5de4bd5a5fe7f4b3ca5d391859b754b2c4454",
+      "source_url": "https://proceedings.mlr.press/v84/cheng18c/cheng18c.pdf",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "download_url"
+    },
+    {
+      "file": "01_imitation_theory/20_AggreVaTe_Ross_arXiv_2014_v1.pdf",
+      "pages": 14,
+      "sha256": "8039a4d7d59529069668f592c37c47eac058cdbad9dfdae5a28ad8f63ff91a65",
+      "source_url": "https://arxiv.org/pdf/1406.5979v1",
+      "downloaded_this_turn": true,
+      "checked": "2026-09-16",
+      "extraction_warning": null,
+      "source_type": "download_url"
+    }
+  ]
+}

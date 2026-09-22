@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "audit_date": "2026-09-17",
+  "status": "incomplete_evidence_not_a_training_split",
+  "scope": "Local Qtoken_FS and SF-v2-S6-D3-H9-C-FS/gru8 records only",
+  "all_stages_episode_disjointness": "unverified",
+  "canonical_episode_mapping": null,
+  "shared_episode_split": {
+    "status": "not_recovered",
+    "train_episode_ids": null,
+    "validation_episode_ids": null,
+    "test_episode_ids": null
+  },
+  "stages": {
+    "prompt_model": {
+      "status": "training_episode_list_not_verified",
+      "train_episode_ids": null,
+      "validation_episode_ids": null
+    },
+    "front_segmenter": {
+      "evidence": "mycode/tool/unet_front_v4_r1/train_manifest.json",
+      "recorded_dataset_root": "/data/qihan/sam2/segdata/final/bettersetup_v4",
+      "status": "truncated_sample_manifest",
+      "reported_train_samples": 15118,
+      "reported_validation_samples": 2819,
+      "listed_train_samples": 2000,
+      "listed_validation_samples": 2000,
+      "train_episode_ids": null,
+      "validation_episode_ids": null,
+      "limitation": "Video file indices are not canonical episode IDs; complete mappings and checkpoint identity are not verified."
+    },
+    "side_segmenter": {
+      "evidence": "mycode/tool/unet_side/train_manifest.json",
+      "recorded_dataset_root": "/data/qihan/sam2/segdata/final/bettersetup_v5",
+      "status": "truncated_sample_manifest",
+      "reported_train_samples": 15118,
+      "reported_validation_samples": 2819,
+      "listed_train_samples": 2000,
+      "listed_validation_samples": 2000,
+      "train_episode_ids": null,
+      "validation_episode_ids": null,
+      "limitation": "Video file indices are not canonical episode IDs; complete mappings and checkpoint identity are not verified."
+    },
+    "base_policy": {
+      "evidence": "outputs/train/Qtoken_FS/mask_act_run_config.json",
+      "recorded_dataset_root": "/home/qihan/data/lerobot/data/bettersetup_v5",
+      "experiment": "UNET-SEM-V5-FS-QTOKEN",
+      "training_steps": 100000,
+      "status": "run_config_without_episode_split",
+      "train_episode_ids": null,
+      "validation_episode_ids": null,
+      "code_evidence": "mycode/train_mask_act_policy.py:main dataset construction",
+      "limitation": "The entry point loads the supplied dataset root. Any upstream episode filtering remains unverified."
+    },
+    "residual_head": {
+      "evidence": "outputs/train/resual/SF-v2-S6-D3-H9-C-FS/gru8/config.json",
+      "recorded_dataset_root": "data/bettersetup_v5",
+      "recorded_cache": "outputs/cache/slow_fast_v2_s6_d3_h9_C",
+      "cache_id": "52d72e0fb0568add7a1bfd6bed194e1de24f92488525ede764d0c5311a01082b",
+      "status": "original_cache_split_not_found_locally",
+      "train_episode_ids": null,
+      "validation_episode_ids": null,
+      "seed": 1000,
+      "code_evidence": "mycode/train_slow_fast_residual.py:split_records",
+      "code_claim": "Residual-head-held-out episodes only; frozen base may have seen all episodes",
+      "stratification": "task; initial-grid metadata unavailable",
+      "validation_count_rule": "max(1, round(number_of_episodes_in_task_group * 0.2))",
+      "limitation": "Do not reconstruct historical episode IDs from the seed without the original records and cache split."
+    }
+  },
+  "required_evidence": [
+    "Full prompt and segmenter training/validation manifests",
+    "Mapping from segmentation video files and dataset versions to original collection episode IDs",
+    "Base-policy input dataset episode manifest and any upstream filtering record",
+    "Original residual-cache split.json and matching manifest.json",
+    "Frozen checkpoint hashes and their matching preprocessing/class definitions"
+  ],
+  "prospective_protocol": {
+    "status": "not_applied_retroactively",
+    "unit": "original collection episode",
+    "rule": "Create the canonical split before fitting any stage; preserve episode identity through all derived datasets.",
+    "calibration": "Fit quality thresholds and temperature only on designated development/calibration episodes.",
+    "testing": "Keep final audit and test episodes out of all fitting and model-selection stages."
+  }
+}

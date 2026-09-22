@@ -1,3 +1,5 @@
+% 全文主线：有限示范 -> 任务相关表示 -> 执行证据驱动反馈 -> 闭环任务完成检验。
+% 理论章节以任务后果统一B/C/D；当前方法仍为动作与几何监督，不含任务价值学习。
 \documentclass[journal,10pt]{IEEEtran}
 \usepackage{amsmath,amssymb,bm,mathtools,booktabs,array}
 \usepackage{xeCJK}
@@ -10,6 +12,9 @@
 \setCJKmonofont{Droid Sans Fallback}
 \usepackage{xeCJKfntef}
 \usepackage{algorithmic}
+\usepackage{tikz}
+\usepackage{placeins}
+\usetikzlibrary{arrows.meta}
 \usepackage{cite}
 \usepackage{comment}
 \usepackage[hidelinks]{hyperref}
@@ -21,7 +26,10 @@
 \newcommand{\inner}[2]{\langle#1,#2\rangle}
 \newcommand{\ind}{\mathbf 1}
 \DeclareMathOperator{\clip}{clip}
-\newtheorem{proposition}{命题}
+% \newtheorem{proposition}{命题}
+\newtheorem{proposition}{Proposition}
+% \newtheorem{assumption}{假设}
+\newtheorem{assumption}{Assumption}
 \renewcommand{\IEEEproofname}{证明}
 \renewcommand{\refname}{参考文献}
 \title{Semantic-Guided Imitation Learning with History-Conditioned Feedback}
@@ -35,8 +43,9 @@
 而生成动作块时的观察也未必足以解释执行期间的动态变化。
 为此，基础策略结合语义输入与几何监督查询生成动作块，
 历史条件残差分支利用新观测和当前计划修正尚未执行的目标槽位。
-条件性分析分别刻画表示误差、历史增量信息与实际修正收益，
-并说明动作风险改善转化为任务表现改善所需的覆盖、敏感性及时间对齐条件。
+条件性分析以动作的后续任务损失为共同尺度，
+区分表示造成的决策信息损失、历史的潜在价值与实际决策误差，
+并通过槽位时效和性能差分连接闭环任务结果。
 实验设计通过表示与反馈交叉对照、示范规模比较及机制诊断检验上述路径。
 \draftnote{待补：最终实验平台、任务范围、对照结果及定量结论；摘要在完整评测后定稿。}
 \end{abstract}
@@ -49,6 +58,11 @@ Imitation learning, semantic representations, visuomotor control, residual feedb
 \input{method}
 \input{experiments}
 \input{discussion}
+\FloatBarrier
+\appendices
+\input{action_analysis_proofs}
+\input{representation_feedback_proofs}
+\input{method_details}
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 \end{document}

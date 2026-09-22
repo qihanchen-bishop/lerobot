@@ -1,0 +1,411 @@
+% C证明核心：比较相同任务后果下的信息决策类；用一致后果近似而不是专家动作MSE约束表示损失。
+% C证明逻辑：信息嵌套 -> 代理最小化动作的两次近似误差 -> 任务风险上界 -> 历史消歧反例。
+% D证明核心：理想信息价值减去实际决策缺口，并经槽位门控后才对应闭环任务收益。
+% D证明逻辑：风险望远镜分解 -> 逐点门控恒等式 -> 性能差分 -> 分布变化界。
+% 末节仅为动作监督诊断，不作为任务成功率改进或稳定性证明。
+\section{Task-Relevant Representation Analysis}
+\label{app:representationproofs}
+% \subsection{决策类与条件后果}
+\subsection{Decision Classes and Conditional Action Outcomes}
+% 信息包含关系 $\mathcal U\subseteq\mathcal F_h$ 蕴含
+The information inclusion $\mathcal U\subseteq\mathcal F_h$ implies
+$\mathfrak A(\mathcal U)\subseteq\mathfrak A(\mathcal F_h)$,
+% 故 $\mathcal L_\mu^*(\mathcal U)\ge\mathcal L_\mu^*(\mathcal F_h)$。
+and hence $\mathcal L_\mu^*(\mathcal U)\ge\mathcal L_\mu^*(\mathcal F_h)$.
+% 实际规则 $\pi_Z\in\mathfrak A(\mathcal U)$，因此两个缺口均非负。
+Since the implemented rule satisfies $\pi_Z\in\mathfrak A(\mathcal U)$, both gaps are nonnegative.
+% 在 $\mathcal L_\mu(\pi_Z)-\mathcal L_\mu^*(\mathcal F_h)$ 中
+Adding and subtracting $\mathcal L_\mu^*(\mathcal U)$ in
+% 加减 $\mathcal L_\mu^*(\mathcal U)$ 即得式\eqref{eq:taskrepresentationdecomposition}；
+$\mathcal L_\mu(\pi_Z)-\mathcal L_\mu^*(\mathcal F_h)$ gives~\eqref{eq:taskrepresentationdecomposition}.
+% 该分解不要求最优值被某个网络实现。
+This decomposition does not require the optimum to be attained by a network.
+
+% \subsection{条件后果与动作选择的正则条件}
+\subsection{Regularity of Conditional Outcomes and Action Selection}
+\label{app:representationregularity}
+% 假设~\ref{ass:taskrelations}采用以下技术条件：
+Assumption~\ref{ass:taskrelations} uses the following technical conditions:
+% $\overline Q_\mu(h,a)$ 具有联合可测版本，
+$\overline Q_\mu(h,a)$ admits a jointly measurable version
+% 且对任意因果可测动作规则 $a(h)$ 满足
+such that, for every causal measurable action rule $a(h)$,
+$\mathcal L_\mu(a)=\E_\mu[\overline Q_\mu(\mathcal H_t,a(\mathcal H_t))]$.
+% 该假设及下述证明涉及的动作上确界均可测；
+The suprema over actions in that assumption and the proof below are measurable.
+% 代理 $\widehat Q(Z,a)=f(\widehat G,\chi,a)$ 具有可测的最小化动作选择。
+The approximation $\widehat Q(Z,a)=f(\widehat G,\chi,a)$ admits a measurable minimizing action selection.
+% 真实与估计关系的误差矩及一致近似误差按正文假设可积。
+The relation-error moments and uniform approximation error are integrable as specified in the main text.
+% 这些条件是命题~\ref{prop:taskrepresentation}的前提，而非由网络结构推出的性质。
+These are premises of Proposition~\ref{prop:taskrepresentation}, not consequences of the network architecture.
+
+% 为说明条件后果共同版本的构造，
+To construct a common version of the conditional action outcomes,
+% 在标准Borel状态、历史与动作空间上，
+on standard Borel state, history, and action spaces,
+% 可用 $\mu$ 诱导的条件分布核 $K_\mu(dx\mid h)$ 定义
+use the conditional distribution kernel $K_\mu(dx\mid h)$ induced by $\mu$ to define
+\[
+ \overline Q_\mu(h,a)=\int Q_t^0(x,a)\,K_\mu(dx\mid h).
+\]
+% 时间索引包含于 $x,h$ 中。
+The time index is included in $x$ and $h$.
+% 对任意因果可测动作 $a(h)$，这一共同版本满足
+For every causal measurable action $a(h)$, this common version satisfies
+$\mathcal L_\mu(a)=\E_\mu[\overline Q_\mu(\mathcal H_t,a(\mathcal H_t))]$.
+% 若 $\mathcal A$ 非空紧致，
+If $\mathcal A$ is nonempty and compact,
+% 且 $\widehat Q(z,a)$ 对 $z$ 可测、对 $a$ 连续，
+and $\widehat Q(z,a)$ is measurable in $z$ and continuous in $a$,
+% 则可测最小化选择是标准可测选择结论的适用情形。
+standard measurable-selection results provide a measurable minimizing selection.
+% 正文仅需这样的选择存在，不要求真实 $Q_t^0$ 对动作连续。
+The main text requires only the existence of such a selection, not continuity of the true $Q_t^0$ in the action.
+
+% \subsection{关系近似误差到决策损失}
+\subsection{From Relation Approximation to Decision Loss}
+% 定义后果代理的一致误差
+Define the uniform error of the action-outcome approximation as
+$d=\sup_{a\in\mathcal A}|\overline Q_\mu(\mathcal H_t,a)-\widehat Q(Z,a)|$.
+% 由三角不等式及假设~\ref{ass:taskrelations}，
+The triangle inequality and Assumption~\ref{ass:taskrelations} give
+\begin{equation}
+ \E_\mu d\le\epsilon_{\mathrm{rel}}+K_G\delta_G .
+ \label{eq:taskproxyerror}
+\end{equation}
+% 取一个 $\mathcal U$-可测代理最小化动作
+Choose a $\mathcal U$-measurable action minimizing the approximation,
+$\widehat a(Z)\in\arg\min_{a\in\mathcal A}\widehat Q(Z,a)$.
+% 对任意 $a_h\in\mathfrak A(\mathcal F_h)$，逐点有
+For any $a_h\in\mathfrak A(\mathcal F_h)$, the following holds pointwise:
+\begin{align}
+ \overline Q_\mu(\mathcal H_t,\widehat a)
+ &\le\widehat Q(Z,\widehat a)+d\nonumber\\
+ &\le\widehat Q(Z,a_h)+d
+ \le \overline Q_\mu(\mathcal H_t,a_h)+2d .
+ \label{eq:proxydecisionproof}
+\end{align}
+% 取期望，再对 $a_h$ 取下确界，得到
+Taking expectations and then the infimum over $a_h$ yields
+\[
+ \mathcal L_\mu^*(\mathcal U)
+ \le\mathcal L_\mu(\widehat a)
+ \le\mathcal L_\mu^*(\mathcal F_h)
+     +2(\epsilon_{\mathrm{rel}}+K_G\delta_G).
+\]
+% 这证明命题~\ref{prop:taskrepresentation}的第一式；
+This proves the first inequality in Proposition~\ref{prop:taskrepresentation}.
+% 代入式\eqref{eq:taskrepresentationdecomposition}即得第二式。
+Substitution into~\eqref{eq:taskrepresentationdecomposition} gives the second.
+% $\widehat a$ 只是用于证明可达风险界的比较规则，
+The rule $\widehat a$ is used only to establish the attainable-risk bound;
+% 不是对当前训练策略执行代理贪心优化的实现声明。
+it does not assert that the implemented policy greedily optimizes this approximation.
+% \subsection{伪标签与关系读出误差}
+\subsection{Pseudo-Label and Relation-Readout Errors}
+\label{app:pseudolabel}
+% 自动关系伪标签为Gtilde。在同一评价分布下，逐点三角不等式与取期望给出
+For automatically generated relation pseudo-labels $\widetilde G$, the pointwise triangle inequality and expectation under the same evaluation distribution give
+\begin{equation}
+ \delta_G\le
+ \E_\mu\norm{\widehat G-\widetilde G}
+ +\E_\mu\norm{\widetilde G-G}.
+ \label{eq:pseudolabel}
+\end{equation}
+% 第二项为伪标签相对真值的平均误差；两项均须在评价分布上审核，训练拟合误差不能代替。
+The second term is the mean pseudo-label error relative to ground truth. Both terms require auditing under the evaluation distribution; training fit cannot replace this assessment.
+
+% \subsection{关系充分性的理想化纠偏实例}
+\subsection{An Idealized Relation-Based Correction Example}
+\label{app:relationexample}
+% 评价分布只在最后一个控制步取样，目标在一维横向轴上，工具--目标归一化偏移G属于[-1,1]且由完整观测历史精确确定。
+Restrict the evaluation distribution to the final control step of an idealized one-dimensional alignment task.
+The normalized lateral tool--target offset $G\in[-1,1]$ is determined exactly by the full observation history, and $a\in[-1,1]$ commands displacement in the same coordinates and units.
+% 无隐藏接触模式、摩擦差异或此前损伤，chi为空。最后动作后按以下概率生成失败标志，并由终局图像显示。
+There are no hidden contact modes, friction changes, or prior damage; $\chi$ is empty.
+After the action, a Bernoulli failure indicator is sampled with probability
+\[
+ Q_{T-1}^0(x,a)=f(G,a)=\frac12+\frac18(a-G)^2.
+\]
+% 该概率在[1/2,1]内；终局图像显示结果，使视觉可评估性成立。
+This probability lies in $[1/2,1]$, and a terminal image reveals the outcome, satisfying visual assessability.
+% 这是明确规定的随机任务模型而非真实机械臂动力学；后续无动作，所以参考策略选择无关。
+This is a specified stochastic task model, not a physical model of the robot; no further action remains, so the reference continuation is immaterial.
+% 假设关系估计被限制在[-1,1]，关系代理就是同一个f，近似误差为零。
+For a relation readout $\widehat G\in[-1,1]$, use the same $f$ as the relation proxy. Then $\epsilon_{\mathrm{rel}}=0$ and
+\[
+ |f(G,a)-f(\widehat G,a)|
+ =\frac18|G-\widehat G|\,|2a-G-\widehat G|
+ \le\frac12|G-\widehat G|.
+\]
+% 因而非零关系敏感性常数K_G=1/2有效，且最优动作a=G随关系变化。
+Thus the nonzero constant $K_G=1/2$ is valid, and the full-information optimal action $a=G$ varies with the relation.
+% 实施代理最优动作a=Ghat时，平均失败概率相对完整历史最优值的差为关系均方误差的1/8。
+If the implemented action is the proxy minimizer $a=\widehat G$, then
+\[
+ \mathcal L_\mu(\widehat G)-\mathcal L_\mu^*(\mathcal F_h)
+ =\frac18\E_\mu(\widehat G-G)^2
+ \le\frac14\delta_G,
+\]
+% 最后一步使用偏移差绝对值不超过2。固定G等概率为正负1时，不保留关系的恒定最优动作0有失败概率5/8，保留准确关系后为1/2。
+where the last inequality uses $|\widehat G-G|\le2$.
+For equally likely offsets $G=-1$ and $G=1$, the best constant action is $0$ with failure probability $5/8$, whereas observing $G$ permits failure probability $1/2$.
+% 该例展示关系信息可有严格决策价值，但不把代理优化当作实际网络训练规则，也不证明全局语义充分性。
+The example exhibits strict decision value of a relation; it neither identifies proxy minimization with the network's training procedure nor establishes global semantic sufficiency.
+% 未建模接触模式若影响失败概率，则本例条件不成立，必须指定可获得上下文或保留非零近似误差。
+If unmodeled contact modes affect failure, the construction no longer applies without specified observable context or a nonzero approximation error.
+
+% \subsection{相同当前图像下的历史价值}
+\subsection{Value of History with Identical Current Images}
+\label{app:historyvalue}
+% 考虑等概率模式 $m\in\{-1,+1\}$，
+Consider equally likely modes $m\in\{-1,+1\}$.
+% 本例mu仅支持最后一次决策，不与完整时域等权混合分布混同。
+The evaluation distribution $\mu$ in this example is supported only at the final decision, not uniformly over the full horizon.
+% 过去动作--响应记录显示模式，但当前图像、关系快照、已有计划及运行上下文均不包含模式信息。
+A past action--response record reveals the mode, but the current image, relation snapshot, available plan, and runtime context contain no mode information.
+% 因而两种模式的当前信息F_c相同，完整历史F_h可以区分。
+Thus, all of $\mathcal F_c$, including proprioception, is mode-independent, whereas $\mathcal F_h$ distinguishes the modes.
+% 仅剩一次决策，可选动作是 $-1$ 或 $+1$；
+One decision remains, with available actions $-1$ and $+1$.
+% 匹配模式的动作失败概率为0，不匹配的动作失败概率为c，其中0<c<=1。
+An action matching the mode has failure probability $0$; the other action has failure probability $c$, where $0<c\le1$.
+% 任意只基于当前信息的动作在半数情形中选错，故最优失败概率为c/2。
+Any action based only on current information is incorrect in half the cases, giving optimal failure probability $c/2$.
+% 完整历史可选择 $a=m$，最优失败概率为 $0$。
+The complete history permits $a=m$, giving optimal failure probability $0$.
+% 两者之差即严格正的历史价值c/2；这说明一个充分情形，而非对所有实际历史的保证。
+Consequently, $\Delta_{\mathrm{hist}}=c/2>0$. This provides a sufficient case, not a guarantee for arbitrary execution histories.
+% 终局图像显示结果即可满足假设~\ref{ass:visualassessability}。
+A final image revealing the outcome suffices to satisfy Assumption~\ref{ass:visualassessability}.
+
+% 该例说明终局视觉可评估、当前几何相同与历史对动作选择有用可以同时成立。
+This example shows that visual assessability of completion, identical current geometry, and useful history for action selection can coexist.
+% 反之，若所有额外历史对应同一个最优动作，
+Conversely, if all additional histories admit the same optimal action,
+% 信息增多并不必然产生严格任务收益。
+more information need not produce a strict task benefit.
+% 这两个情形均不依赖显式阶段分类器。
+Neither case relies on an explicit stage classifier.
+
+\section{Feedback and Execution Analysis}
+\label{app:feedbackproofs}
+% \subsection{候选收益的分解}
+\subsection{Decomposition of Candidate Benefit}
+% 在固定 $\mu$ 和 $Q_t^0$ 下，
+For fixed $\mu$ and $Q_t^0$,
+$\mathcal L_\mu(B)=\mathcal L_\mu^*(\mathcal F_p)+\epsilon_{\mathrm{base}}$,
+% 并由式\eqref{eq:taskrepresentationdecomposition}有
+and~\eqref{eq:taskrepresentationdecomposition} gives
+\[
+ \mathcal L_\mu(\widehat u)
+ =\mathcal L_\mu^*(\mathcal F_h)
+  +\Delta_{\mathrm{rep}}(\mathcal U)
+  +\epsilon_{\mathrm{dec}}(\widehat u).
+\]
+% 两式相减，再在两个最优值之间插入
+Subtracting these expressions and inserting
+$\mathcal L_\mu^*(\mathcal F_c)$,
+% 即得式\eqref{eq:taskfeedbackdecomposition}。
+between the two optimal values yields~\eqref{eq:taskfeedbackdecomposition}.
+% 用
+Replacing the base-action identity with
+$\mathcal L_\mu(u_c)=\mathcal L_\mu^*(\mathcal F_c)+\epsilon_c$
+% 代替基础动作的等式，其中 $u_c$ 为 $\mathcal F_c$-可测的当前信息对照，
+where $u_c$ is an $\mathcal F_c$-measurable current-information control
+% $\epsilon_c$ 为其相对该信息下最优规则的实现差距，得到
+and $\epsilon_c$ is its realization gap relative to the optimum under that information, gives
+\begin{equation}
+ \mathcal L_\mu(u_c)-\mathcal L_\mu(\widehat u)
+ =\Delta_{\mathrm{hist}}+\epsilon_c
+  -\Delta_{\mathrm{rep}}(\mathcal U)-\epsilon_{\mathrm{dec}}(\widehat u).
+ \label{eq:currenthistorycomparison}
+\end{equation}
+
+% 结合命题~\ref{prop:taskrepresentation}，
+Combining this with Proposition~\ref{prop:taskrepresentation},
+% 当同一分布上相应关系条件适用于反馈表示时，
+when the corresponding relation conditions apply to the feedback representation under the same distribution,
+% 候选收益还满足
+also gives the candidate-benefit bound
+\begin{align}
+ \Gamma_\mu\ge&
+ \epsilon_{\mathrm{base}}+\Delta_{\mathrm{new}}+\Delta_{\mathrm{hist}}
+ \nonumber\\[-1mm]
+ &-2(\epsilon_{\mathrm{rel}}+K_G\delta_G)
+ -\epsilon_{\mathrm{dec}}(\widehat u).
+ \label{eq:combinedcandidatebound}
+\end{align}
+% 该式将C的信息保留条件与D的信息利用条件连接起来，
+This connects the information-preservation conditions in Section~\ref{sec:representationanalysis} to the information-use conditions in Section~\ref{sec:feedbackanalysis},
+% 不把未知的决策实现误差从界中删去。
+without dropping the unknown decision-realization error.
+
+% \subsection{反馈关系的表示与时刻对应}
+\subsection{Representation and Time Alignment of Feedback Relations}
+\label{app:feedbackrelationtime}
+% 对于目标执行时刻 $t$，将命题~\ref{prop:taskrepresentation}中的对象替换为
+For target execution time $t$, replace the objects in Proposition~\ref{prop:taskrepresentation} by
+$Z=Z_t^{\mathrm{fb}}$、$G=G_t$、$\widehat G=\widehat G_t(Z_t^{\mathrm{fb}})$
+% 和 $\chi=\chi_t(Z_t^{\mathrm{fb}})$。
+and $\chi=\chi_t(Z_t^{\mathrm{fb}})$.
+% 这些读出只使用生成候选时可用的因果输入，
+These readouts use only causal inputs available when the candidate is generated.
+% 实际关系 $G_t$ 用于定义分析误差，而不是额外提供给反馈网络的状态。
+The true relations $G_t$ define the analytical error; they are not additional state inputs supplied to the feedback network.
+% 关系可见性、后果近似条件和正则条件均须对这些对象及同一 $\mu$ 重新成立。
+Relation visibility, outcome approximation, and regularity conditions must hold for these objects under the same $\mu$.
+% 此时原证明可直接应用，其误差量不与基础编码器在计划时刻的误差共用。
+The original proof then applies, but its error quantities cannot be identified with those of the base encoder at planning time.
+
+% 例如，若仅将基础查询的旧估计 $\widehat G_{\tau_p}^{\mathrm{base}}$
+For example, suppose the stale base-query estimate $\widehat G_{\tau_p}^{\mathrm{base}}$
+% 作为当前关系的读出，在关系维数、坐标约定一致且两时刻关系均有定义时，
+is used as the current relation readout. With matching dimensions and coordinate conventions, and relations defined at both times,
+\[
+ \begin{aligned}
+ \E_\mu\norm{G_t-\widehat G_{\tau_p}^{\mathrm{base}}}
+ &\le \E_\mu\norm{G_t-G_{\tau_p}}\\
+ &\quad+\E_\mu\norm{G_{\tau_p}-\widehat G_{\tau_p}^{\mathrm{base}}}.
+ \end{aligned}
+\]
+% 右端第一项为计划观测至目标执行时刻的关系变化；
+The first term is the change in relations from the planning observation to the target execution time.
+% 第二项仍按部署目标槽位诱导的采样权重计算，不等同于训练集上的几何损失。
+The second is still weighted by the sampling distribution induced by deployment target slots and is not the geometric training loss.
+% 即使旧估计精确，第一项也可能很大。
+Even with an exact old estimate, the first term may be large.
+% 最新RGB与历史旨在提供这段变化的证据，但输入它们本身不保证读出误差受控。
+Latest RGB inputs and history are intended to provide evidence of this change, but including them alone does not bound the readout error.
+% 没有时刻对应的关系检验时，仍可使用候选收益分解和闭环恒等式，
+Without time-aligned relation validation, the candidate-benefit decomposition and closed-loop identity remain applicable,
+% 不能将基础查询误差直接代入式\eqref{eq:endtoendtaskbound}。
+but base-query error cannot be substituted directly into~\eqref{eq:endtoendtaskbound}.
+
+% \subsection{目标槽位采用与任务结果}
+\subsection{Adoption at Target Slots and Task Outcomes}
+% 接收顺序、计划有效性和回退触发记录均作为因果历史的一部分。
+Reception order, plan validity, and fallback-trigger records are included in the causal history.
+% 候选按同计划、同槽位的最后一次合格接收确定，随后执行年龄校验；
+The last accepted candidate for the same plan and slot is selected, followed by an age check.
+% 重叠选择规则并不保证所选修正具有更大任务收益。
+This overlap-resolution rule does not guarantee that the selected correction has a larger task benefit.
+% 参考规则 $\pi_0$ 与部署规则在同一历史上共享基础计划失效时的回退流程。
+The reference rule $\pi_0$ and deployed rule share the same fallback procedure at a given history when the base plan becomes invalid.
+% 参照保留反馈计算、接收及缓存更新，只屏蔽发送到控制接口的修正；两者共用相同计算状态转移律。
+For this comparison, the reference retains feedback computation, reception, and cache updates and masks only the correction sent to the control interface.
+Both controllers use the same computation-state transition law, including the distribution of runtime delays conditional on the available history.
+% 相同历史下基础选槽动作因此是同一个B；不同闭环轨迹不要求实际计划或完成时间逐次相同。
+Thus, base-slot selection gives the same $B$ at the same augmented history; realized plans and completion times need not coincide across different closed-loop trajectories.
+% 实现该对照须保持调度/候选接收逻辑不依赖屏蔽标志，仅最终发送动作不同。
+An implementation of this comparator must keep scheduling and candidate reception independent of the output-mask flag.
+Skipping residual inference changes this process and requires a separate system-level comparison rather than the residual-only identity below.
+% 若流程终止episode，则按统一评价协议固定终止结果并用吸收状态补齐评价时域，不剔除该次试验。
+If the procedure terminates an episode, its outcome is fixed under the common evaluation protocol and the horizon is completed with an absorbing state; the trial is not discarded.
+% 若实际回退指令不同于 $B=\pi_0(x)$，应将其纳入执行规则后重新核对，
+If the actual fallback command differs from $B=\pi_0(x)$, it must be included in the execution rule and the argument rechecked;
+% 不能直接套用以下二选一恒等式。
+the following binary-choice identity does not apply directly.
+
+% 对每个时刻--历史，$\Lambda=0$ 时执行 $B$，
+At each time--history pair, $B$ is executed when $\Lambda=0$,
+% $\Lambda=1$ 时执行 $\widehat u$，
+and $\widehat u$ is executed when $\Lambda=1$.
+% 故无需假定 $Q_t^0$ 对动作线性，即有
+Thus, without assuming that $Q_t^0$ is linear in the action,
+\[
+ Q_t^0(x,B)-Q_t^0(x,B+\Lambda r)=\Lambda g_t(x).
+\]
+% 候选选择是该槽位可用输入与接收记录的确定性函数，无候选时取 $r=0$。
+Candidate selection is a deterministic function of the inputs and reception records available for that slot, with $r=0$ if no candidate is available.
+% 尚未通过接收校验的结果不进入选择；已接收的候选仍须通过执行时的年龄与计划校验。
+Results that have not passed reception checks are excluded; accepted candidates must still pass age and plan checks at execution time.
+% 在共享的运行时记录过程下，候选选择与门控均为因果规则。
+Under the shared runtime recording process, candidate selection and the adoption indicator are causal rules.
+% 取期望给出正文中的有效收益定义。
+Taking expectations gives the effective benefit used in the main text:
+\begin{equation}
+ \Gamma_{\mathrm{exec},\mu}=\E_\mu[\Lambda g_t(x)].
+ \label{eq:effectivefeedback}
+\end{equation}
+% 又因 $V_t^0(x)=Q_t^0(x,B)$，
+Since $V_t^0(x)=Q_t^0(x,B)$,
+% 式\eqref{eq:pd}立即给出命题~\ref{prop:executedtaskgain}。
+equation~\eqref{eq:pd} immediately yields Proposition~\ref{prop:executedtaskgain}.
+
+% 由 $|g_t|\le1$，还得到一个保守的时效界
+The bound $|g_t|\le1$ also yields the conservative timing bound
+\begin{equation}
+ \Gamma_{\mathrm{exec},\mu}
+ \ge\Gamma_\mu-\Prob_\mu(\Lambda=0).
+ \label{eq:timingtaskbound}
+\end{equation}
+% 它按每次未采用都可能损失最大收益处理，通常较松；
+This bound treats each nonadoption as potentially losing the maximum benefit and is generally loose.
+% 逐事件的 $\E_\mu[(1-\Lambda)g_t]$ 更能说明具体原因。
+The event-level quantity $\E_\mu[(1-\Lambda)g_t]$ better explains the specific effect.
+% 门控可能丢弃有害修正，故未采用也不必总是降低收益。
+Validity checks may reject harmful corrections, so nonadoption need not always reduce benefit.
+
+% \subsection{回放与部署分布的差异}
+\subsection{Differences Between Replay and Deployment Distributions}
+% 固定候选规则、参考策略及有效性规则，
+Fix the candidate rule, reference policy, and validity rule.
+% 以 $\nu$ 表示回放评价分布，以 $\mu=\bar\mu_\pi$ 表示部署时间混合分布。
+Let $\nu$ denote the replay evaluation distribution and $\mu=\bar\mu_\pi$ the deployment time-mixture distribution.
+% 若二者在同一时刻--历史空间上满足
+If, on the same time--history space,
+$\|\mu-\nu\|_{\mathrm{TV}}\le\epsilon_{\mathrm{dist}}$,
+% 则
+then
+\begin{equation}
+ J(\pi)-J(\pi_0)
+ \ge T\left(\E_\nu[\Lambda g_t]-2\epsilon_{\mathrm{dist}}\right).
+ \label{eq:replaytaskbound}
+\end{equation}
+% 其中，总变差定义为
+Here, total variation is defined by
+$\|\mu-\nu\|_{\mathrm{TV}}=\sup_{\mathcal B}|\mu(\mathcal B)-\nu(\mathcal B)|$,
+% $\mathcal B$ 遍历该空间的可测事件。
+where $\mathcal B$ ranges over the measurable events of that space.
+% 因为 $\Lambda g_t\in[-1,1]$，
+Since $\Lambda g_t\in[-1,1]$,
+% 两分布上该有界函数的期望差至多为两倍总变差，结合式\eqref{eq:closedlooptaskgain}即得。
+the difference between its expectations under the two distributions is at most twice their total variation; combining this with~\eqref{eq:closedlooptaskgain} gives the result.
+% 相同初始位置不足以保证执行历史分布接近；
+Identical initial positions do not ensure similar execution-history distributions;
+% 完整轨迹分布的该距离还可能接近 $1$。
+the total-variation distance between complete trajectory distributions may approach $1$.
+% 本式说明从回放外推所缺少的条件，不宣称现有数据已给出一个非空泛的数值保证。
+This bound identifies a condition needed to extrapolate from replay; it does not claim that the current data provide a nonvacuous numerical guarantee.
+
+% \subsection{动作监督的辅助诊断}
+\subsection{Auxiliary Diagnostics from Action Supervision}
+% 在另一个固定的带可靠专家标签的回放分布 $\nu_{\mathrm{lab}}$ 上，
+On a separate fixed replay distribution $\nu_{\mathrm{lab}}$ with reliable expert labels,
+% 以相同动作单位和目标槽位定义专家指令 $U^{\mathrm E}$、
+define the expert command $U^{\mathrm E}$,
+% 基础误差 $E=U^{\mathrm E}-B$ 以及残差 $r$，
+base error $E=U^{\mathrm E}-B$, and residual $r$ using the same action units and target slots,
+% 并假设相关二阶矩有限。
+and assume that the relevant second moments are finite.
+% 平方动作风险的变化满足
+The change in squared action risk satisfies
+\begin{equation}
+ \E_{\nu_{\mathrm{lab}}}\norm E^2
+ -\E_{\nu_{\mathrm{lab}}}\norm{E-r}^2
+ =2\E_{\nu_{\mathrm{lab}}}\inner E r
+  -\E_{\nu_{\mathrm{lab}}}\norm r^2 .
+ \label{eq:residualgain}
+\end{equation}
+% 按 $\Lambda r$ 替换 $r$ 可得到实际采用后的对应式。
+Replacing $r$ by $\Lambda r$ gives the corresponding identity for adopted corrections.
+% 该恒等式能核对修正是否朝示范方向以及幅度是否过大，
+This identity checks whether corrections move toward the demonstrated actions and whether their magnitude is excessive,
+% 但它不包含反事实任务后果 $Q_t^0$。
+but it does not contain the counterfactual failure probabilities $Q_t^0$.
+% 因此较好的动作对齐不能代替式\eqref{eq:closedlooptaskgain}
+Improved action alignment therefore cannot replace the actual task benefit required by~\eqref{eq:closedlooptaskgain},
+% 所要求的实际任务收益，也不构成稳定性证明。
+nor does it establish stability.
