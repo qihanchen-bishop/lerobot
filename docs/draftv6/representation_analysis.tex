@@ -7,9 +7,8 @@
 % 任务后果代理仅为分析见证函数；几何辅助损失不等于价值监督或策略改进证明。
 \subsection{Semantic Inputs and Task-Supervised Representations}
 \label{sec:representationanalysis}
-% 任务相关表示需要保留决定动作后果的关系与上下文；以下先区分信息损失与决策实现误差，再分析关系估计误差如何约束表示损失。
-Task-relevant representations must preserve the relations and context needed to distinguish action outcomes.
-We first separate information loss from decision-realization error, then bound representation loss through relation-estimation error.
+% 本节直接通过任务后果评价决策相关信息的保留，区分表示损失与保留信息未被充分利用所造成的差距。
+We now assess the preservation of decision-relevant information directly through task consequences, separating representation loss from imperfect use of the retained information.
 
 % \subsubsection{表示信息与决策能力}
 \subsubsection{Represented Information and Decision Capability}
@@ -155,5 +154,7 @@ Relation-readout and pseudo-label errors require independent assessment (Appendi
 
 % 上述结果表明，在相应条件下，准确保留任务相关关系与上下文可以约束表示损失；实际决策表现还取决于策略对这些信息的利用。
 Under the stated conditions, accurately preserving task-relevant relations and context in $Z$ bounds representation loss; actual decision performance also depends on how the policy uses this information.
-% 下一节进一步讨论执行中新增证据的利用。
-The next section examines the use of additional evidence acquired during execution.
+% 准确关系估计本身未必消除运动或接触历史相关的歧义，相关证据也须保留在因果上下文中。
+Accurate relation estimates alone may not resolve ambiguities associated with motion or contact history; relevant evidence must also be retained in the causal context.
+% 下一节考察新观测与执行记录何时提供额外决策价值，以及该价值如何由及时修正实现。
+The next section examines when new observations and execution records provide additional decision value and how that value is realized through timely corrections.

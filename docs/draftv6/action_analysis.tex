@@ -124,8 +124,8 @@ Connecting finite-demonstration training error to the population error $R_\nu$ r
 % L可能很大或缺少有限统一界，识别关键情形本身并不改变物理系统的敏感性。
 The constant $L$ may be large or lack a finite uniform bound; identifying critical situations does not itself change physical sensitivity.
 
-% \subsubsection{关系信息与执行更新}
-\subsubsection{Relational Information and Execution Updates}
+% \subsubsection{表示层面的覆盖与条件误差差异}
+\subsubsection{Representation-Level Coverage and Conditional Error Discrepancy}
 % 完整历史覆盖可因小幅动作偏差失效。
 Coverage over complete histories can fail after a small action deviation (Appendix~\ref{app:historycoverage}).
 % 将历史编码为任务表示可以合并无关差异，但也可能合并需要不同动作的情形。
@@ -152,9 +152,12 @@ With square-integrable action error under both distributions, measurable version
 % 第一式按表示条件化后迁移动作风险，第二式接入B2的敏感性分析；详细证明见附录。
 The first inequality transfers action risk by conditioning on the representation; the second applies the sensitivity argument of Section~\ref{sec:actionerrorbound}.
 Appendix~\ref{app:representationcoverage} gives the detailed proof.
-% 因而，较小覆盖系数是否收紧上界，还取决于同一表示下的条件误差差异；附加RGB的确定性语义图并不自动改善覆盖。
-Thus, whether a smaller coverage factor tightens the bound also depends on the conditional-error discrepancy.
+% 该界同时取决于覆盖加权的参考风险与条件误差差异，覆盖常数较小本身不足以收紧上界。
+The bound depends jointly on the coverage-weighted reference risk and the conditional error discrepancy; a smaller coverage factor alone need not tighten it.
+% 保留RGB后附加确定性语义不自动改善覆盖。
 Appending a deterministic semantic map to retained RGB does not by itself improve coverage.
-% D_phi是固定策略的条件动作误差差异，而非任务信息损失；C、D分别讨论信息保留与执行利用，不以本节覆盖条件为前提。
-Here, $D_\phi$ measures conditional action-error differences for a fixed policy, not task-information loss.
-Sections~\ref{sec:representationanalysis} and~\ref{sec:feedbackanalysis} next examine task-relevant information retention and the use of new execution evidence through action consequences, without requiring the coverage conditions above.
+% 对固定策略、专家与编码器，D_phi比较两分布的条件平均平方动作误差，而非任务信息损失；合并不同所需动作的历史也可能使其为零。
+For the fixed policy, expert, and encoder, $D_\phi$ compares conditional mean squared action errors across distributions, rather than measuring lost task information.
+It can vanish even when histories requiring different actions are merged, so a zero discrepancy does not establish information sufficiency.
+% C直接以任务后果评价信息保留，与风险迁移分析互补；不界定D_phi，也不依赖上述覆盖条件。
+Section~\ref{sec:representationanalysis} complements risk-transfer analysis by assessing information preservation directly through task consequences; it neither bounds $D_\phi$ nor requires the preceding coverage conditions.

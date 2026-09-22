@@ -60,11 +60,13 @@ visuomotor imitation learning
 % 后续以动作的任务后果为共同尺度，
 % 讨论任务关系与执行上下文应保留什么信息，以及历史条件反馈如何将其用于实际控制。
 % 本章研究有限示范下的任务表现改善，先建立动作误差与任务后果的条件性联系，再分析两条互补机制。
-% 本节研究有限示范下任务表现改善的条件。首先建立动作误差与任务失败概率的联系，并分析表示空间中的风险迁移；
-% 随后讨论任务关系的保留如何约束决策损失，以及历史信息如何通过及时执行的残差修正转化为闭环任务收益。
+% 本节研究有限示范下任务表现改善的条件。先联系模仿误差与任务失败，考察完整历史覆盖的限制；
+% 表示压缩可能改善覆盖，但条件动作误差差异也影响风险迁移。随后直接以决策损失分析信息保留，
+% 并研究新观测与执行历史何时能形成有益且及时的修正。
 This section studies conditions for improving task performance from limited demonstrations.
-We first relate action error to task-failure probability and analyze risk transfer through representations.
-We then examine how preserving task relations bounds decision loss and how historical information can yield closed-loop task benefits through timely residual corrections.
+We first relate imitation error to task failure and examine the limitations of coverage over complete histories.
+Representation compression may improve coverage, but conditional action-error discrepancies also affect risk transfer.
+We then assess information preservation through decision loss and examine when new observations and execution history yield beneficial, timely corrections.
 
 \input{formulation}
 \input{action_analysis}
