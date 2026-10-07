@@ -26,11 +26,10 @@ This decomposition does not require the optimum to be attained by a network.
 \label{app:representationregularity}
 % 假设~\ref{ass:taskrelations}采用以下技术条件：
 Assumption~\ref{ass:taskrelations} uses the following technical conditions:
-% $\overline Q_\mu(h,a)$ 具有联合可测版本，
-$\overline Q_\mu(h,a)$ admits a jointly measurable version
-% 且对任意因果可测动作规则 $a(h)$ 满足
-such that, for every causal measurable action rule $a(h)$,
-$\mathcal L_\mu(a)=\E_\mu[\overline Q_\mu(\mathcal H_t,a(\mathcal H_t))]$.
+% 历史条件Q采用共同过程下的联合可测版本；动作规则直接在该版本中代入。
+The history-conditioned $Q_t^{\pi_0}(h,a)$ uses a jointly measurable version under the common process.
+For any measurable action rule $a(h)$, its risk is defined directly by
+$\mathcal L_\mu(a)=\E_{(t,h)\sim\mu}[Q_t^{\pi_0}(h,a(h))]$.
 % 该假设及下述证明涉及的动作上确界均可测；
 The suprema over actions in that assumption and the proof below are measurable.
 % 代理 $\widehat Q(Z,a)=f(\widehat G,\chi,a)$ 具有可测的最小化动作选择。
@@ -40,34 +39,25 @@ The relation-error moments and uniform approximation error are integrable as spe
 % 这些条件是命题~\ref{prop:taskrepresentation}的前提，而非由网络结构推出的性质。
 These are premises of Proposition~\ref{prop:taskrepresentation}, not consequences of the network architecture.
 
-% 为说明条件后果共同版本的构造，
-To construct a common version of the conditional action outcomes,
-% 在标准Borel状态、历史与动作空间上，
-on standard Borel state, history, and action spaces,
-% 可用 $\mu$ 诱导的条件分布核 $K_\mu(dx\mid h)$ 定义
-use the conditional distribution kernel $K_\mu(dx\mid h)$ induced by $\mu$ to define
-\[
- \overline Q_\mu(h,a)=\int Q_t^0(x,a)\,K_\mu(dx\mid h).
-\]
-% 时间索引包含于 $x,h$ 中。
-The time index is included in $x$ and $h$.
-% 对任意因果可测动作 $a(h)$，这一共同版本满足
-For every causal measurable action $a(h)$, this common version satisfies
-$\mathcal L_\mu(a)=\E_\mu[\overline Q_\mu(\mathcal H_t,a(\mathcal H_t))]$.
+% Q已经在共同过程下平均隐状态；mu只重新加权时间与历史，不另行指定隐藏状态后验。
+The history recursion in Appendix~\ref{app:actionproofs} already averages over latent states
+under the common process. The evaluation measure $\mu$ reweights time--history pairs;
+it does not redefine the hidden-state conditional law or the reference continuation.
+The time index is retained in the history.
 % 若 $\mathcal A$ 非空紧致，
 If $\mathcal A$ is nonempty and compact,
 % 且 $\widehat Q(z,a)$ 对 $z$ 可测、对 $a$ 连续，
 and $\widehat Q(z,a)$ is measurable in $z$ and continuous in $a$,
 % 则可测最小化选择是标准可测选择结论的适用情形。
 standard measurable-selection results provide a measurable minimizing selection.
-% 正文仅需这样的选择存在，不要求真实 $Q_t^0$ 对动作连续。
-The main text requires only the existence of such a selection, not continuity of the true $Q_t^0$ in the action.
+% 正文仅需这样的选择存在，不要求真实 $Q_t^{\pi_0}$ 对动作连续。
+The main text requires only the existence of such a selection, not continuity of the true $Q_t^{\pi_0}$ in the action.
 
 % \subsection{关系近似误差到决策损失}
 \subsection{From Relation Approximation to Decision Loss}
 % 定义后果代理的一致误差
 Define the uniform error of the action-outcome approximation as
-$d=\sup_{a\in\mathcal A}|\overline Q_\mu(\mathcal H_t,a)-\widehat Q(Z,a)|$.
+$d=\sup_{a\in\mathcal A}|Q_t^{\pi_0}(\mathcal H_t,a)-\widehat Q(Z,a)|$.
 % 由三角不等式及假设~\ref{ass:taskrelations}，
 The triangle inequality and Assumption~\ref{ass:taskrelations} give
 \begin{equation}
@@ -80,20 +70,21 @@ $\widehat a(Z)\in\arg\min_{a\in\mathcal A}\widehat Q(Z,a)$.
 % 对任意 $a_h\in\mathfrak A(\mathcal F_h)$，逐点有
 For any $a_h\in\mathfrak A(\mathcal F_h)$, the following holds pointwise:
 \begin{align}
- \overline Q_\mu(\mathcal H_t,\widehat a)
+ Q_t^{\pi_0}(\mathcal H_t,\widehat a)
  &\le\widehat Q(Z,\widehat a)+d\nonumber\\
  &\le\widehat Q(Z,a_h)+d
- \le \overline Q_\mu(\mathcal H_t,a_h)+2d .
+ \le Q_t^{\pi_0}(\mathcal H_t,a_h)+2d .
  \label{eq:proxydecisionproof}
 \end{align}
 % 取期望，再对 $a_h$ 取下确界，得到
 Taking expectations and then the infimum over $a_h$ yields
-\[
+\begin{equation}
  \mathcal L_\mu^*(\mathcal U)
  \le\mathcal L_\mu(\widehat a)
  \le\mathcal L_\mu^*(\mathcal F_h)
      +2(\epsilon_{\mathrm{rel}}+K_G\delta_G).
-\]
+ \label{eq:appattainablerisk}
+\end{equation}
 % 这证明命题~\ref{prop:taskrepresentation}的第一式；
 This proves the first inequality in Proposition~\ref{prop:taskrepresentation}.
 % 代入式\eqref{eq:taskrepresentationdecomposition}即得第二式。
@@ -125,29 +116,32 @@ The normalized lateral tool--target offset $G\in[-1,1]$ is determined exactly by
 % 无隐藏接触模式、摩擦差异或此前损伤，chi为空。最后动作后按以下概率生成失败标志，并由终局图像显示。
 There are no hidden contact modes, friction changes, or prior damage; $\chi$ is empty.
 After the action, a Bernoulli failure indicator is sampled with probability
-\[
- Q_{T-1}^0(x,a)=f(G,a)=\frac12+\frac18(a-G)^2.
-\]
+\begin{equation}
+ Q_{T-1}^{\pi_0}(h,a)=f(G,a)=\frac12+\frac18(a-G)^2.
+ \label{eq:apprelationexamplecost}
+\end{equation}
 % 该概率在[1/2,1]内；终局图像显示结果，使视觉可评估性成立。
 This probability lies in $[1/2,1]$, and a terminal image reveals the outcome, satisfying visual assessability.
 % 这是明确规定的随机任务模型而非真实机械臂动力学；后续无动作，所以参考策略选择无关。
 This is a specified stochastic task model, not a physical model of the robot; no further action remains, so the reference continuation is immaterial.
 % 假设关系估计被限制在[-1,1]，关系代理就是同一个f，近似误差为零。
 For a relation readout $\widehat G\in[-1,1]$, use the same $f$ as the relation proxy. Then $\epsilon_{\mathrm{rel}}=0$ and
-\[
+\begin{equation}
  |f(G,a)-f(\widehat G,a)|
  =\frac18|G-\widehat G|\,|2a-G-\widehat G|
  \le\frac12|G-\widehat G|.
-\]
+ \label{eq:apprelationexamplesensitivity}
+\end{equation}
 % 因而非零关系敏感性常数K_G=1/2有效，且最优动作a=G随关系变化。
 Thus the nonzero constant $K_G=1/2$ is valid, and the full-information optimal action $a=G$ varies with the relation.
 % 实施代理最优动作a=Ghat时，平均失败概率相对完整历史最优值的差为关系均方误差的1/8。
 If the implemented action is the proxy minimizer $a=\widehat G$, then
-\[
+\begin{equation}
  \mathcal L_\mu(\widehat G)-\mathcal L_\mu^*(\mathcal F_h)
  =\frac18\E_\mu(\widehat G-G)^2
  \le\frac14\delta_G,
-\]
+ \label{eq:apprelationexamplerisk}
+\end{equation}
 % 最后一步使用偏移差绝对值不超过2。固定G等概率为正负1时，不保留关系的恒定最优动作0有失败概率5/8，保留准确关系后为1/2。
 where the last inequality uses $|\widehat G-G|\le2$.
 For equally likely offsets $G=-1$ and $G=1$, the best constant action is $0$ with failure probability $5/8$, whereas observing $G$ permits failure probability $1/2$.
@@ -193,17 +187,18 @@ Neither case relies on an explicit stage classifier.
 \label{app:feedbackproofs}
 % \subsection{候选收益的分解}
 \subsection{Decomposition of Candidate Benefit}
-% 在固定 $\mu$ 和 $Q_t^0$ 下，
-For fixed $\mu$ and $Q_t^0$,
+% 在固定 $\mu$ 和 $Q_t^{\pi_0}$ 下，
+For fixed $\mu$ and $Q_t^{\pi_0}$,
 $\mathcal L_\mu(B)=\mathcal L_\mu^*(\mathcal F_p)+\epsilon_{\mathrm{base}}$,
 % 并由式\eqref{eq:taskrepresentationdecomposition}有
 and~\eqref{eq:taskrepresentationdecomposition} gives
-\[
+\begin{equation}
  \mathcal L_\mu(\widehat u)
  =\mathcal L_\mu^*(\mathcal F_h)
   +\Delta_{\mathrm{rep}}(\mathcal U)
   +\epsilon_{\mathrm{dec}}(\widehat u).
-\]
+ \label{eq:appcandidaterisk}
+\end{equation}
 % 两式相减，再在两个最优值之间插入
 Subtracting these expressions and inserting
 $\mathcal L_\mu^*(\mathcal F_c)$,
@@ -263,13 +258,14 @@ The original proof then applies, but its error quantities cannot be identified w
 For example, suppose the stale base-query estimate $\widehat G_{\tau_p}^{\mathrm{base}}$
 % 作为当前关系的读出，在关系维数、坐标约定一致且两时刻关系均有定义时，
 is used as the current relation readout. With matching dimensions and coordinate conventions, and relations defined at both times,
-\[
+\begin{equation}
  \begin{aligned}
  \E_\mu\norm{G_t-\widehat G_{\tau_p}^{\mathrm{base}}}
  &\le \E_\mu\norm{G_t-G_{\tau_p}}\\
  &\quad+\E_\mu\norm{G_{\tau_p}-\widehat G_{\tau_p}^{\mathrm{base}}}.
  \end{aligned}
-\]
+ \label{eq:appstalerelationbound}
+\end{equation}
 % 右端第一项为计划观测至目标执行时刻的关系变化；
 The first term is the change in relations from the planning observation to the target execution time.
 % 第二项仍按部署目标槽位诱导的采样权重计算，不等同于训练集上的几何损失。
@@ -297,14 +293,14 @@ The reference rule $\pi_0$ and deployed rule share the same fallback procedure a
 For this comparison, the reference retains feedback computation, reception, and cache updates and masks only the correction sent to the control interface.
 Both controllers use the same computation-state transition law, including the distribution of runtime delays conditional on the available history.
 % 相同历史下基础选槽动作因此是同一个B；不同闭环轨迹不要求实际计划或完成时间逐次相同。
-Thus, base-slot selection gives the same $B$ at the same augmented history; realized plans and completion times need not coincide across different closed-loop trajectories.
+Thus, base-slot selection gives the same $B$ at the same available history; realized plans and completion times need not coincide across different closed-loop trajectories.
 % 实现该对照须保持调度/候选接收逻辑不依赖屏蔽标志，仅最终发送动作不同。
 An implementation of this comparator must keep scheduling and candidate reception independent of the output-mask flag.
 Skipping residual inference changes this process and requires a separate system-level comparison rather than the residual-only identity below.
 % 若流程终止episode，则按统一评价协议固定终止结果并用吸收状态补齐评价时域，不剔除该次试验。
 If the procedure terminates an episode, its outcome is fixed under the common evaluation protocol and the horizon is completed with an absorbing state; the trial is not discarded.
-% 若实际回退指令不同于 $B=\pi_0(x)$，应将其纳入执行规则后重新核对，
-If the actual fallback command differs from $B=\pi_0(x)$, it must be included in the execution rule and the argument rechecked;
+% 若实际回退指令不同于 $B=\pi_0(h)$，应将其纳入执行规则后重新核对，
+If the actual fallback command differs from $B=\pi_0(h)$, it must be included in the execution rule and the argument rechecked;
 % 不能直接套用以下二选一恒等式。
 the following binary-choice identity does not apply directly.
 
@@ -312,11 +308,12 @@ the following binary-choice identity does not apply directly.
 At each time--history pair, $B$ is executed when $\Lambda=0$,
 % $\Lambda=1$ 时执行 $\widehat u$，
 and $\widehat u$ is executed when $\Lambda=1$.
-% 故无需假定 $Q_t^0$ 对动作线性，即有
-Thus, without assuming that $Q_t^0$ is linear in the action,
-\[
- Q_t^0(x,B)-Q_t^0(x,B+\Lambda r)=\Lambda g_t(x).
-\]
+% 故无需假定 $Q_t^{\pi_0}$ 对动作线性，即有
+Thus, without assuming that $Q_t^{\pi_0}$ is linear in the action,
+\begin{equation}
+ Q_t^{\pi_0}(h,B)-Q_t^{\pi_0}(h,B+\Lambda r)=\Lambda g_t(h).
+ \label{eq:appbinaryadoption}
+\end{equation}
 % 候选选择是该槽位可用输入与接收记录的确定性函数，无候选时取 $r=0$。
 Candidate selection is a deterministic function of the inputs and reception records available for that slot, with $r=0$ if no candidate is available.
 % 尚未通过接收校验的结果不进入选择；已接收的候选仍须通过执行时的年龄与计划校验。
@@ -326,13 +323,14 @@ Under the shared runtime recording process, candidate selection and the adoption
 % 取期望给出正文中的有效收益定义。
 Taking expectations gives the effective benefit used in the main text:
 \begin{equation}
- \Gamma_{\mathrm{exec},\mu}=\E_\mu[\Lambda g_t(x)].
+ \Gamma_{\mathrm{exec},\mu}=\E_\mu[\Lambda g_t(h)].
  \label{eq:effectivefeedback}
 \end{equation}
-% 又因 $V_t^0(x)=Q_t^0(x,B)$，
-Since $V_t^0(x)=Q_t^0(x,B)$,
-% 式\eqref{eq:pd}立即给出命题~\ref{prop:executedtaskgain}。
-equation~\eqref{eq:pd} immediately yields Proposition~\ref{prop:executedtaskgain}.
+% 又因 $V_t^{\pi_0}(h)=Q_t^{\pi_0}(h,B)$，
+Since $V_t^{\pi_0}(h)=Q_t^{\pi_0}(h,B)$,
+% 将性能差分恒等式中的轨迹求和写成T倍的部署时间平均，得到命题。
+\eqref{eq:pd}, with the trajectory sum written as $T$ times its deployment average,
+yields Proposition~\ref{prop:executedtaskgain}.
 
 % 由 $|g_t|\le1$，还得到一个保守的时效界
 The bound $|g_t|\le1$ also yields the conservative timing bound
@@ -403,8 +401,8 @@ The change in squared action risk satisfies
 Replacing $r$ by $\Lambda r$ gives the corresponding identity for adopted corrections.
 % 该恒等式能核对修正是否朝示范方向以及幅度是否过大，
 This identity checks whether corrections move toward the demonstrated actions and whether their magnitude is excessive,
-% 但它不包含反事实任务后果 $Q_t^0$。
-but it does not contain the counterfactual failure probabilities $Q_t^0$.
+% 但它不包含反事实任务后果 $Q_t^{\pi_0}$。
+but it does not contain the counterfactual failure probabilities $Q_t^{\pi_0}$.
 % 因此较好的动作对齐不能代替式\eqref{eq:closedlooptaskgain}
 Improved action alignment therefore cannot replace the actual task benefit required by~\eqref{eq:closedlooptaskgain},
 % 所要求的实际任务收益，也不构成稳定性证明。

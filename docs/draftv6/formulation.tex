@@ -1,30 +1,18 @@
-% 核心观点：研究有限固定示范下的离线视觉动作模仿学习，以视觉可评估的任务完成为部署目标。
-% 叙述逻辑：系统与观测 -> 固定示范和因果策略 -> 区分训练代理与任务目标 -> 视觉可评估性假设。
-% 边界：终局评估可辨识性不推出中间决策充分性；保留已确认英文正文及对应中文注释。
-% \subsection{视觉动作模仿学习}
 \subsection{Visuomotor Imitation Learning}
 \label{sec:task}
 
-% 我们研究有限、固定机器人示范下的离线视觉动作模仿学习，面向任务完成状态能够通过视觉历史评估的操作任务。
-% 策略基于视觉、本体观测及可用的因果执行历史生成控制指令，部署期间不更新参数或查询专家。
-% 训练以示范动作监督为基础，部署表现以有限时域内的任务完成概率衡量。
 We study offline visuomotor imitation learning from a finite, fixed set of robot demonstrations,
 for manipulation tasks whose completion can be assessed from visual history.
-The policy generates control commands from visual and proprioceptive observations and available causal execution history,
-without parameter updates or expert queries during deployment.
-Training is based on demonstrated actions, whereas deployment performance is measured by the probability of task completion over a finite horizon.
+The policy generates control commands from visual and proprioceptive observations and available execution history.
+Training is based on this fixed demonstration dataset, with demonstrated actions providing the primary imitation target, 
+whereas deployment performance is measured by the probability of task completion over a finite horizon.
 
-% \subsubsection{系统与观测}
 \subsubsection{System and Observations}
-% 考虑由一个决策策略统一控制的机器人系统，通过各执行器的联合动作完成给定的操作任务。
-% 系统与环境的联合状态 $s_t\in\mathcal S$ 在控制接口接收的指令 $u_t\in\mathcal A$ 的作用下演化，
-% 并产生观测 $o_t$。在包含 $T$ 个控制步的有限时域内，该交互表示为如下部分可观测受控过程：
+
 Consider a robotic system governed by a single decision policy that performs a given manipulation task
 through the joint actions of its actuators.
-The joint robot--environment state $s_t\in\mathcal S$ evolves under the command
+The joint robot-environment state $s_t\in\mathcal S$ evolves under the command
 $u_t\in\mathcal A$ and gives rise to observation $o_t$.
-% 系统观测 $o_t=(I_t^{1:V},q_t)$ 由多视角图像 $I_t^{1:V}=(I_t^1,\ldots,I_t^V)$ 与本体信息 $q_t$ 组成，
-% 其中 $V\ge1$ 为相机数量，$I_t^v$ 为第 $v$ 个视角的图像。
 The observation $o_t=(I_t^{1:V},q_t)$ comprises multi-view images
 $I_t^{1:V}=(I_t^1,\ldots,I_t^V)$ and proprioceptive information $q_t$,
 where $V\ge1$ is the number of cameras and $I_t^v$ is the image from the $v$th view.
@@ -35,17 +23,12 @@ Over a finite horizon of $T$ control steps, this interaction is represented by t
  o_t&\sim O(\cdot\mid s_t),\quad 0\le t\le T.
  \label{eq:interactionmodel}
 \end{align}
-% 其中，$\mathcal S$ 为状态空间，$\mathcal A\subseteq\R^{d_u}$ 为所选机器人控制接口规定的可行指令集合，
-% $d_u$ 为指令维数，$p_0$ 为初始状态分布，$P$ 与 $O$ 分别为状态转移概率核和观测概率核。
 Here, $\mathcal S$ is the state space, $\mathcal A\subseteq\R^{d_u}$ is the admissible command set
 specified by the chosen robot control interface,
 $d_u$ is the command dimension, $p_0$ is the initial-state distribution,
 and $P$ and $O$ are the transition and observation kernels, respectively.
 
-% \subsubsection{离线示范与策略}
 \subsubsection{Offline Demonstrations and Policy}
-% 策略从同一操作任务的固定示范集 $\mathcal D=\{\zeta_i\}_{i=1}^{N}$ 中学习，
-% 第 $i$ 条示范轨迹 $\zeta_i$ 记录观测与示范控制指令：
 The policy learns from a fixed demonstration set $\mathcal D=\{\zeta_i\}_{i=1}^{N}$
 for the same manipulation task. The $i$th demonstration trajectory $\zeta_i$ records
 observations and demonstrated control commands:
@@ -54,54 +37,35 @@ observations and demonstrated control commands:
  u_{T_i-1}^{\mathrm E,i},o_{T_i}^i).
  \label{eq:demonstrations}
 \end{equation}
-% 其中，$N$ 为有限的示范条数，$T_i\ge1$ 为第 $i$ 条轨迹的控制步数，上标 $\mathrm E$ 标识示范指令。
 Here, $N$ is the finite number of demonstrations, $T_i\ge1$ is the number of control steps
 in the $i$th trajectory, and the superscript $\mathrm E$ denotes demonstrated commands.
 
-% 部署策略的信息由因果历史 $\mathcal H_t=(o_{0:t},u_{0:t-1},\mathcal R_{0:t})$ 表示，
-% 其中 $\mathcal R_t$ 记录截至当前决策已获得的时间戳、计划及推理接收状态；无此记录时取空。
-% 生成定义在动作集合 $\mathcal A$ 上的联合指令分布，并据此执行 $u_t\sim\pi_\theta(\cdot\mid\mathcal H_t)$。
-% 其中，$\theta$ 为策略的学习参数，$t=0$ 时指令历史为空。
-% 策略可采用单步动作预测、动作块预测或基础动作加残差的形式。
-The information available to the deployed policy $\pi_\theta$ is represented by the causal history
-$\mathcal H_t=(o_{0:t},u_{0:t-1},\mathcal R_{0:t})$,
-where $\mathcal R_t$ records timestamps, plans, and inference-reception status available before the current decision; it is empty when no such records are used.
-The policy produces a joint command distribution over the action set $\mathcal A$,
-from which the executed command is drawn as $u_t\sim\pi_\theta(\cdot\mid\mathcal H_t)$.
-Here, $\theta$ denotes the learned policy parameters;
-the command history is empty at $t=0$.
-The policy may use single-step action prediction, action-chunk prediction, or base actions augmented by learned residuals.
 
-% \subsubsection{学习与任务目标}
+The information available to the deployed policy $\pi$ is represented by the history $\mathcal H_t$.
+This history includes observations $o_{0:t}$ obtained up to time $t$, previously executed commands $u_{0:t-1}$, 
+and other runtime records before the current decision.
+The policy defines a distribution over admissible control commands,
+with $u_t\sim\pi(\cdot\mid\mathcal H_t)$.
+The command history is empty at $t=0$.
+
 \subsubsection{Learning and Task Objectives}
-% 策略通过示范动作监督进行学习，动作监督目标按实际采样协议加权：
-The policy learns from demonstrated actions, with the action-supervision objective expressed
-as an empirical imitation risk weighted by the sampling protocol:
+% 后续分析考虑基于可用历史的确定性策略，以pi_E表示专家策略。
+For the following analysis, we consider deterministic policies acting on the available history,
+with $\pi_{\mathrm E}$ denoting the expert policy.
+% nu是示范来源的总体分布，样本由控制时刻及其可用历史组成。
+Let $\nu$ denote the population distribution underlying the demonstrations,
+where $(t,h)\sim\nu$ specifies a control step and its available history.
+% 为后续分析，以相对于专家动作的期望平方欧氏偏差刻画模仿目标。
+We quantify the imitation objective by the expected squared Euclidean deviation from the expert's action:
 \begin{equation}
- \widehat R_{\mathrm{IL}}(\theta)
- =\sum_{i=1}^{N}\sum_{t=0}^{T_i-1}w_{it}
-   \mathcal L_{\mathrm{IL}}\!\left(
-   \pi_\theta;\mathcal H_t^i,\zeta_i\right).
- \label{eq:empiricalilrisk}
+ R_\nu(\pi)
+ :=\E_{(t,h)\sim\nu}\norm{\pi(h)-\pi_{\mathrm E}(h)}^2.
+ \label{eq:populationimitationrisk}
 \end{equation}
-% 其中，$\mathcal H_t^i$ 为示范 $\zeta_i$ 在时刻 $t$ 的记录历史，
-% $\mathcal L_{\mathrm{IL}}$ 为衡量策略在该历史下的动作预测与对应示范动作差异的非负损失，
-% $\zeta_i$ 提供相应的监督目标，包括动作块所需的未来动作序列。
-Here, $\mathcal H_t^i$ is the recorded history at time $t$ in demonstration $\zeta_i$,
-and $\mathcal L_{\mathrm{IL}}$ is a nonnegative loss measuring the discrepancy between
-the policy's action predictions at that history and the corresponding demonstrated actions.
-The trajectory $\zeta_i$ supplies the supervision targets, including future action sequences for action-chunk prediction.
-% 其中 $w_{it}\ge0$ 为固定采样权重，总和为1；无效训练索引取零。
-% 当前基础训练按可用帧索引采样，残差训练按构建后的缓存样本采样，不假定轨迹等权。
-The fixed weights satisfy $w_{it}\ge0$ and $\sum_{i,t}w_{it}=1$, with zero weight on excluded indices.
-The current base training samples available frame indices, whereas residual training samples constructed cache records; neither convention implies equal trajectory weighting.
-% 具体动作预测形式、监督时间对齐、损失计算及辅助训练目标在方法部分给出。
-The specific action-prediction forms, temporal alignment of supervision, loss computations,
-and auxiliary training objectives are specified in the method section.
+% 训练通过有限示范上的经验模仿损失来追求降低总体风险，具体损失在方法部分定义。
+Training seeks to reduce this population risk through an empirical imitation loss
+on the finite demonstrations; the specific training losses are defined in Section~\ref{sec:method}.
 
-% 部署目标是在有限时域内完成任务。可测的任务完成函数 $\Phi:\mathcal S^{T+1}\to\{0,1\}$
-% 对满足任务规定的终态或时序要求的状态轨迹取 $1$，否则取 $0$。
-% 据此定义完成指示变量 $\Psi$ 与部署策略 $\pi$ 的任务完成概率 $J(\pi)$：
 The deployment objective is to complete the task within the finite horizon.
 The measurable task-completion function $\Phi:\mathcal S^{T+1}\to\{0,1\}$ equals $1$
 for state trajectories satisfying the task's terminal or temporal requirements and $0$ otherwise.
@@ -111,26 +75,21 @@ This defines the completion indicator $\Psi$ and the task-completion probability
  J(\pi)=\Prob_\pi(\Psi=1).
  \label{eq:visualtask}
 \end{equation}
-% 其中，$\Prob_\pi$ 为系统模型与完整部署策略 $\pi$ 共同诱导的轨迹概率律。
-% 示范监督用于学习策略，任务完成概率 $J(\pi)$ 用于评价其部署表现。
 Here, $\Prob_\pi$ is the trajectory probability law induced jointly by the system model
 and the complete deployed policy $\pi$.
-Demonstration supervision trains the policy, whereas the task-completion probability
-$J(\pi)$ evaluates its deployment performance.
+% 学习旨在降低模仿风险，部署则追求更高任务成功率；后续分析研究二者何时能够联系起来。
+Learning aims to reduce $R_\nu(\pi)$, whereas deployment aims to increase $J(\pi)$.
+A lower imitation risk does not by itself guarantee a higher task-completion probability;
+the following analysis examines conditions relating these objectives.
 
-% \subsubsection{视觉可评估性}
+
 \subsubsection{Visual Assessability}
-% 在固定相机配置与评价时域 $T$ 下，评价域
-% $\Omega_{\mathrm{eval}}\subseteq\mathcal S^{T+1}\times\mathcal I^{T+1}$
-% 由预先指定的、符合系统模型及可见性条件的物理轨迹与视觉历史对组成，
-% 其中，$\mathcal I$ 为多视角图像元组 $I_t^{1:V}$ 的取值空间。
 Under a fixed camera configuration and evaluation horizon $T$, the evaluation domain
 $\Omega_{\mathrm{eval}}\subseteq\mathcal S^{T+1}\times\mathcal I^{T+1}$
 consists of prespecified pairs of physical trajectories and visual histories
 consistent with the system model and visibility conditions,
 where $\mathcal I$ is the space of multi-view image tuples $I_t^{1:V}$.
 
-% \begin{assumption}[视觉可评估性]
 \begin{assumption}[Visual assessability]
 \label{ass:visualassessability}
 % 存在可测的视觉判别函数 $\mathcal V:\mathcal I^{T+1}\to\{0,1\}$，
@@ -143,9 +102,9 @@ such that, for every $(s_{0:T},I_{0:T}^{1:V})\in\Omega_{\mathrm{eval}}$,
 \end{equation}
 \end{assumption}
 
-% 假设~\ref{ass:visualassessability}仅限定评价域内完成事件的视觉可辨识性，
-% 不要求完整状态可观测，也不意味着中间历史足以确定适当动作。
-% 实际评价器误差的检验及域外轨迹的处理由实验协议另行规定。
-Assumption~\ref{ass:visualassessability} only specifies visual identifiability of completion within the evaluation domain;
-it neither requires full-state observability nor implies that intermediate histories suffice to determine appropriate actions.
-The experimental protocol separately specifies assessment of practical evaluator errors and treatment of trajectories outside the domain.
+% 该假设只要求评价域内的任务完成可由视觉判断，不要求完整状态可观测。
+Assumption~\ref{ass:visualassessability} specifies visual identifiability of completion within the evaluation domain,
+without requiring full-state observability.
+% 后续分析中的策略执行及反事实动作比较均限于物理轨迹与视觉历史几乎必然落在评价域内的过程。
+The subsequent analysis considers policy executions and counterfactual action comparisons
+for which $(s_{0:T},I_{0:T}^{1:V})\in\Omega_{\mathrm{eval}}$ almost surely.

@@ -9,6 +9,9 @@
 \label{sec:representationanalysis}
 % 本节直接通过任务后果评价决策相关信息的保留，区分表示损失与保留信息未被充分利用所造成的差距。
 We now assess the preservation of decision-relevant information directly through task consequences, separating representation loss from imperfect use of the retained information.
+This perspective is related to information-state abstractions for partially observed control and
+behaviorally grounded representation learning~\cite{subramanian2022ais,zhang2021dbc}.
+Here, information preservation is measured directly by task-failure consequences under a common continuation policy.
 
 % \subsubsection{表示信息与决策能力}
 \subsubsection{Represented Information and Decision Capability}
@@ -16,7 +19,7 @@ We now assess the preservation of decision-relevant information directly through
 Fix a reference policy $\pi_0$ and a time--history evaluation distribution $\mu$.
 % 动作规则 $a$ 对应的平均失败概率定义为
 Define the mean failure probability associated with an action rule $a$ as
-$\mathcal L_\mu(a)=\E_\mu[Q_t^0(x,a)]$.
+$\mathcal L_\mu(a)=\E_{(t,h)\sim\mu}[Q_t^{\pi_0}(h,a(h))]$.
 % 它衡量替换当前动作后沿 $\pi_0$ 继续执行的平均失败概率。
 This quantity measures the mean failure probability after replacing the current action and following $\pi_0$ thereafter.
 
@@ -76,11 +79,9 @@ finite data and optimization, and the mismatch between action supervision and th
 \subsubsection{When Relation Errors Affect Task Decisions}
 % 关系估计的准确性需要通过动作后果与任务决策联系起来。
 The accuracy of relation estimates must be connected to task decisions through action outcomes.
-% 给定可获得的历史，对未知物理状态取条件平均后的失败概率记为
-Given the available history, denote the failure probability conditionally averaged over unknown physical states by
-$\overline Q_\mu(\mathcal H_t,a)=\E_\mu[Q_t^0(x,a)\mid\mathcal F_h]$,
-% 其中 $a$ 为固定的待比较动作，后续均沿参考策略执行。
-where $a$ is the fixed action being compared, followed in each case by the reference policy.
+% B1中的历史条件失败概率已经平均未观测状态，以下直接用它评价关系信息。
+We use the history-conditioned failure probability $Q_t^{\pi_0}(h,a)$ defined in~\eqref{eq:historyactionvalue},
+which already averages over unobserved physical states.
 
 % 关系变量 $G\in\R^{d_G}$ 描述相关对象的几何或语义关系，
 The relation variable $G\in\R^{d_G}$ describes geometric or semantic relations among relevant objects,
@@ -104,7 +105,7 @@ Here, $d_G$ is the relation dimension.
 Under a fixed distribution $\mu$, there exist a measurable function $f$ and constants $\epsilon_{\mathrm{rel}},K_G\ge0$ such that
 \begin{align}
  \E_\mu\sup_{a\in\mathcal A}
- |\overline Q_\mu(\mathcal H_t,a)-f(G,\chi,a)|
+ |Q_t^{\pi_0}(\mathcal H_t,a)-f(G,\chi,a)|
  &\le\epsilon_{\mathrm{rel}},\nonumber\\
  |f(G,\chi,a)-f(\widehat G,\chi,a)|
  &\le K_G\norm{G-\widehat G},\quad a\in\mathcal A .
@@ -156,5 +157,7 @@ Relation-readout and pseudo-label errors require independent assessment (Appendi
 Under the stated conditions, accurately preserving task-relevant relations and context in $Z$ bounds representation loss; actual decision performance also depends on how the policy uses this information.
 % 准确关系估计本身未必消除运动或接触历史相关的歧义，相关证据也须保留在因果上下文中。
 Accurate relation estimates alone may not resolve ambiguities associated with motion or contact history; relevant evidence must also be retained in the causal context.
+Prior analyses of causal confusion and copycat behavior likewise show that observation history can contain
+useful information while also enabling temporally correlated shortcuts~\cite{dehaan2019,wen2020copycat,chuang2022rap}.
 % 下一节考察新观测与执行记录何时提供额外决策价值，以及该价值如何由及时修正实现。
 The next section examines when new observations and execution records provide additional decision value and how that value is realized through timely corrections.

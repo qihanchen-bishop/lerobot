@@ -1,46 +1,8 @@
-% 核心观点：有限示范下的改进须连接任务信息、实际决策与闭环后果，而非停留在动作误差。
-% 叙述逻辑：A定义学习与任务目标；B建立动作误差与任务后果的条件性联系；
-% C分析RGB+语义和任务关系监督保留决策信息的条件；
-% D依次分析历史证据的潜在价值、残差实现、及时采用与闭环任务收益。
-% 下面comment环境保留早期讨论备忘；当前论证以四个输入文件正文及相应证明为准。
 \section{Problem Formulation and Theoretical Analysis}
 \label{sec:analysis}
 \begin{comment}
 visuomotor imitation learning
 
-
-
-
-任务定义是这样定义，但是要强调我们的成立前提是这个任务的结果是可以被视觉评估
-
-有限机器人示范下的离线视觉运动模仿学习，面向完成条件可通过视觉历史评估的操作任务。
-环境信息由视觉提供，允许使用机器人本体感知与因果执行历史，不依赖物体特权状态或力触觉测量。
-训练使用预先采集的固定示范集；部署期间不查询专家、不更新网络参数，但通过新观测和历史进行闭环决策。
-在声明的相机配置、时间范围与可见性条件下，视觉历史能够提供判定任务完成的充分证据。
-
-- 推动、摆放、分拣和可见区域内的物体整理。
-- 抓取后搬运、放置与具有可见结果的堆叠。
-- 部分布料展开、覆盖、折叠和工具操作。
-
-> 在固定且有限的机器人示范条件下，对于环境信息由视觉提供、任务完成可由视觉历史评估的操作任务，如何通过语义引导的任务关系表示与历史条件反馈，提高离线训练的动作块模仿策略的任务完成表
-> 现？
-
-
-> 策略允许使用本体感知与因果执行历史，部署时进行闭环推理，但不依赖在线专家查询或参数更新。
-
-在一切开始之前，先想清楚，要研究的问题是什么。
-我觉得需要限定进来，因为我们研究的并不是一般的模仿学习
-我的想法就是模仿学习的训练，是基于与模仿动作的动作误差来优化的，但是这种误差其实并不能保证在实际中的表现
-
-1 DAgger的想法是出现错误机器人进一步执行，会改变整个过程，所以需要处理机器人没遇到的状态迭代，进行在线学习对吧
-2 Tu 等人的论文等人的想法是上面的进一步分析，有些影响会逐渐变大，有些影响是会衰减的，增量稳定性的概念，初始状态差异，输入扰动，对后续的轨迹的影响
-（是否有给出具体的条件，怎么判别和计算？）
-模仿误差进入专家闭环，能不能恢复回来
-3 TaSIL不仅学习专家动作，还学习专家的局部变化规律，动作对状态的导数，可以约束附近的行为
-
-既有研究揭示，模仿学习的闭环表现既受到策略诱导分布偏移的影响，也受到闭环系统误差传播特性的影响。
-本文不假定语义表示能够补全未覆盖状态，也不假定历史反馈自动满足稳定性约束，
-而是研究任务关系监督与计划条件反馈能否在有限示范设置下改善关键执行误差及任务完成表现。
 
 % 本章服务于同一研究问题：有限示范下，任务关系表示与历史条件反馈如何支持任务完成表现的改善。
 % 分析不将每个模块作为独立研究目标，而是解释两条互补路径。
@@ -49,9 +11,6 @@ visuomotor imitation learning
 % 随后分析语义与几何监督如何缓解任务相关表示不足，
 % 以及新观测和历史如何提供针对当前计划的增量纠偏信息。
 
-% 覆盖界提供适用边界，表示分解解释监督设计，残差对齐与时序条件指导反馈验证。
-% 以下命题不假定加入语义、查询或记忆就必然提高成功率，
-% 也不以已知恒等式替代完整系统的实验证据。
 
 \end{comment}
 
@@ -60,14 +19,18 @@ visuomotor imitation learning
 % 后续以动作的任务后果为共同尺度，
 % 讨论任务关系与执行上下文应保留什么信息，以及历史条件反馈如何将其用于实际控制。
 % 本章研究有限示范下的任务表现改善，先建立动作误差与任务后果的条件性联系，再分析两条互补机制。
-% 本节研究有限示范下任务表现改善的条件。先联系模仿误差与任务失败，考察完整历史覆盖的限制；
-% 表示压缩可能改善覆盖，但条件动作误差差异也影响风险迁移。随后直接以决策损失分析信息保留，
-% 并研究新观测与执行历史何时能形成有益且及时的修正。
-This section studies conditions for improving task performance from limited demonstrations.
-We first relate imitation error to task failure and examine the limitations of coverage over complete histories.
-Representation compression may improve coverage, but conditional action-error discrepancies also affect risk transfer.
-We then assess information preservation through decision loss and examine when new observations and execution history yield beneficial, timely corrections.
 
+This section studies conditions for improving task performance from limited demonstrations. 
+Starting from the relationship between imitation error and task success, we examine two paths for improvement: 
+preserving information needed to distinguish the task consequences of different actions, 
+and using new observations and execution history to produce effective corrections. 
+
+We first establish conditions under which action error bounds task-failure probability 
+and explain why improved coverage in representation space alone does not guarantee better task performance. 
+We then bound representation loss in terms of task-relation estimation error, 
+providing a conditional basis for semantic guidance and relation supervision. 
+Finally, we characterize the potential decision value of new observations and history, 
+deriving a sufficient condition for feedback to improve task completion.
 \input{formulation}
 \input{action_analysis}
 \input{representation_analysis}

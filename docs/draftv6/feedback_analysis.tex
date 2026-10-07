@@ -13,11 +13,12 @@ The benefit of additional execution evidence depends on the information already 
 \subsubsection{Decision Value of New Observations and History}
 % 以下以动作块执行为具体场景，比较已有计划给出的基础动作与利用新增执行信息生成的修正动作。
 We take action-chunk execution as the concrete setting, comparing a base action supplied by an existing plan with a corrected action generated using additional execution information.
+This setting builds on action-chunk policies and recent methods for updating chunked plans from newer observations~\cite{zhao2023act,a2c2,black2025rtc}.
 % 在固定评价分布 $\mu$ 上，以 $t$ 表示目标执行时刻，将该控制步的动作位置称为执行槽位。
 Under a fixed evaluation distribution $\mu$, let $t$ denote the target execution time, and call the action position at that control step an execution slot.
 % 基础策略为该槽位选中的动作记为
 Denote the action selected by the base policy for this slot by
-$B=\pi_0(x)$.
+$B=\pi_0(h)$.
 % 这里 $\pi_0$ 为包含计划更新、槽位选择及预先规定回退流程的完整基础执行规则。
 Here, $\pi_0$ is the complete base execution rule, including plan updates, slot selection, and predefined fallback procedures.
 % 本节参考策略保留相同的基础与反馈推理、接收和调度流程，仅在执行输出端屏蔽残差。
@@ -34,6 +35,8 @@ The complete causal history $\mathcal F_h$ additionally contains previous execut
 with $\mathcal F_p\subseteq\mathcal F_c\subseteq\mathcal F_h$.
 % 运行时信息仅包含已获得的记录及时间戳。
 Runtime information includes only records and timestamps already available.
+The separation of current information from longer execution history is also motivated by prior findings that
+history can resolve partial observability but can be harmful when a policy exploits action correlations rather than task evidence~\cite{wen2020copycat,chuang2022rap}.
 
 % 新观测和额外历史分别使最优平均失败概率降低的幅度为
 The reductions in optimal mean failure probability due to new observations and additional history are, respectively,
@@ -115,13 +118,13 @@ Without a valid correction, $B$ is executed. If the base plan is also unavailabl
 with $\Lambda=0$ and the candidate residual set to $r=0$.
 % 实际执行指令为 $u_{\mathrm{exec}}=B+\Lambda r$，
 The executed command is $u_{\mathrm{exec}}=B+\Lambda r$.
-% 在执行情形 $x$ 下，候选修正相对基础动作降低失败概率的幅度为
-In situation $x$, the candidate's reduction in failure probability relative to the base action is
-$g_t(x)=Q_t^0(x,B)-Q_t^0(x,\widehat u)$.
-% 由于任务后果是失败概率，$g_t(x)\in[-1,1]$。
-Because the compared outcomes are failure probabilities, $g_t(x)\in[-1,1]$.
+% 在可用历史h下，候选修正相对基础动作降低失败概率的幅度为
+Given history $h$, the candidate's reduction in failure probability relative to the base action is
+$g_t(h)=Q_t^{\pi_0}(h,B)-Q_t^{\pi_0}(h,\widehat u)$.
+% 由于任务后果是失败概率，$g_t(h)\in[-1,1]$。
+Because the compared outcomes are failure probabilities, $g_t(h)\in[-1,1]$.
 % 有效收益为采用后的平均任务收益，取决于哪些修正及时采用，而非仅总体采用率。
-The effective benefit is $\Gamma_{\mathrm{exec},\mu}=\E_\mu[\Lambda g_t(x)]$;
+The effective benefit is $\Gamma_{\mathrm{exec},\mu}=\E_\mu[\Lambda g_t(h)]$;
 it depends on which corrections are adopted in time, not merely the overall adoption rate.
 
 % 参照与修正控制器在共同过程假设下共享计算状态转移律（含接收过程），仅执行修正不同；不要求不同闭环轨迹有相同实际完成时刻。
@@ -134,11 +137,11 @@ The reference and corrected controllers share the same computation-state transit
 Under Assumption~\ref{ass:commonprocess},
 % 若完整部署策略 $\pi$ 在其访问历史上执行上述 $u_{\mathrm{exec}}$，
 if the complete deployed policy $\pi$ executes the above $u_{\mathrm{exec}}$ on its visited histories,
-% 而参考策略在相同历史上执行 $B=\pi_0(x)$，则
-while the reference policy executes $B=\pi_0(x)$ on the same histories, then
+% 而参考策略在相同历史上执行 $B=\pi_0(h)$，则
+while the reference policy executes $B=\pi_0(h)$ on the same histories, then
 \begin{equation}
  J(\pi)-J(\pi_0)
- =T\,\E_{\bar\mu_\pi}[\Lambda g_t(x)].
+ =T\,\E_{\bar\mu_\pi}[\Lambda g_t(h)].
  \label{eq:closedlooptaskgain}
 \end{equation}
 % 因此，实际访问分布上的有效任务收益为正，当且仅当任务完成概率高于参考策略。

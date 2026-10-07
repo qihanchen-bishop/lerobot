@@ -1,156 +1,172 @@
-% 核心观点：示范动作误差不是任务表现本身；任务改善取决于部署访问情形中的动作后果。
-% 叙述逻辑：B1定义动作后果与性能差分；B2给出覆盖、敏感性条件下的动作误差界；
-% B3用表示风险迁移的核心公式提出关系信息与执行更新两个问题；详细证明留附录，动作MSE诊断留D及附录。
-% C、D继续研究表示与反馈的条件性作用，不预先声称语义降低C或反馈降低L。
-% 边界：覆盖界只刻画动作风险迁移所需的条件；完整动作历史可能导致结构性支持失配。
-% 不假定专家在离线数据之外可查询，也不由固定示范推出覆盖或随N变化的统计保证。
 \subsection{From Imitation Error to Task Performance}
 \label{sec:actionanalysis}
-% 动作误差能否约束任务失败，取决于误差发生的情形及其后续任务后果；以下建立这一联系，并分析表示空间风险迁移的机会与限制。
 Whether action error bounds task failure depends on where deviations occur and their subsequent task consequences.
-We establish this connection and examine the opportunities and limitations of risk transfer through representations.
+We establish this connection and show that transferring action risk to deployment
+depends jointly on representation-level coverage and conditional action-error discrepancy.
 
-% \subsubsection{动作对任务的影响}
-\subsubsection{Effects of Actions on Task Outcomes}
+\subsubsection{Task-Performance Difference Between Policies}
 \label{sec:actionconsequences}
-% 在同一执行情形下比较不同动作，随后均沿同一参考策略 $\pi_0$ 继续执行，
-To compare actions in the same execution situation, we follow each action with the same reference policy $\pi_0$.
-% 即可用最终失败概率的差异衡量当前动作对任务的影响。
-The resulting difference in failure probability measures the effect of the current action on the task.
-% 为保留任务时序与策略历史，引入分析用扩展状态 $x_t=(s_{0:t},\mathcal H_t)$。
-To retain task timing and policy history, we introduce the augmented analysis state $x_t=(s_{0:t},\mathcal H_t)$.
-% 后续分析限于固定的确定性策略，并简写 $\pi(x_t)=\pi(\mathcal H_t)$；
-The following analysis considers fixed deterministic policies and uses the shorthand $\pi(x_t)=\pi(\mathcal H_t)$;
-% 策略实际仅使用可获得的历史 $\mathcal H_t$。
-the policy itself uses only the available history $\mathcal H_t$.
+We compare a policy $\pi$ with a reference policy $\pi_0$
+through their task-failure probabilities and express the
+difference as a sum of expected single-step action consequences.
+Each consequence is defined by comparing alternative actions
+at the same history while following $\pi_0$ afterward
+\cite{ross2014aggrevate,cheng2018value}.
+This decomposition provides the basis for relating imitation
+error to task performance.
 
-% 在控制步 $t$ 的执行情形 $x$ 下先执行动作 $a$、随后遵循 $\pi_0$ 时，
-Let $Q_t^0(x,a)$ denote the conditional probability of task failure when action $a$ is executed
-% 任务失败的条件概率记为 $Q_t^0(x,a)$。
-in situation $x$ at control step $t$ and $\pi_0$ is followed thereafter.
-% 执行参考动作时的失败概率为 $V_t^0(x)=Q_t^0(x,\pi_0(x))$，
-The failure probability under the reference action is $V_t^0(x)=Q_t^0(x,\pi_0(x))$.
-% 当前动作相对参考动作造成的失败概率差为
-The change in failure probability relative to that action is
-$A_t^0(x,a)=Q_t^0(x,a)-V_t^0(x)$.
-% $A_t^0(x,a)>0$ 表示该动作增加失败概率，$A_t^0(x,a)<0$ 表示降低失败概率。
-Thus, $A_t^0(x,a)>0$ indicates an increase in failure probability, whereas $A_t^0(x,a)<0$ indicates a decrease.
+We consider deterministic policies acting on the available history.
+Given a history $\mathcal H_t=h$ and a candidate action
+$a\in\mathcal A$, define the action-value function as the
+probability of task failure ($\Psi=0$):
+\begin{equation}
+ Q_t^{\pi_0}(h,a)
+ :=\Prob^{a,\pi_0}\!\left(\Psi=0\mid\mathcal H_t=h\right).
+ \label{eq:historyactionvalue}
+\end{equation}
+Here, $\Prob^{a,\pi_0}$ denotes the probability law obtained by
+taking action $a$ at time $t$ and following $\pi_0$ afterward.
 
-% \begin{assumption}[共同的比较过程]
-\begin{assumption}[Common comparison process]
+When the current action is also selected by $\pi_0$, this reduces
+to the value function of $\pi_0$, $V_t^{\pi_0}(h) :=Q_t^{\pi_0}\bigl(h,\pi_0(h)\bigr).$
+The effect of choosing $a$ instead of $\pi_0(h)$ is therefore
+measured by
+\begin{equation}
+ A_t^{\pi_0}(h,a)
+ :=Q_t^{\pi_0}(h,a)-V_t^{\pi_0}(h).
+ \label{eq:actionconsequence}
+\end{equation}
+Thus, $A_t^{\pi_0}(h,a)>0$ indicates an increase in failure probability, whereas $A_t^{\pi_0}(h,a)<0$ indicates a decrease.
+
+To relate these action-level consequences to differences in
+task performance between policies, we require the following
+common comparison conditions.
+\begin{assumption}[Common task and environment]
 \label{ass:commonprocess}
-% 比较策略共享初始分布、受控转移和任务完成函数。
-The compared policies share the initial distribution, controlled transitions, and task-completion function.
-% 包含运行记录时，共同转移也包括计算与记录过程，而不只是相同的机器人动力学。
-When runtime records are included, the common transitions also cover the computation and recording process, not only the robot dynamics.
-% 参考策略 $\pi_0$ 在比较所涉及的全部历史上有定义；
-The reference policy $\pi_0$ is defined on every history involved in the comparison.
-% 动作规则和上述条件期望可测，执行动作属于 $\mathcal A$。
-The action rules and the conditional expectations above are measurable, and executed actions belong to $\mathcal A$.
-\end{assumption}
+The compared policies share the same initial distribution and
+task-completion criterion. Given a history $h$ and an action $a$,
+the next available history follows a conditional distribution
+that does not otherwise depend on the policy.
+The reference policy $\pi_0$ is defined on all histories
+involved in the comparison.
+\end{assumption} 
 
-% 以 $F(\pi)=1-J(\pi)$ 表示策略 $\pi$ 的任务失败概率。
 Let $F(\pi)=1-J(\pi)$ denote the task-failure probability of policy $\pi$.
-% 待评价策略诱导的时刻--历史分布 $\mu_\pi^t$ 描述其在控制步 $t$ 实际访问的 $x_t$，
-The time--history distribution $\mu_\pi^t$ describes the augmented histories $x_t$ actually visited by the evaluated policy at control step $t$.
-% 其等权时间混合记为 $\bar\mu_\pi=T^{-1}\sum_{t=0}^{T-1}\mu_\pi^t$，
-Its uniform mixture over time is $\bar\mu_\pi=T^{-1}\sum_{t=0}^{T-1}\mu_\pi^t$,
-% 其中混合的样本保留时间索引。
-with each sample retaining its time index.
-% 有限时域性能差分恒等式给出
-The finite-horizon performance-difference identity gives
+To evaluate $\pi$ relative to $\pi_0$, we set $a=\pi(h)$
+and aggregate the resulting action consequences along trajectories generated by $\pi$.
+
+Applying the finite-horizon performance-difference identity~\cite{kakade2002,ross2014aggrevate,cheng2018value}
+to these one-step action effects gives
 \begin{equation}
  F(\pi)-F(\pi_0)
- =T\,\E_{\bar\mu_\pi}\!\left[A_t^0(x,\pi(x))\right].
- \label{eq:pd}
+ =\E_\pi\!\left[
+ \sum_{t=0}^{T-1}A_t^{\pi_0}(\mathcal H_t,\pi(\mathcal H_t))
+ \right].
+\label{eq:pd}
 \end{equation}
-% 式\eqref{eq:pd}沿待评价策略 $\pi$ 实际访问的情形计算动作后果，
+Here, $\E_\pi$ denotes expectation over trajectories generated by $\pi$.
 Equation~\eqref{eq:pd} evaluates action effects at the situations actually visited by the evaluated policy $\pi$.
-% 这一标准性能差分关系\cite{cheng2018value,ross2014aggrevate}
-This standard performance-difference relation~\cite{cheng2018value,ross2014aggrevate}
-% 为后续分析提供共同尺度，证明见附录~\ref{app:actionproofs}。
-provides a common measure for the subsequent analysis; a proof is given in Appendix~\ref{app:actionproofs}.
+Its proof is given in Appendix~\ref{app:pdidentity}.
+This relation allows task-performance differences to be
+bounded through the consequences of action deviations.
 
-% \subsubsection{动作误差何时能够约束失败概率}
-\subsubsection{When Action Error Bounds Failure Probability}
+
+\subsubsection{Task-Failure Bounds from Imitation Risk}
 \label{sec:actionerrorbound}
-% 以专家策略 $\pi_{\mathrm E}$ 为参考，下面考察平均动作误差在什么条件下能够约束任务失败概率。
-Taking the expert policy $\pi_{\mathrm E}$ as the reference, we ask when mean action error can bound task-failure probability.
-% 以 $\nu$ 表示评价动作误差的参考分布，其样本是控制时刻与完整执行历史组成的 $(t,x_t)$。
-% 相应的平均动作平方误差为 $R_\nu(\pi)=\E_{(t,x)\sim\nu}\norm{\pi(x)-\pi_{\mathrm E}(x)}^2$。
-Let $\nu$ be the reference distribution used to evaluate action error, with samples $(t,x_t)$ specifying a control step and its complete execution history.
-% 在专家示范场景中，$\nu$ 可取为示范采集过程诱导的总体分布，而不是已采集有限样本的经验分布。
-For expert demonstrations, $\nu$ may be the population distribution induced by the demonstration-collection process, rather than the empirical distribution of the collected samples.
-The corresponding mean squared action error is $R_\nu(\pi)=\E_{(t,x)\sim\nu}\norm{\pi(x)-\pi_{\mathrm E}(x)}^2$.
-% $\nu$ 描述动作误差在哪里被衡量，而 $\bar\mu_\pi$ 描述策略在部署时实际遇到的情况。
-Whereas $\nu$ specifies where action error is evaluated, $\bar\mu_\pi$ describes the situations actually encountered during deployment.
-% 以下两个条件足以建立任务表现界。
-The following two conditions suffice to establish a task-performance bound.
+Taking the expert policy as the reference,
+we show that the imitation risk $R_\nu(\pi)$ bounds task-failure probability $F(\pi)$
+when demonstrations sufficiently cover deployment histories
+and action deviations have bounded task consequences.
 
-% \emph{覆盖：}任意一类执行情况在部署中出现的概率，不超过参考分布中对应概率的 $C$ 倍：
-\emph{Coverage:} For any class of execution situations, its probability during deployment must be at most $C$ times its probability under the reference distribution:
+Imitation risk is evaluated under the demonstration distribution $\nu$,
+but deployment histories may follow a different distribution because actions depend on $\pi$.
+Let $\mu_\pi^t$ denote the distribution of $(t,\mathcal H_t)$ at control step $t$ under $\pi$.
+The distribution $\bar\mu_\pi=T^{-1}\sum_{t=0}^{T-1}\mu_\pi^t$ corresponds to choosing
+a control step uniformly and observing its history.
+
+% 对待评价策略，假设部署分布由示范分布以有限常数控制。
+\begin{assumption}[Demonstration coverage]
+\label{ass:democoverage}
+
+For the evaluated policy $\pi$, there exists a uniform constant
+$1\le C<\infty$ such that
 \[
- \bar\mu_\pi(\mathcal B)\le C\,\nu(\mathcal B)
- \quad\text{for every measurable event }\mathcal B.
+\bar\mu_\pi(\mathcal B)\le C\,\nu(\mathcal B)
 \]
-% 其中，$\mathcal B$ 为时刻--历史空间中的一类执行情况，$1\le C<\infty$ 为统一常数。
-% 该条件既排除参考分布完全未覆盖的部署情况，也限制参考分布对其出现概率的低估。
-Here, $\mathcal B$ is a set of time--history pairs representing a class of execution situations, and $1\le C<\infty$ is a uniform constant.
+for every measurable set $\mathcal B$ of pairs $(t,h)$.
+\end{assumption}
 This condition excludes deployment situations absent from the reference distribution and limits how much their probabilities can be underestimated.
 
-% \emph{敏感性：}在固定动作尺度下，偏离专家动作所引起的失败概率变化必须受动作距离约束：
-\emph{Sensitivity:} For a fixed action scale, the change in failure probability caused by deviating from the expert action must be bounded by the action distance:
+\begin{assumption}[Action sensitivity]
+\label{ass:actionsensitivity}
+Let $A_t^{\mathrm E}$ denote the action effect with the expert
+policy as the reference.
+For a fixed action scale, there exists a uniform constant
+$0\le L<\infty$ such that
 \[
- |A_t^{\mathrm E}(x,a)|
- \le L\norm{a-\pi_{\mathrm E}(x)}.
+|A_t^{\mathrm E}(h,a)|
+\le L\norm{a-\pi_{\mathrm E}(h)}
 \]
-% 其中，$A_t^{\mathrm E}$ 为以专家作为参考策略时的动作影响，$0\le L<\infty$ 为在所考察时刻、历史及动作上统一成立的常数。
-Here, $A_t^{\mathrm E}$ is the action effect defined using the expert as the reference policy,
-and $0\le L<\infty$ is a uniform constant over the times, histories, and actions considered.
-% 在这两个条件下，性能差分恒等式给出如下失败概率上界（证明见附录~\ref{app:actionproofs}）：
-Under these conditions, the performance-difference identity yields the following bound (Appendix~\ref{app:actionproofs}):
+for all relevant $(t,h,a)$.
+\end{assumption}
+This assumption allows action deviations to be translated into bounds
+on changes in task-failure probability.
+
+Following the connection between deployment imitation error
+and task cost~\cite{ross2011}, Assumptions~\ref{ass:democoverage}
+and~\ref{ass:actionsensitivity}, together with the
+performance-difference identity, yield the following bound (Appendix~\ref{app:actionriskbound}):
 \begin{equation}
  F(\pi)\le F(\pi_{\mathrm E})+TL\sqrt{C R_\nu(\pi)}.
  \label{eq:successbound}
 \end{equation}
-% 这一推论沿用由部署模仿误差约束任务代价的思路\cite{ross2011}，在此通过覆盖条件和连续动作敏感性连接参考动作误差与失败概率。
-This corollary follows the use of deployment imitation error to bound task cost~\cite{ross2011}, here relating reference action error to failure probability through coverage and continuous-action sensitivity.
-% 其中C控制参考误差向部署误差的转换，L控制动作偏差向任务后果的转换。
-The factor $C$ controls the transfer from reference to deployment action error, while $L$ controls the conversion of action deviations into task effects.
-% 在其他量不变且条件成立时，减小R、C或L均收紧上界，但不直接给出不同策略实际成功率的排序。
-With the other quantities fixed and the conditions satisfied, reducing $R_\nu$, $C$, or $L$ tightens the bound, without establishing an ordering of actual policy success rates.
-% 有限示范上的训练误差与总体误差R的联系还需单独的泛化论证。
-Connecting finite-demonstration training error to the population error $R_\nu$ requires a separate generalization argument.
-% L可能很大或缺少有限统一界，识别关键情形本身并不改变物理系统的敏感性。
-The constant $L$ may be large or lack a finite uniform bound; identifying critical situations does not itself change physical sensitivity.
+
+Here, $C$ accounts for the shift from demonstration to deployment
+distributions, while $L$ measures the sensitivity of task outcomes
+to action deviations.
+With other quantities fixed, a smaller $R_\nu(\pi)$ yields
+a tighter upper bound on task-failure probability.
+
+This bound identifies coverage and action sensitivity as key conditions
+for translating imitation accuracy into task-performance guarantees.
+We next examine the limitations of complete-history coverage
+and the role of representations in risk transfer.
 
 % \subsubsection{表示层面的覆盖与条件误差差异}
 \subsubsection{Representation-Level Coverage and Conditional Error Discrepancy}
-% 完整历史覆盖可因小幅动作偏差失效。
-Coverage over complete histories can fail after a small action deviation (Appendix~\ref{app:historycoverage}).
+% 完整历史上的覆盖假设可因小幅动作偏差失效。
+Assumption~\ref{ass:democoverage} is restrictive for complete histories
+and can fail after a small action deviation (Appendix~\ref{app:historycoverage}).
 % 将历史编码为任务表示可以合并无关差异，但也可能合并需要不同动作的情形。
 Encoding histories into a task representation can merge irrelevant differences, but may also merge situations requiring different actions.
+This tension between distributional alignment and information loss under a noninvertible representation
+also appears in domain-adaptation analyses~\cite{johansson2019support,zhao2019invariant}.
+The result below specializes that issue to action-risk transfer between reference and deployment distributions.
 
 % 固定策略、专家和同一个保留时间索引的可测因果编码器Z；mu_Z和nu_Z是部署与参考分布诱导的表示分布。
 For a fixed policy, expert, and common measurable causal encoder $Z=\phi(t,\mathcal H_t)$ retaining the time index, let $\mu_Z$ and $\nu_Z$ be the representation distributions induced by $\bar\mu_\pi$ and $\nu$.
-% 表示覆盖要求每类表示在部署中的出现概率不超过参考概率的C_phi倍。
-Suppose $\mu_Z(\mathcal B)\le C_\phi\nu_Z(\mathcal B)$ for every measurable event $\mathcal B$, with $1\le C_\phi<\infty$.
+% 用表示层面的覆盖替代完整历史覆盖，不再要求假设3成立。
+In place of Assumption~\ref{ass:democoverage}, suppose
+$\mu_Z(\mathcal B)\le C_\phi\nu_Z(\mathcal B)$ for every measurable representation event $\mathcal B$, with $1\le C_\phi<\infty$.
 % 同一表示下，两种分布仍可能包含不同历史；以D_phi衡量其条件平均动作平方误差的差异。
 Even at the same representation, the two distributions may contain different histories.
-Let $e(x)=\norm{\pi(x)-\pi_{\mathrm E}(x)}$ and define their conditional-error discrepancy as $D_\phi=\E_{z\sim\mu_Z}|m_\mu(z)-m_\nu(z)|$,
-where $m_\mu(z)=\E_{\bar\mu_\pi}[e(x)^2\mid Z=z]$ and $m_\nu(z)=\E_\nu[e(x)^2\mid Z=z]$.
-% 当动作平方误差在两分布下可积、条件均值存在可测版本且B2的敏感性条件成立时，有如下风险迁移及任务界。
-With square-integrable action error under both distributions, measurable versions of these conditional means, and the sensitivity condition of Section~\ref{sec:actionerrorbound},
-\begin{align}
- \E_{\bar\mu_\pi}e(x)^2
- &\le C_\phi R_\nu(\pi)+D_\phi,
- \label{eq:representationrisktransfer-main}\\
- F(\pi)&\le F(\pi_{\mathrm E})
+Let $e(h)=\norm{\pi(h)-\pi_{\mathrm E}(h)}$ and define their conditional-error discrepancy as $D_\phi=\E_{z\sim\mu_Z}|m_\mu(z)-m_\nu(z)|$,
+where $m_\mu(z)=\E_{\bar\mu_\pi}[e(h)^2\mid Z=z]$ and $m_\nu(z)=\E_\nu[e(h)^2\mid Z=z]$.
+% 风险迁移只需要表示覆盖、平方可积和可测条件均值，不需要动作敏感性假设。
+With square-integrable action error under both distributions and measurable versions of these conditional means,
+\begin{equation}
+ \E_{\bar\mu_\pi}e(h)^2
+ \le C_\phi R_\nu(\pi)+D_\phi.
+ \label{eq:representationrisktransfer-main}
+\end{equation}
+% 将动作风险转换成任务失败概率界时，仍需动作敏感性假设。
+If Assumption~\ref{ass:actionsensitivity} also holds, the performance-difference identity gives
+\begin{equation}
+ F(\pi)\le F(\pi_{\mathrm E})
        +TL\sqrt{C_\phi R_\nu(\pi)+D_\phi}.
  \label{eq:representationcoveragebound}
-\end{align}
-% 第一式按表示条件化后迁移动作风险，第二式接入B2的敏感性分析；详细证明见附录。
-The first inequality transfers action risk by conditioning on the representation; the second applies the sensitivity argument of Section~\ref{sec:actionerrorbound}.
+\end{equation}
+% 附录给出风险迁移与任务界的详细证明。
 Appendix~\ref{app:representationcoverage} gives the detailed proof.
 % 该界同时取决于覆盖加权的参考风险与条件误差差异，覆盖常数较小本身不足以收紧上界。
 The bound depends jointly on the coverage-weighted reference risk and the conditional error discrepancy; a smaller coverage factor alone need not tighten it.
