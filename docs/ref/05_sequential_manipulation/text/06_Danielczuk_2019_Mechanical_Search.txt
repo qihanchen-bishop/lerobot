@@ -1,0 +1,519 @@
+                                                                         Mechanical Search: Multi-Step Retrieval
+                                                                         of a Target Object Occluded by Clutter
+                                                          Michael Danielczuk∗1 , Andrey Kurenkov∗2 , Ashwin Balakrishna1 , Matthew Matl1 ,
+                                                       David Wang1 , Roberto Martín-Martín2 , Animesh Garg2 , Silvio Savarese2 , Ken Goldberg1
+
+                                           Abstract— When operating in unstructured environments
+                                        such as warehouses, homes, and retail centers, robots are
+                                        frequently required to interactively search for and retrieve
+                                        specific objects from cluttered bins, shelves, or tables. Me-
+arXiv:1903.01588v1 [cs.RO] 4 Mar 2019
+
+
+
+
+                                        chanical Search describes the class of tasks where the goal
+                                        is to locate and extract a known target object. In this paper,
+                                        we formalize Mechanical Search and study a version where
+                                        distractor objects are heaped over the target object in a bin.
+                                        The robot uses an RGBD perception system and control policies
+                                        to iteratively select, parameterize, and perform one of 3 actions
+                                        – push, suction, grasp – until the target object is extracted, or
+                                        either a time limit is exceeded, or no high confidence push or
+                                        grasp is available. We present a study of 5 algorithmic policies
+                                        for mechanical search, with 15,000 simulated trials and 300
+                                        physical trials for heaps ranging from 10 to 20 objects. Results
+                                        suggest that success can be achieved in this long-horizon task
+                                        with algorithmic policies in over 95% of instances and that the
+                                        number of actions required scales approximately linearly with
+                                        the size of the heap. Code and supplementary material can be
+                                        found at http://ai.stanford.edu/mech-search.
+
+                                                                 I. I NTRODUCTION
+                                                                                                                    Fig. 1: To locate and extract the target object from the bin, the system selects
+                                           In unstructured settings such as warehouses or homes,                    between 1) grasping objects with a parallel-jaw gripper, 2) pushing objects,
+                                        robotic manipulation tasks are often complicated by the                     or 3) grasping objects with a suction-cup gripper until the target object is
+                                        presence of dense clutter that obscures desired objects.                    extracted, a time limit is exceeded, or no high-confidence push or grasp is
+                                                                                                                    available.
+                                        Whether a robot is trying to retrieve a can of soda from a
+                                        stuffed refrigerator or pick a customer’s order from warehouse                In this paper, we propose a framework that integrates
+                                        shelves, the target object is often either not immediately                  perception, action selection, and manipulation policies to
+                                        visible or not easily accessible for the robot to grasp. In these           address a version of the Mechanical Search problem, with 3
+                                        situations, the robot must interact with the environment to                 contributions:
+                                        localize the target object and manipulate the environment to                 1) A generalized formulation of the family of Mechanical
+                                        expose and plan grasps (see Figure 1). Mechanical Search                         Search problems and a specific version for retrieving
+                                        describes a class of tasks where the goal is to locate and                       occluded target objects from cluttered bins using a series
+                                        extract the target object, and poses challenges in visual                        of parallel jaw grasps, suction grasps and pushes.
+                                        reasoning, task, motion, and grasp planning, and action                      2) An implementation of this version, using depth-based
+                                        execution.                                                                       object segmentation, single-shot image recognition, low-
+                                           Significant progress has been made in recent years on                         level grasp and push planners, and five action selection
+                                        sub-problems relevant to Mechanical Search. Deep-learning                        policies.
+                                        methods for segmenting and recognizing objects in images                     3) Data from simulation and physical experiments evalu-
+                                        have demonstrated excellent performance in challenging                           ating the performance of the five policies and that of
+                                        domains [16, 29, 40] and new grasp planning methods have                         a human supervisor. For simulated experiments, each
+                                        leveraged convolutional neural networks (CNNs) to plan and                       policy was evaluated on a set of 1000 heaps of 10-20
+                                        execute high-quality grasps directly from sensor data [13,                       objects sampled from 1600 3D object models; physical
+                                        23, 25]. By combining object segmentation and recognition                        experiments used 50 heaps sampled from 75 common
+                                        methods with action selectors that can effectively choose                        household objects.
+                                        between different motion primitives in long horizon sequential
+                                        tasks, multi-step policies can search for a target object and                           II. BACKGROUND AND R ELATED W ORK
+                                        extract it from clutter.                                                         Perception for Sequential Interaction: Searching for
+                                          ∗ Authors have contributed equally and names are in alphabetical order.   an object of interest in a static image is a central problem
+                                          1 University of California, Berkeley 2 Stanford University                in active vision [28, 37, 44]. There has also been work
+on optimizing camera positioning for improving visual               object using pushing and grasping actions, but when the
+recognition (i.e., active perception [1, 2]) and embodied           objects are arranged in a shelf. We consider significantly more
+interactions to explore (i.e., interactive perception [4, 14]).     cluttered settings, while also executing temporally extended
+Mechanical Search differs from prior works in interactive           manipulation policies.
+perception in that it deals with long grasping sequences.
+   Recent deep learning based methods achieve remarkable             III. M ECHANICAL S EARCH : P ROBLEM F ORMULATION
+success in segmentation of RGB [35, 38] and depth images [6],
+                                                                       In Mechanical Search, the objective is to retrieve a specific
+as well as in localizing visual templates in uncluttered [22,
+                                                                    target object (x∗ ) from a physical environment (E) containing
+46] and cluttered scenes [29, 40]. Furthermore, one-shot
+                                                                    a variety of objects X within task horizon H while minimizing
+learning approaches using Siamese Networks for matching a
+                                                                    time. The agent is initially provided with a specification of
+novel visual template in images [22, 46] can translate well
+                                                                    the target object in the form of images, text description, a 3D
+to pattern recognition in clutter [29, 40]. We build on Mask
+                                                                    model, or other representation(s). We can frame the general
+R-CNN [16] by training a variant for depth-image based
+                                                                    problem of Mechanical Search as a Partially Observable
+instance segmentation and leverage a Siamese network for
+                                                                    Markov Decision Process (POMDP), defined by the tuple
+target template matching for localization.
+                                                                    (S, A, T , R, Y).
+     Grasping and Manipulation in Clutter: Past approaches             • States (S). A bounded environment E at time t con-
+to this problem can be broadly characterized as model-based              taining N objects st = {O1,t , ..., ON,t }. Each object state
+with geometric knowledge of the environment [3, 30, 41]                  Oi,t includes a ground truth triangular mesh defining the
+and model-free with only raw visual input [20, 24, 39].                  object geometry and pose. Each state also contains the
+Recent studies have leveraged CNNs for casting grasping as               pose and joint states of the robot as well as the poses
+a supervised learning problem with impressive results [11,               of the sensor(s).
+18, 19, 23, 25, 45, 49]. Pushing and singulation can facilitate        • Actions (A). A fixed set of parameterized motion
+grasping in cluttered scenes [5, 8, 17]. Techniques for grasping         primitives.
+in clutter, either as open-loop prediction or as closed-loop           • Transitions (T ). Unknown transition probability distri-
+continuous control, have been studied but have not dealt                 bution P : S × S × A → [0, ∞).
+with the multi-step plans that are critical to attain successful       • Rewards (R). Function given by Rt = R(st , at ) → R
+grasps on occluded or inaccessible target objects [19, 31]. In           at time t that estimates the change in probability of
+contrast, we formulate Mechanical Search as an interactive               successfully extracting the target object x∗ ∈ X within
+search problem in significant clutter, necessitating a multi-step        task horizon H.
+process combining grasping and pushing actions.                        • Observations (Y). Sensor data, such as an RGB-D
+     Sequential Decision Making: Sequential composition of               image, yt from robot’s sensor(s) at time t (see Fig. 1).
+primitives to enable long-term environment interaction has             In this paper, we focus on a specific version of Mechanical
+often been approached through hierarchical decomposition            Search: extracting a target object specified by a set of k
+of control policies to manage task complexity. The idea of          RGB images from a heap of objects in a single bin while
+using hierarchical models for complex tasks has been widely         minimizing the number of actions needed. For this problem,
+explored in both reinforcement learning and robotics [21, 42,       we precisely specify the observations, the action set, and the
+43]. Training such multi-level models can be computationally        reward function. All other aspects of the problem formulation
+expensive and has been limited to either simulated or               are sufficiently captured by the general POMDP formulation
+elementary physical tasks [10, 48].                                 above.
+     Search Based Methods: Traditional task planning ap-               • Observations. An RGB-D image from an overhead
+proaches abstract away perception and focus on high-level                camera.
+task plans and low-level state spaces [12, 41]. For instance,          • Actions.
+in robotic applications, hierarchical methods have been used               – Parallel Jaw Grasping: A center point p = (x, y, z) ∈
+to learn task planning strategies while abstracting away low-             R3 between the jaws, and an angle in the plane of the
+level motion planning [34, 41, 47]. However, high-level                   table φ ∈ S1 representing the grasp axis [25].
+planning requires complete domain specification a priori,                  – Suction Grasping: A target point p = (x, y, z) ∈ R3
+and complex geometric and free space reasoning make this                  and spherical coordinates (φ , θ ) ∈ S2 representing the
+approach applicable only to uncluttered environments with                 axis of approach of the suction cup [26].
+few objects, such as a tabletop with one or two objects.                   – Pushing: A linear motion of the robot end-effector
+   A similar problem has been studied in the context of                   between two points p and p0 ∈ R3 .
+mobility under problem domains of target-driven and semantic           • Reward. Let vt , derived from yt , denote the estimated
+visual navigation [15, 32, 50]. These studies look at finding            grasp reliability on the target object. An intuitive reward
+visual targets in unknown environments without maps through              function would be the increase in estimated grasp
+sensory pattern matching. The work by Gupta et al. [14] is               reliability on the target object:
+the closest to the approach considered in this paper. Their
+work also considers the problem of searching for a specific                                 R(st , at ) = vt+1 − vt
+Fig. 2: System architecture. At each timestep, the RGB-D image of the bin is segmented using a variant of Mask R-CNN trained on synthetic depth images.
+The colorized masks are each assigned a probability of belonging to the target object using a Siamese Network as a pattern comparator. These masks are
+then fed to an action selector, which chooses which object to manipulate and passes that object mask as context to all the action policies. These policies
+each compute an action with an associated quality score and pass them back to the action selector, which then chooses an action and executes it on the
+physical system. This process continues until the target object is retrieved. In simulation, the perception pipeline is removed and planners operate on
+full-state information rather than object masks.
+
+      The policies used in this paper do not directly optimize                 target object images. If the mask with the highest score has
+      this reward function because it is difficult to compute;                 a score above recognition confidence threshold tr , the mask
+      instead, they continue to remove and push objects via                    is labeled as the target object. Otherwise, we report that no
+      heuristic methods until the target object is extracted. In               masks match the target object. See the appendix for training
+      future work, we will develop methods to approximate                      and implementation details.
+      this function.
+                                                                               B. Search Policy
+          IV. P ERCEPTION AND D ECISION S YSTEM                                  Given the RGB-D image and the output of the perception
+  As shown in Figure 2, we implement the system both in                       pipeline, the system executes the next action in the search
+simulation and for physical experiments via a pipeline for                    procedure by selecting the object to act on and the action to
+perception and policy execution.                                              perform on it. Our approach to the version of Mechanical
+                                                                              Search described in Section III for bin picking includes
+A. Perception                                                                 searching for actions in three continuous spaces (parallel
+   The system first processes the RGB-D image into a set of                   jaw grasp, suction grasp and push). However, more complex
+segmentation masks using an object instance segmentation                      versions of Mechanical Search (e.g., search for an object
+pipeline trained on synthetic depth images. Then, a Siamese                   in a house) could have even more complex search spaces
+network is used to attempt to identify one of the masks as                    (e.g., navigation). To allow our method to scale to these more
+the target object, and a target mask is returned if a high                    complex versions, we propose a hierarchical approach: (1)
+confidence match is found. If no high confidence match is                     an action selector that queries a set of action policies on a
+found, the perception system reports that no masks match                      specific object for a particular action and associated quality
+the target object.                                                            metric and (2) action policies that correspond to the possible
+      Object Instance Segmentation: We first compute a mask                   actions in the problem formulation.
+for each object instance. Each mask is a binary image with the                        Action Selection: The search policy first determines
+same dimensions as the input RGB-D image. These masks                         which object masks to send to the action policies. Then, using
+are computed with SD Mask R-CNN, a variant of Mask                            the actions and associated quality metric returned by the low
+R-CNN trained exclusively on synthetic depth images [9].                      level policies, the high level planner determines whether to
+It converts a depth image into a list of unclassified binary                  execute the action in the environment.
+object masks, and generalizes well to arbitrary objects without                  The action selector takes as input from the perception
+retraining. Recent results suggest that depth cues alone                      system the set of all m visible object masks ([o1 , . . . om ]),
+may be sufficient for high-performance segmentation, and                      possibly including an object mask that is positively identified
+this network’s generalization capabilities are beneficial in a                as the target object (oT ), from the perception system. It
+scenario where only the target object is known and many                       then selects an action policy and a goal object, ogoal , from
+unknown objects may be present.                                               [o1 , . . . om ] and sends the action policy a query q(ogoal ). The
+      Target Recognition: Next, the set of masks is combined                  action policy pi responds with an action ai = pi (ogoal ) and
+with the RGB image to create color masks of each object.                      a quality metric Q(ai , ogoal ) for the action, which is used to
+Each of the m color masks is cropped, scaled, rotated, and                    decide whether to execute the action.
+compared to each of the k images in the target object image                           Action Policies: Each action policy pi takes as input an
+set using a Siamese network [22]. For each pair of inputs,                    object mask from the action selector (ogoal ) and the RGBD
+the Siamese network outputs a recognition confidence value                    image observation and returns an action ai = pi (ogoal ) and a
+between 0 and 1, with a mask’s recognition confidence score                   quality metric Q(ai , ogoal ). In simulation, the object masks and
+set to the maximum recognition confidence value over the k                    depth images are generated from ground-truth renderings of
+each object, while in physical experiments, depth images are          action execution criteria. If the target object is grasped, the
+obtained using a depth sensor and object masks are generated          policy terminates and reports a success. If no grasping action
+by the perception pipeline. The set of action policies in our         satisfies the criteria and the policy does not have pushing,
+system are:                                                           the policy terminates and reports a failure. If the policy does
+      Parallel Jaw Grasping: In simulation, pre-computed              have pushing, it iterates through its priority list, queries the
+grasps are indexed from a Dex-Net 1.0 parallel-jaw grasping           pushing action policy for each object mask, and executes
+policy [27], and the grasp with the highest predicted quality         the first action that satisfies the criteria. If no pushing action
+on ogoal is returned as the action along with an associated           satisfies the criteria, or if a pushing action has been selected
+quality metric. For physical experiments, parallel-jaw grasps         more than three consecutive times, the policy terminates with
+are planned using a Dex-Net 2.0 Grasp Quality CNN (GQ-                a failure.
+CNN) [25]. To plan grasps for a single object in a depth image,             Action Selection Methods: The action selection methods
+grasp candidate sampling is constrained to the goal object’s          are distinguished by whether or not they have pushing as an
+segmentation mask. The GQ-CNN evaluates each candidate                available action policy and by their generated object priority
+grasp and returns the grasp with the highest predicted quality        list:
+and its associated quality metric.                                      1) Random Search: Prioritizes objects randomly, with no
+      Suction Grasping: For simulation experiments, grasp                   preference for the target object mask (oT ).
+planning is done with a Dex-Net 1.0 suction grasping                    2) Preempted Random Search (with and without push-
+policy [27]. For physical experiments, suction cup grasps                   ing): Always prioritizes oT and prioritizes other objects
+are planned with a Dex-Net 3.0 GQ-CNN [26], with mask-                      randomly.
+based constraints to plan grasps only on the goal object’s              3) Largest-First Search (with and without pushing):
+segmentation mask. The GQ-CNN evaluates each candidate                      Always prioritizes oT and ranks the other objects by
+grasp and returns the grasp with the highest predicted quality              their visible area. If the target object isn’t visible, this
+and its associated quality metric.                                          strategy will increase the likelihood of removing objects
+      Pushing: The pushing action policy, similar to that in [8],           that may be occluding the target object.
+selects p0 as the most free point in the bin. This point is                 Termination Criteria: In addition to the termination
+computed by taking the signed distance transform of a binary          criteria outlined above (terminate and return success if target
+mask of the bin walls and objects, finding the pixel with the         object grasped, return failure if no good grasp/valid push
+maximum signed distance value, and deprojecting that pixel            found), we impose two more termination conditions on our
+back into R3 . Given an object to push, p is then selected so         policies which cause them to return a failure: (1) 2N timesteps
+that the gripper is not in collision at p, the line from p to         have elapsed, where N is the initial number of objects in the
+p0 passes through the object’s center of mass, and the push           bin and (2) The target object is inadvertently removed from
+direction is as close as possible to the direction of the most        the work space when another object is grasped or pushed.
+free point in the bin. The pushing policy returns the push
+satisfying the above constraints as its action if one exists.                              VI. E XPERIMENTS
+The returned quality metric is 1 if a valid push exists and 0         A. Simulation
+if not.                                                                     Heap Generation: Three datasets of simulated heaps
+              V. ACTION S ELECTION P OLICIES                          are generated, each containing 1000 heaps of N objects, for
+                                                                      N ∈ {10, 15, 20}. Then, using the Bullet Physics Engine [7],
+   All action selection methods use input from the perception         sampled objects are dropped one by one into the bin, and
+system to generate a specific object priority list. Each action       the target object is chosen to be the most occluded object.
+selection method generates a priority list in a different way         Please refer to the appendix for further details.
+but all have the same action execution criteria. For all action             Rollouts: To simulate grasp actions, we use the same
+selection methods described here, a grasp action is executed if       approach as in [24]: using wrench space analysis, we
+the quality metric returned by the action policy exceeds t(o),        determine whether or not an object can be lifted from the
+the grasp confidence threshold for object mask o. The grasp           heap [33, 36]. If the object can be lifted, a constant upward
+confidence threshold for the object mask positively identified        force is applied to the object’s center of mass until it leaves
+as the target object oT is given by t(oT ) = tthresh . For policies   the bin, and the remaining objects are allowed to come to
+without pushing, t(o) = tthresh , ∀o, while for policies with         rest. To simulate push actions, we check that the gripper can
+pushing, t(o) = thigh , ∀o 6= oT . Policies with pushing can be       be placed in the starting location without collisions, and only
+more conservative in their choice of grasps, so they use a            execute pushes if this is the case. Then, we place a 3D model
+higher grasp confidence threshold thigh for non-target objects.       of the closed gripper in the physics simulator and move it
+A push action is performed if a valid push is found (quality          from the start point to the end point of the push, as in [8].
+1). Details on parameters used can be found in the appendix.
+   Each action selection method iterates through its priority         B. Physical
+list, queries the grasping action policies for each object mask,            Heap Generation: We randomly sample 50 heaps of 15
+and executes the returned action with the highest quality             items each from a set of 75 common household objects with
+metric among the two grasping policies if it satisfies the            relatively simple shapes, such as boxes and cylinders, as well
+                                                                             until termination on each heap. A total of 15,000 simulation
+                                                                             experiments were conducted over all policies. The results for
+                                                                             each of the five policies are shown in Figure 4, and a detailed
+                                                                             breakdown of each policy can be found in the appendix.
+                                                                             Figure 4(A) shows the mean number of actions needed for
+                                                                             each policy as a function of heap size. These results suggest
+                                                                             that extracting the target object becomes more difficult as heap
+                                                                             size increases and the mean number of actions needed for
+                                                                             each policy appears to scale linearly with heap size, although
+                                                                             the rate of increase is not constant across policies.
+                                                                                Figure 4(B) shows cumulative successful extractions for a
+                                                                             given amount of actions (number of successful extractions
+Fig. 3: (A) Front view of the robot and bin setup. The black bin is the
+primary bin in which heaps are initialized, and the white bins provide       in that many actions or fewer). All policies have success
+space for the robot to deposit grasped items. (B) The 75 objects used in     rates of 90% or higher on 15 object heaps. The cumulative
+physical experiments. (C) A sample heap of 15 objects used in the physical   success plot suggests that grasping the target object when
+experiments.
+                                                                             possible provides improvement over the random policy, and
+as more complex geometries, such as plastic climbing holds                   that prioritizing larger object masks when the target object
+and scissors (see Figure 3). We also include several 3D-printed              is inaccessible further increases efficiency. The largest-first
+items, which present a challenge for both segmentation and                   policies successfully extract the target object within 5 or
+target object recognition due to their unusual shapes and                    fewer actions on 50% of the heaps, while the preempted
+uniform texture. A target object is chosen at random from                    random and random policies only do so for 30% and 10%
+each 15 item heap. Then, in order to generate adversarial bin                of heaps respectively.
+configurations, each rollout is initialized by first shaking the                Results also suggest that pushing can increase overall
+target object in a box to randomize its pose and dumping                     success rate, as policies that included pushing succeeded
+into the center of the bin, and then shaking the other fourteen              on at least 3% more heaps than those without pushing. For
+objects and pouring them over the target object.                             policies with pushing, only 5% of all actions attempted are
+      Policy Rollouts: We execute pushing and grasping                       pushes, as opposed to 29% parallel jaw grasps and 66%
+actions on an ABB YuMi robot equipped with suction-cup                       suction grasps, on ten object heaps. The percentage of push
+and parallel-jaw grippers (see Figure 3). Actions generated by               actions decreases further when increasing the number of
+the search policy are transformed into a sequence of poses for               objects to just 3% for 15 object heaps. We suspect that the
+the robot’s end-effectors, and we use ABB’s RAPID linear                     reason pushes are selected so rarely is because the pushing
+motion planner and controller to execute these motions.                      primitive is designed to execute a sequence of linear pushes
+      Human Supervisor Rollouts: For comparison, we also                     to singulate a particular object, rather than flatten a heap of
+benchmark a human supervisor’s performance as an action                      objects. While the former directly addresses the objective
+selector. At each timestep, the human is asked to draw a mask                of the push, the latter is much easier to achieve in practice,
+in the scene on which to plan a push or a grasp. Then, grasps                since in many cases, especially with many objects in the bin,
+and pushes are planned and executed on the specified mask                    it may be almost impossible to plan collision-free pushes that
+with the same action primitives described above (parallel jaw                successfully singulate the object of interest.
+grasps, suction grasps, linear pushes). Thus, the human is                      In simulation, failures account for 6-12% of all rollouts.
+limited by the available action primitives, but is allowed to                These failures fall into three categories: 1) the policy fails to
+use their own judgement for perceptual reasoning and high                    plan an action (e.g., no actions are available on any remaining
+level action planning.                                                       objects with a quality metric above the threshold), 2) the
+C. Evaluation Metrics                                                        target object is inadvertently removed from the bin, despite
+                                                                             an attempted action that was not a grasp on the target object,
+   We evaluate each policy according to its reliability and                  or 3) the policy reaches the maximum number of timesteps
+efficiency in target object retrieval. Reliability is defined                given to extract the object (2N timesteps, where N is the
+as the frequency at which the target object is successfully                  initial number of objects in the heap).
+extracted, while efficiency is defined as the mean number of                    Failure mode (1) accounts for 85-90% of all failures, while
+actions taken to successfully extract the target object. For                 (2) accounts for nearly all of the remaining failures. Mode (1)
+each experiment, we recorded the number of successes and                     typically happens because objects are moved to the corners of
+failures, as well as statistics regarding the number of actions              the bin, making it difficult to plan collision-free grasps. Mode
+taken.                                                                       (2) occurs more often for policies that include pushing actions,
+                           VII. R ESULTS                                     since pushing in clutter can occasionally lead to objects being
+                                                                             pushed up and over the bin walls. It is also possible that the
+A. Simulation Results                                                        target object is removed from the work space when another
+  We tested each action selection policy in simulation with                  object is grasped. Mode (3) never actually occurs in any
+heaps generated using the method described in VI and running                 of our experiments, and the maximum timesteps cutoff is
+Fig. 4: Performance of policies on (A) simulated heaps of 10, 15, and 20 objects over a total of 15,000 simulated rollouts and 300 physical rollouts, (B)
+simulated heaps of 15 objects, and (C) real heaps of 15 objects. The largest-first search policies are the most efficient, and are able to extract the target
+object in the least number of actions. All policies have similar reliability, although pushing shows potential to avoid more failures in simulation. The human
+was allowed to look at the RGBD image inputs and choose an object to push or grasp. Means and standard deviations for successful extractions are shown
+in parentheses for each policy.
+
+intentionally set high to exhaust the policy of actions.                         was not visible. These pushes tend to spread many objects
+                                                                                 out over the bottom of the bin, as opposed to a grasping
+B. Physical Results                                                              action that would remove only a single object from the top
+   Figure 4(C) shows results on the physical system. A total of                  of the heap.
+300 physical experiments were conducted over all policies. All
+policies retrieved the target object within the given number
+                                                                                             VIII. D ISCUSSION AND F UTURE W ORK
+of timesteps at least 90% of the time, and success rates
+were not statistically different between policies. However,
+                                                                                    We present a general formulation for mechanical search
+the cumulative success curves suggest similar trends to those
+                                                                                 problems and describe a framework for solving the specific
+seen in the simulation results, with the largest-first policies
+                                                                                 problem of extracting a target object from a cluttered bin.
+outperforming the preempted random and random policies in
+                                                                                 While the best action selection method (largest-first) is much
+terms of efficiency. The largest-first policies again successfully
+                                                                                 more efficient than random search and provides a solid
+extract the target object within 5 or fewer actions on on 50%
+                                                                                 baseline, a human selecting the low-level actions can still
+of the heaps, while the preempted random and random policies
+                                                                                 achieve 37% higher efficiency by pushing significantly more
+only do so for 40% and 10% of heaps respectively.
+                                                                                 effectively and often. We will explore how reinforcement
+   Stochasticity in the initial bin state in physical experiments
+                                                                                 learning in simulation can address this gap.
+can result in varying difficulty for different policies on the
+                                                                                    In future work, the action primitives used (grasp, suction,
+same heap. For example, a target object may be completely
+                                                                                 push) can also be improved. We conjecture that more effective
+covered by other objects when one policy is presented with
+                                                                                 push primitives can be learned from simulation.
+a given heap, but for another policy, the target may be
+partially or fully visible in the initial state. Thus, policies
+may occasionally get “lucky" or “unlucky" with respect to the                                                 IX. A PPENDIX
+target object visibility in the initial state, which may account
+for some increased variance in the physical results.                             A. Extended Results
+   Failure cases for the physical heaps are very similar to those
+                                                                                    Tables I, II, III, and IV give a detailed breakdown of
+in simulation: 93% of failures arise from the policy being
+                                                                                 each policies selected actions and success rate over the 1000
+unable to plan an action. However, in physical experiments,
+                                                                                 simulated trials and 50 trials on the physical robot for each
+out of the 300 heaps evaluated for all policies, only 1 rollout
+                                                                                 policy on 15 object heaps. In simulation, pushing actions
+failed due to timing out. Failure to plan actions is almost
+                                                                                 result in higher success rates. On the physical system, the
+always due to the target object lying flat on the bottom of
+                                                                                 human policy selects pushing actions much more frequently
+the bin (e.g., the dice, sharpie pens, or another blister-pack
+                                                                                 to clear multiple occluding objects from the target object. We
+object), making it difficult to obtain accurate segmentation.
+                                                                                 will explore this discrepancy further in future work.
+Another common reason for failure to plan actions is when
+no mask is identified as the target object, which often occurs
+for 3D printed objects.                                                               Simulation Policy                    Success Rate      Mean Actions
+                                                                                      Random                                  88.8%          11.26 ± 0.15
+C. Action-Limited Human Supervisor                                                    Preempted Random                        89.7%           8.55 ± 0.16
+                                                                                      Preempted Random + Pushing              94.3%          8.87 ± 0.15
+   The human supervisor outperforms all policies presented                            Largest-First                           90.3%          6.35 ± 0.14
+here, requiring an average of just 3.1 actions to extract                             Largest-First + Pushing                 93.3%          6.51 ± 0.14
+the target object due to more intelligent action selection.                      TABLE I: Success rate and mean number of actions (with standard error of
+Specifically, we noticed that a human operator chose to push                     the mean) for extraction for 1000 trials of each policy tested in simulation.
+far more frequently (26% of all actions, compared to 6%                          The largest-first policies extract the target most efficiently, and pushing shows
+                                                                                 ability to increase overall success rate.
+for the other action policies with pushing), especially when
+objects were heaped in the center of the bin and the target
+    Simulation Policy                   Suction     Parallel-Jaw     Push         network is then trained with a contrastive loss function for
+    Random                                7015          4467          0           10 epochs using a batch size of 64 and the Adam optimizer
+    Preempted Random                      6168          2870          0           with a learning rate of 0.0001. For physical experiments, a
+    Preempted Random + Pushing            6180          2825         274
+    Largest-First                         5266          1718          0           recognition confidence threshold tr = 0.9 was used.
+    Largest-First + Pushing               5116          1706         259
+                                                                                  C. Simulated Heap Generation
+TABLE II: Breakdown of action selection for each policy in simulation over
+1000 trials. Policies typically attempt many more suction grasps due to better       Simulated heaps are generated by sampling: 1) N objects
+accessibility in clutter, and only attempt pushes a small fraction of the time.   from a dataset of over 1600 3D models, 2) a heap center
+                                                                                  around the center of the bin, and 3) planar pose offsets for
+     Physical Policy                     Success Rate      Mean Actions           each object around the heap center. Then, using the Bullet
+     Random                                   92%          10.87 ± 0.66           Physics Engine, sampled objects are dropped one by one into
+     Preempted Random                         90%           6.71 ± 0.61           the bin from a fixed height at their pose offset from the heap
+     Preempted Random + Pushing               98%           6.31 ± 0.63           center, and all objects are allowed to come to rest (i.e. all
+     Largest-First                            94%           4.85 ± 0.51
+     Largest-First + Pushing                  96%           6.00 ± 0.63           velocities of all objects go to zero). Once all objects have been
+     Human                                    98%           3.06 ± 0.32           added to the heap, the modal and amodal segmentation masks
+TABLE III: Success rate and mean number of actions (with standard error           for each object are rendered from the camera’s perspective.
+of the mean) for extraction for 50 trials of each policy tested on the physical   The modal segmask of an object is a segmask of the portion
+system. All policies achieve success rates of over 90% due to effective low-      of the object visible from the perspective of the camera
+level grasping policies, but the human outperforms the best policy by 37%
+in terms of mean number of actions, suggesting that there is considerable         (accounting for occlusions), while the amodal segmask of
+room for action selection policy improvement.                                     an object is a segmask of the object’s exact position in the
+                                                                                  scene given ground truth information from the simulation
+    Physical Policy                     Suction     Parallel-Jaw     Push         environment. Using these masks, the target object is chosen
+    Random                                275           300            0          to be the object with the smallest ratio between modal and
+    Preempted Random                      282            76            0          amodal segmask area (i.e., the least visible object in the bin).
+    Preempted Random + Pushing            250            58           19          This metric is used as a proxy for finding the most occluded
+    Largest-First                         222            47            0
+    Largest-First + Pushing               244            59           18          object.
+    Human                                  99            27           44
+                                                                                  D. Policy Parameters
+TABLE IV: Breakdown of action selection for each policy in 50 physical
+trials. The human pushes much more frequently than the other policies,                   Simulation Policy Parameters: Grasp confidence thresh-
+especially to clear multiple occluding objects at the beginning of the trial.     olds of tthresh = 0.15 and thigh = 0.3 are used in simulation
+B. Siamese Network Implementation Details                                         for the high-level action selector to determine whether to
+   The Siamese network architecture involves first passing                        execute grasp actions from the low level grasp policies. In
+each input 512 × 512 RGB image through a ResNet-50                                experimental trials, these values were found to provide a
+architecture pretrained on ImageNet. During training of                           balance between avoiding grasp failures and quickly clearing
+the Siamese network, these weights remained fixed. The                            objects from the bin as soon as sufficiently good grasps
+featurizations of the input images are then concatenated and                      become available.
+passed through two dense, fully connected layers: the first                              Physical Policy Parameters: In physical experiments,
+with 1024 neurons and ReLU activations, and the second with                       grasp confidence thresholds of tthresh = 0.1 and thigh = 0.3
+a single output neuron and sigmoid activation, whose output                       were used for action selection to determine whether to execute
+represents the probability that the two input images are of                       grasp action plans from the low-level grasp action policies.
+the same object. The motivation for this architecture is to                       These values are similar to those used in simulation, but
+allow the Siamese network to learn a distance metric over the                     tthresh is made slightly lower for physical experiments since
+ResNet-50 featurizations. The training dataset for the Siamese                    it we observed that low confidence grasps succeeded more
+network consists of 5 views of each of the objects used in                        often in physical experiments than in simulation, which was
+physical experiments. For each view, we generated a total                         designed to be conservative to encourage good transfer to
+of 10 additional images: 5 randomly rotated versions of the                       reality. Additionally, thigh = 0.5 was used for policies that
+original image as well as 5 rotated versions that are partially                   included low-level pushing action policies, so that pushing
+occluded. To simulate occlusions, we took randomly rotated                        would be further encouraged over low-quality grasp actions.
+and scaled binary masks of a dataset of synthetic objects,                                            X. ACKNOWLEDGMENTS
+and overlay the masks on the original object. We only used                           This work is partially supported by a Google Focused Research Award and
+occlusions that covered at least 20% and at most 80% of                           was performed jointly at the AUTOLAB at UC Berkeley and at the Stanford
+the original pixels of the object. For training, we sampled                       Vision & Learning Lab, in affiliation with the Berkeley AI Research (BAIR)
+                                                                                  Lab, Berkeley Deep Drive (BDD), the Real-Time Intelligent Secure Execution
+10,000 positive and 10,000 negative image pairs, where a                          (RISE) Lab, and the CITRIS "People and Robots" (CPAR) Initiative. Authors
+positive image pair consists of an original image of an object                    were also supported by the SAIL-Toyota Research initiative, the Scalable
+and one of the 10 augmented images and a negative image                           Collaborative Human-Robot Learning (SCHooL) Project, the NSF National
+                                                                                  Robotics Initiative Award 1734633, and in part by donations from Siemens,
+pair consists of an original image of an object and one of                        Google, Amazon Robotics, Toyota Research Institute, Autodesk, ABB,
+the 10 augmented images of an entirely different object. The                      Knapp, Loccioni, Honda, Intel, Comcast, Cisco, Hewlett-Packard and by
+equipment grants from PhotoNeo, and NVidia. This article solely reflects the     [21]   J. Kober, J. A. Bagnell, and J. Peters, “Reinforcement learning in
+opinions and conclusions of its authors and do not reflect the views of the             robotics: A survey”, Int. Journal of Robotics Research (IJRR), vol.
+Sponsors or their associated entities. We thank our colleagues who provided             32, no. 11, pp. 1238–1274, 2013.
+helpful feedback, code, and suggestions, in particular Jeff Mahler.              [22]   G. Koch, R. Zemel, and R. Salakhutdinov, “Siamese neural networks
+                                                                                        for one-shot image recognition”, in ICML Deep Learning Workshop,
+                               R EFERENCES                                              vol. 2, 2015.
+ [1]   A. Aydemir, K. Sjöö, J. Folkesson, A. Pronobis, and P. Jensfelt,          [23]   I. Lenz, H. Lee, and A. Saxena, “Deep learning for detecting robotic
+       “Search in the real world: Active visual object search based on                  grasps”, Int. Journal of Robotics Research (IJRR), vol. 34, no. 4-5,
+       spatial relations”, in Proc. IEEE Int. Conf. Robotics and Automation             pp. 705–724, 2015.
+       (ICRA), IEEE, 2011, pp. 2818–2824.                                        [24]   J. Mahler and K. Goldberg, “Learning deep policies for robot bin
+ [2]   R. Bajcsy, “Active perception”, Proceedings of the IEEE, vol. 76,                picking by simulating robust grasping sequences”, in Conf. on Robot
+       no. 8, pp. 966–1005, 1988.                                                       Learning (CoRL), 2017, pp. 515–524.
+ [3]   D. Berenson and S. S. Srinivasa, “Grasp synthesis in cluttered            [25]   J. Mahler, J. Liang, S. Niyaz, M. Laskey, R. Doan, X. Liu, J. A.
+       environments for dexterous hands”, in Humanoid Robots, 2008.                     Ojea, and K. Goldberg, “Dex-net 2.0: Deep learning to plan robust
+       Humanoids 2008. 8th IEEE-RAS International Conference on, IEEE,                  grasps with synthetic point clouds and analytic grasp metrics”, Proc.
+       2008, pp. 189–196.                                                               Robotics: Science and Systems (RSS), 2017.
+ [4]   J. Bohg, K. Hausman, B. Sankaran, O. Brock, D. Kragic, S. Schaal,         [26]   J. Mahler, M. Matl, X. Liu, A. Li, D. Gealy, and K. Goldberg, “Dex-
+       and G. S. Sukhatme, “Interactive perception: Leveraging action in                net 3.0: Computing robust vacuum suction grasp targets in point
+       perception and perception in action”, IEEE Trans. Robotics, vol. 33,             clouds using a new analytic model and deep learning”, in Proc. IEEE
+       no. 6, pp. 1273–1291, 2017.                                                      Int. Conf. Robotics and Automation (ICRA), IEEE, 2018, pp. 1–8.
+ [5]   L. Chang, J. R. Smith, and D. Fox, “Interactive singulation of objects    [27]   J. Mahler, F. T. Pokorny, B. Hou, M. Roderick, M. Laskey, M. Aubry,
+       from a pile”, in Proc. IEEE Int. Conf. Robotics and Automation                   K. Kohlhoff, T. Kröger, J. Kuffner, and K. Goldberg, “Dex-net 1.0: A
+       (ICRA), IEEE, 2012, pp. 3875–3882.                                               cloud-based network of 3d objects for robust grasp planning using a
+ [6]   X. Chen, K. Kundu, Y. Zhu, H. Ma, S. Fidler, and R. Urtasun,                     multi-armed bandit model with correlated rewards”, in Proc. IEEE Int.
+       “3d object proposals using stereo imagery for accurate object class              Conf. Robotics and Automation (ICRA), IEEE, 2016, pp. 1957–1964.
+       detection”, IEEE transactions on pattern analysis and machine             [28]   C. Michaelis, M. Bethge, and A. Ecker, “One-shot segmentation
+       intelligence, vol. 40, no. 5, pp. 1259–1272, 2018.                               in clutter”, in Proc. Int. Conf. on Machine Learning, J. Dy and A.
+ [7]   E. Coumans and Y. Bai, Pybullet, a python module for physics                     Krause, Eds., ser. Proceedings of Machine Learning Research, vol. 80,
+       simulation, games, robotics and machine learning, http : / /                     Stockholmsmässan, Stockholm Sweden: PMLR, 2018, pp. 3549–
+       pybullet.org/, 2016–2017.                                                        3558.
+ [8]   M. Danielczuk, J. Mahler, C. Correa, and K. Goldberg, “Linear push        [29]   C. Michaelis, M. Bethge, and A. S. Ecker, “One-shot segmentation
+       policies to increase grasp access for robot bin picking”, in Proc.               in clutter”, ArXiv preprint arXiv:1803.09597, 2018.
+       IEEE Conf. on Automation Science and Engineering (CASE), IEEE,            [30]   M. Moll, L. Kavraki, J. Rosell, et al., “Randomized physics-
+       2018.                                                                            based motion planning for grasping in cluttered and uncertain
+ [9]   M. Danielczuk, M. Matl, S. Gupta, A. Li, A. Lee, J. Mahler, and                  environments”, IEEE Robotics & Automation Letters, vol. 3, no.
+       K. Goldberg, “Segmenting unknown 3d objects from real depth                      2, pp. 712–719, 2018.
+       images using mask r-cnn trained on synthetic data”, in Proc. IEEE         [31]   D. Morrison, P. Corke, and J. Leitner, “Closing the loop for robotic
+       Int. Conf. Robotics and Automation (ICRA), IEEE, 2019.                           grasping: A real-time, generative grasp synthesis approach”, ArXiv
+[10]   Y. Duan, M. Andrychowicz, B. C. Stadie, J. Ho, J. Schneider,                     preprint arXiv:1804.05172, 2018.
+       I. Sutskever, P. Abbeel, and W. Zaremba, “One-Shot Imitation              [32]   A. Mousavian, A. Toshev, M. Fiser, J. Kosecka, and J. Davidson,
+       Learning”, ArXiv preprint arXiv:1703.07326, 2017.                                “Visual representations for semantic target driven navigation”, ArXiv
+[11]   K. Fang, Y. Zhu, A. Garg, A. Kurenkov, V. Mehta, L. Fei-Fei, and                 preprint arXiv:1805.06066, 2018.
+       S. Savarese, “Learning task-oriented grasping for tool manipulation       [33]   A. ten Pas and R. Platt, “Using geometry to detect grasp poses in 3d
+       from simulated self-supervision”, ArXiv preprint arXiv:1806.09266,               point clouds”, in Robotics Research, Springer, 2018, pp. 307–324.
+       2018.                                                                     [34]   C. Paxton, F. Jonathan, M. Kobilarov, and G. D. Hager, “Do what
+[12]   R. E. Fikes and N. J. Nilsson, “Strips: A new approach to the                    i want, not what i did: Imitation of skills by planning sequences
+       application of theorem proving to problem solving”, Artificial                   of actions”, in Proc. IEEE/RSJ Int. Conf. on Intelligent Robots and
+       intelligence, vol. 2, no. 3-4, pp. 189–208, 1971.                                Systems (IROS), 2016.
+[13]   M. Gualtieri, A. ten Pas, K. Saenko, and R. Platt, “High precision        [35]   P. O. Pinheiro, T.-Y. Lin, R. Collobert, and P. Dollár, “Learning
+       grasp pose detection in dense clutter”, in Proc. IEEE/RSJ Int. Conf.             to refine object segments”, in European Conference on Computer
+       on Intelligent Robots and Systems (IROS), IEEE, 2016, pp. 598–605.               Vision, Springer, 2016, pp. 75–91.
+[14]   M. Gupta, T. Rühr, M. Beetz, and G. S. Sukhatme, “Interactive             [36]   D. Prattichizzo and J. C. Trinkle, “Grasping”, in Springer handbook
+       environment exploration in clutter”, in Proc. IEEE/RSJ Int. Conf. on             of robotics, Springer, 2008, pp. 671–700.
+       Intelligent Robots and Systems (IROS), IEEE, 2013, pp. 5265–5272.         [37]   J. Redmon, S. Divvala, R. Girshick, and A. Farhadi, “You only look
+[15]   S. Gupta, J. Davidson, S. Levine, R. Sukthankar, and J. Malik,                   once: Unified, real-time object detection”, in Proc. IEEE Conf. on
+       “Cognitive mapping and planning for visual navigation”, ArXiv                    Computer Vision and Pattern Recognition (CVPR), 2016, pp. 779–
+       preprint arXiv:1702.03920, vol. 3, 2017.                                         788.
+[16]   K. He, G. Gkioxari, P. Dollár, and R. Girshick, “Mask r-cnn. arxiv        [38]   S. Ren, K. He, R. Girshick, and J. Sun, “Faster r-cnn: Towards
+       preprint arxiv: 170306870”, 2017.                                                real-time object detection with region proposal networks”, in Proc.
+[17]   T. Hermans, J. M. Rehg, and A. Bobick, “Guided pushing for object                Advances in Neural Information Processing Systems, 2015, pp. 91–99.
+       singulation”, in Proc. IEEE/RSJ Int. Conf. on Intelligent Robots and      [39]   A. Saxena, L. L. Wong, and A. Y. Ng, “Learning grasp strategies with
+       Systems (IROS), IEEE, 2012, pp. 4783–4790.                                       partial shape information.”, in AAAI, vol. 3, 2008, pp. 1491–1494.
+[18]   E. Jang, S. Vijayanarasimhan, P. Pastor, J. Ibarz, and S. Levine, “End-   [40]   A. Shaban, S. Bansal, Z. Liu, I. Essa, and B. Boots, “One-shot learn-
+       to-end learning of semantic grasping”, in Conf. on Robot Learning                ing for semantic segmentation”, ArXiv preprint arXiv:1709.03410,
+       (CoRL), 2017.                                                                    2017.
+[19]   D. Kalashnikov, A. Irpan, P. Pastor, J. Ibarz, A. Herzog, E. Jang,        [41]   S. Srivastava, E. Fang, L. Riano, R. Chitnis, S. Russell, and P. Abbeel,
+       D. Quillen, E. Holly, M. Kalakrishnan, V. Vanhoucke, et al., “Qt-                “Combined task and motion planning through an extensible planner-
+       opt: Scalable deep reinforcement learning for vision-based robotic               independent interface layer”, in Proc. IEEE Int. Conf. Robotics and
+       manipulation”, ArXiv preprint arXiv:1806.10293, 2018.                            Automation (ICRA), IEEE, 2014, pp. 639–646.
+[20]   D. Katz, A. Venkatraman, M. Kazemi, J. A. Bagnell, and A.                 [42]   J. Sung, B. Selman, and A. Saxena, “Learning sequences of
+       Stentz, “Perceiving, learning, and exploiting object affordances for             controllers for complex manipulation tasks”, in Proc. Int. Conf. on
+       autonomous pile manipulation”, Autonomous Robots, vol. 37, no. 4,                Machine Learning, Citeseer, 2013.
+       pp. 369–382, 2014.                                                        [43]   R. S. Sutton, D. Precup, and S. Singh, “Between mdps and semi-mdps:
+                                                                                        A framework for temporal abstraction in reinforcement learning”,
+                                                                                        Artificial intelligence, vol. 112, no. 1-2, pp. 181–211, 1999.
+[44]   K. E. Van de Sande, J. R. Uijlings, T. Gevers, and A. W. Smeulders,            tasks”, in Proc. IEEE Int. Conf. Robotics and Automation (ICRA),
+       “Segmentation as selective search for object recognition”, in Proc.            2018.
+       IEEE Int. Conf. on Computer Vision (ICCV), IEEE, 2011, pp. 1879–         [49] A. Zeng, S. Song, K.-T. Yu, E. Donlon, F. R. Hogan, M. Bauza,
+       1886.                                                                          D. Ma, O. Taylor, M. Liu, E. Romo, et al., “Robotic pick-and-
+[45]   U. Viereck, A. t. Pas, K. Saenko, and R. Platt, “Learning a visuomotor         place of novel objects in clutter with multi-affordance grasping and
+       controller for real world robotic grasping using simulated depth               cross-domain image matching”, ArXiv preprint arXiv:1710.01330,
+       images”, ArXiv preprint arXiv:1706.04652, 2017.                                2017.
+[46]   O. Vinyals, C. Blundell, T. Lillicrap, D. Wierstra, et al., “Matching    [50] Y. Zhu, R. Mottaghi, E. Kolve, J. J. Lim, A. Gupta, L. Fei-Fei, and
+       networks for one shot learning”, in Proc. Advances in Neural                   A. Farhadi, “Target-driven visual navigation in indoor scenes using
+       Information Processing Systems, 2016, pp. 3630–3638.                           deep reinforcement learning”, in Proc. IEEE Int. Conf. Robotics and
+[47]   J. Wolfe, B. Marthi, and S. J. Russell, “Combined task and motion        Automation (ICRA), 2017, pp. 3357–3364.
+       planning for mobile manipulation”, in ICAPS, 2010.
+[48]   D. Xu, S. Nair, Y. Zhu, J. Gao, A. Garg, L. Fei-Fei, and S. Savarese,
+       “Neural task programming: Learning to generalize across hierarchical
+

@@ -1,0 +1,98 @@
+{
+  "retrieved": "2026-10-09",
+  "papers": [
+    {
+      "id": "01_Liang_2022_Sequential_Sensorimotor",
+      "pdf_url": "https://arxiv.org/pdf/2203.03797",
+      "arxiv_id": "2203.03797",
+      "pdf_bytes": 8049837,
+      "sha256": "56e25e4a6a4b70c978da8cd3e9c457e0ca1e4b1e8e671cbdc21e6503f934195e",
+      "pdf_status": "downloaded",
+      "source_url": "https://arxiv.org/src/2203.03797",
+      "source_status": "('Connection broken: IncompleteRead(6291456 bytes read, 3683913 more expected)', IncompleteRead(6291456 bytes read, 3683913 more expected))",
+      "source_retry_error": "429 Client Error: Unknown Error for url: https://arxiv.org/e-print/2203.03797",
+      "pdf_pages": 7
+    },
+    {
+      "id": "02_PerezDArpino_2017_CLEARN",
+      "pdf_url": "https://ai.stanford.edu/~cdarpino/CLEARN/ICRA17_DArpino_CLEARN.pdf",
+      "arxiv_id": null,
+      "pdf_bytes": 4112681,
+      "sha256": "385bcce916478caaf78b526f82dc1eca8d41f14b5518513236e6a62286148b5e",
+      "pdf_status": "downloaded",
+      "source_status": "No public TeX source located; PDF author manuscript saved.",
+      "pdf_pages": 8
+    },
+    {
+      "id": "03_Xu_2018_Neural_Task_Programming",
+      "pdf_url": "https://arxiv.org/pdf/1710.01813",
+      "arxiv_id": "1710.01813",
+      "pdf_bytes": 2515969,
+      "sha256": "92a1e748d34c8f90b1ae3f5be4ba4a7daf21879f315c0f7abc177d66b7a206a6",
+      "pdf_status": "downloaded",
+      "source_url": "https://arxiv.org/src/1710.01813",
+      "source_status": "downloaded",
+      "source_file": "sources/03_Xu_2018_Neural_Task_Programming.tar.gz",
+      "source_bytes": 2826745,
+      "pdf_pages": 8
+    },
+    {
+      "id": "04_Gupta_2020_Relay_Policy_Learning",
+      "pdf_url": "https://proceedings.mlr.press/v100/gupta20a/gupta20a.pdf",
+      "arxiv_id": "1910.11956",
+      "pdf_bytes": 8703929,
+      "sha256": "e3b84d81fe770bf829310f74713ad13206ed70bcb6f05bb02efa40688d580bbd",
+      "pdf_status": "downloaded",
+      "source_url": "https://arxiv.org/src/1910.11956",
+      "source_status": "('Connection broken: IncompleteRead(5242880 bytes read, 1355324 more expected)', IncompleteRead(5242880 bytes read, 1355324 more expected))",
+      "source_retry_error": "('Connection broken: IncompleteRead(5242880 bytes read, 1355324 more expected)', IncompleteRead(5242880 bytes read, 1355324 more expected))",
+      "pdf_pages": 13
+    },
+    {
+      "id": "05_Dogar_2014_Object_Search",
+      "pdf_url": "https://publications.ri.cmu.edu/storage/publications/pub_files/2013/10/dogar_auro2013.pdf",
+      "arxiv_id": null,
+      "pdf_bytes": 7097092,
+      "sha256": "defd0f554ff7c99dddc3276036b9341039a3f501fa20e760bddb32e3655db007",
+      "pdf_status": "downloaded",
+      "source_status": "No public TeX source located; PDF author manuscript saved.",
+      "pdf_pages": 14
+    },
+    {
+      "id": "06_Danielczuk_2019_Mechanical_Search",
+      "pdf_url": "https://arxiv.org/pdf/1903.01588",
+      "arxiv_id": "1903.01588",
+      "pdf_bytes": 6980894,
+      "sha256": "39f5b47e3129664f77a43e322d4df0ac409428a163a649cd8e5eedff212c78f7",
+      "pdf_status": "downloaded",
+      "source_url": "https://arxiv.org/src/1903.01588",
+      "source_status": "429 Client Error: Unknown Error for url: https://arxiv.org/src/1903.01588",
+      "source_retry_error": "429 Client Error: Unknown Error for url: https://arxiv.org/e-print/1903.01588",
+      "pdf_pages": 9
+    },
+    {
+      "id": "07_Wan_2020_Preparatory_Manipulation",
+      "pdf_url": "https://arxiv.org/pdf/1812.03274",
+      "arxiv_id": "1812.03274",
+      "pdf_bytes": 2315830,
+      "sha256": "2ae782ddb43d1efd13439629a2049f24655ec2b7870759faa073308ae7d4afd8",
+      "pdf_status": "downloaded",
+      "source_url": "https://arxiv.org/src/1812.03274",
+      "source_status": "429 Client Error: Unknown Error for url: https://arxiv.org/src/1812.03274",
+      "source_retry_error": "429 Client Error: Unknown Error for url: https://arxiv.org/e-print/1812.03274",
+      "pdf_pages": 12
+    },
+    {
+      "id": "08_Shen_2026_BiPreManip",
+      "pdf_url": "https://arxiv.org/pdf/2603.21679",
+      "arxiv_id": "2603.21679",
+      "pdf_bytes": 15622078,
+      "sha256": "4be9fb68d093b042d5b95fb907893bbe66e28f1c48bf7c8e937708098f8fc257",
+      "pdf_status": "downloaded",
+      "source_url": "https://arxiv.org/src/2603.21679",
+      "source_status": "('Connection broken: IncompleteRead(1048576 bytes read, 13889947 more expected)', IncompleteRead(1048576 bytes read, 13889947 more expected))",
+      "source_retry_error": "429 Client Error: Unknown Error for url: https://arxiv.org/e-print/2603.21679",
+      "pdf_pages": 16
+    }
+  ]
+}

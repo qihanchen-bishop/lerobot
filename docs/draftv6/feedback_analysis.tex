@@ -1,185 +1,82 @@
-% 核心观点：反馈只有把新增的任务相关证据转化为及时、有效的动作改变，才改善任务完成概率。
-% 叙述逻辑：执行变化提出新增证据的需求 -> D1刻画信息的潜在价值 -> D2调用C的信息保留/利用分解 ->
-% D3分析实际采用，并调用B1性能差分连接闭环任务结果；不是为历史与残差另建独立分析。
-% C到D：关系界须对反馈联合表示及执行时刻的关系成立，不沿用基础计划时刻的几何误差。
-% 边界：不把GRU/MLP误差差值当成理想历史价值，不把残差幅度或动作MSE改善当成任务改进。
-% \subsection{历史、修正与任务收益}
-\subsection{History, Corrections, and Task Benefit}
+% D主线：剩余动作误差 -> 新信息的可预测性收益 -> 学得残差与任务界。
+\subsection{Information-Conditioned Residual Corrections}
 \label{sec:feedbackanalysis}
-% 新增执行证据的收益取决于原先可用的信息，以及所生成的修正是否被实际采用。
-The benefit of additional execution evidence depends on the information already available and on whether the resulting correction is actually adopted.
+% C给出保留专家选择依据的条件，但信息保留不自动消除实际动作误差。
+Section~\ref{sec:representationanalysis} identifies conditions for preserving information needed to reconstruct expert actions.
+Such preservation does not eliminate the learned policy's imitation error, particularly when actions rely on outdated observations or limited execution history.
+% 本节分析额外信息何时使剩余误差更可预测，以及学得残差何时实现这一收益。
+We examine when additional observations and history make the remaining error more predictable, and when learned corrections realize this potential to reduce $R_\nu$.
 
-% \subsubsection{新观测与历史的决策价值}
-\subsubsection{Decision Value of New Observations and History}
-% 以下以动作块执行为具体场景，比较已有计划给出的基础动作与利用新增执行信息生成的修正动作。
-We take action-chunk execution as the concrete setting, comparing a base action supplied by an existing plan with a corrected action generated using additional execution information.
-This setting builds on action-chunk policies and recent methods for updating chunked plans from newer observations~\cite{zhao2023act,a2c2,black2025rtc}.
-% 在固定评价分布 $\mu$ 上，以 $t$ 表示目标执行时刻，将该控制步的动作位置称为执行槽位。
-Under a fixed evaluation distribution $\mu$, let $t$ denote the target execution time, and call the action position at that control step an execution slot.
-% 基础策略为该槽位选中的动作记为
-Denote the action selected by the base policy for this slot by
-$B=\pi_0(h)$.
-% 这里 $\pi_0$ 为包含计划更新、槽位选择及预先规定回退流程的完整基础执行规则。
-Here, $\pi_0$ is the complete base execution rule, including plan updates, slot selection, and predefined fallback procedures.
-% 本节参考策略保留相同的基础与反馈推理、接收和调度流程，仅在执行输出端屏蔽残差。
-The reference policy retains the same base and feedback inference, reception, and scheduling procedures, but masks the residual at the execution output.
-% 计划信息 $\mathcal F_p$ 包含生成和选择该动作所使用的观察与计划上下文，
-The planning information $\mathcal F_p$ contains the observations and plan context used to generate and select this action,
-% 以及触发回退所需的运行记录，使 $B$ 对 $\mathcal F_p$ 可测。
-together with runtime records needed to trigger fallback, so that $B$ is $\mathcal F_p$-measurable.
-% 当前信息 $\mathcal F_c$ 在保留计划信息的基础上加入时刻 $t$ 最新可用的观测和本体信息；
-The current information $\mathcal F_c$ retains the planning information and adds the latest observations and proprioception available at time $t$.
-% 完整因果历史 $\mathcal F_h$ 进一步包含此前的执行记录，
-The complete causal history $\mathcal F_h$ additionally contains previous execution records,
-% 满足 $\mathcal F_p\subseteq\mathcal F_c\subseteq\mathcal F_h$。
-with $\mathcal F_p\subseteq\mathcal F_c\subseteq\mathcal F_h$.
-% 运行时信息仅包含已获得的记录及时间戳。
-Runtime information includes only records and timestamps already available.
-The separation of current information from longer execution history is also motivated by prior findings that
-history can resolve partial observability but can be harmful when a policy exploits action correlations rather than task evidence~\cite{wen2020copycat,chuang2022rap}.
-
-% 新观测和额外历史分别使最优平均失败概率降低的幅度为
-The reductions in optimal mean failure probability due to new observations and additional history are, respectively,
-\begin{align}
- \Delta_{\mathrm{new}}
- &=\mathcal L_\mu^*(\mathcal F_p)-\mathcal L_\mu^*(\mathcal F_c),\nonumber\\
- \Delta_{\mathrm{hist}}
- &=\mathcal L_\mu^*(\mathcal F_c)-\mathcal L_\mu^*(\mathcal F_h).
- \label{eq:taskinformationgain}
-\end{align}
-% 信息嵌套使两项均非负，因为较丰富的信息允许复用原动作规则。
-Both terms are nonnegative by information inclusion: a rule using less information remains available when more information is provided.
-% 一个严格正历史价值的充分情形是：相同当前观测和计划下，两种等概率模式要求相反动作，历史识别模式，正确与错误动作的失败概率差为c>0。
-% 可选动作仅为两个相反动作；相同当前信息指全部F_c，包括本体、计划和运行记录；评价分布仅在末次决策上。
-For a final-decision distribution $\mu$ in a two-action setting, consider two equally likely modes with identical $\mathcal F_c$, including observations, proprioception, plan context, and runtime records.
-If history distinguishes the modes and they require opposite actions, with an incorrect choice increasing failure probability by $0<c\le1$, then $\Delta_{\mathrm{hist}}=c/2$ (Appendix~\ref{app:historyvalue}).
-% 该例不是声称所有历史都有价值；若当前信息已决定最优动作，历史价值可为零。
-If current information already determines an optimal action, the history value can instead be zero.
-% 有限动作--响应历史的编码可能丢失决策所需信息，该损失由后续表示损失项刻画。
-Encoding a finite action--response history may discard decision-relevant information; the resulting loss is accounted for by the representation term below.
-
-% \subsubsection{从信息价值到实际修正}
-\subsubsection{From Information Value to Implemented Corrections}
-% 新信息的潜在价值不等于候选修正的实际收益；沿用C的分解，还须扣除反馈表示的信息损失与决策实现误差。
-The potential value of new information is not yet the benefit of a candidate correction.
-Applying the decomposition in~\eqref{eq:taskrepresentationdecomposition} to the feedback representation also accounts for information loss and decision-realization error.
-% 反馈表示是确定目标槽位候选指令所需计划信息、观测、执行历史和运行记录的因果表示。
-Let $Z_t^{\mathrm{fb}}$ be a causal representation of the planning information, observations, execution history, and runtime records needed to determine the target-slot candidate command,
-% 生成信息 $\mathcal U=\sigma(Z_t^{\mathrm{fb}})\subseteq\mathcal F_h$。
-generating $\mathcal U=\sigma(Z_t^{\mathrm{fb}})\subseteq\mathcal F_h$.
-% 沿用C的完整读出前表示约定，候选选择及后处理由该表示可测地决定。
-As in Section~\ref{sec:representationanalysis}, this is the complete pre-readout representation: candidate selection and postprocessing are measurable functions of it.
-% tau_p为有效计划所用观测时刻，tau_o为候选所用最新观测时刻，t为目标执行时刻。
-For a valid plan, let $\tau_p$ be the time of the observation used by that plan, $\tau_o$ the latest observation time used by the candidate, and $t$ the target execution time, with $\tau_p\le\tau_o\le t$.
-% 编码与观测延迟可能限制保留的决策信息。
-Encoding and observation delay may limit the decision-relevant information retained.
-
-% 由该表示生成候选指令 $\widehat u=B+r\in\mathcal A$，
-The representation produces a candidate command $\widehat u=B+r\in\mathcal A$,
-% 其中 $r$ 为包含限幅等后处理的目标槽位残差。
-where $r$ is the residual for the target slot after postprocessing, including magnitude bounding.
-% 基础动作的决策实现差距为
-The decision-realization gap of the base action is
-$\epsilon_{\mathrm{base}}=\mathcal L_\mu(B)-\mathcal L_\mu^*(\mathcal F_p)$.
-
-% \begin{proposition}[候选反馈的任务收益分解]
-\begin{proposition}[Decomposition of candidate feedback benefit]
-\label{prop:taskfeedback}
-% 在同一 $\mu$、$\pi_0$ 和动作集合下，将采用候选修正后平均失败概率的下降称为候选反馈收益，满足
-Under the same $\mu$, $\pi_0$, and action set, define the candidate feedback benefit as the reduction in mean failure probability from applying the candidate correction. It satisfies
-\begin{align}
- \Gamma_\mu
- &:=\mathcal L_\mu(B)-\mathcal L_\mu(\widehat u)\nonumber\\
- &=\epsilon_{\mathrm{base}}+\Delta_{\mathrm{new}}+\Delta_{\mathrm{hist}}
-   -\Delta_{\mathrm{rep}}(\mathcal U)-\epsilon_{\mathrm{dec}}(\widehat u).
- \label{eq:taskfeedbackdecomposition}
-\end{align}
-\end{proposition}
-% 证明见附录~\ref{app:feedbackproofs}。
-The proof is given in Appendix~\ref{app:feedbackproofs}.
-% 决策实现差距包含残差幅度/容量限制、学习误差及监督目标差异。
-The decision-realization gap includes residual magnitude and capacity limits, learning error, and the mismatch between action supervision and task consequences.
-% 同分布同槽位的残差动作误差恒等式仅诊断修正方向与幅度，不能替代这里的任务收益。
-The matched-distribution, matched-slot action-error identity~\eqref{eq:residualgain} diagnoses correction direction and magnitude, but does not replace this task-benefit criterion.
-
-% \subsubsection{时序对齐与闭环任务收益}
-\subsubsection{Temporal Alignment and Closed-Loop Task Benefit}
-% 候选的决策优势只有通过实际采用才影响轨迹；以下结合采用规则与B1性能差分。
-A candidate's decision advantage affects the trajectory only through its actual adoption.
-We connect the adoption rule to task performance using the performance-difference identity~\eqref{eq:pd}.
-% r是执行机制实际选中并限幅的目标槽位候选，无候选取0；候选必须及时到达、未过期且匹配有效计划与槽位。
-Let $r$ be the bounded target-slot candidate actually selected by the deterministic execution rule, or zero if none is available.
-A correction must arrive in time, remain unexpired, and match the valid plan and execution slot.
-% 修正采用指示量 $\Lambda\in\{0,1\}$ 在满足这些条件时取 $1$，否则取 $0$。
-The correction-adoption indicator $\Lambda\in\{0,1\}$ equals $1$ when these conditions hold and $0$ otherwise.
-% 无有效修正时执行 $B$；基础计划也不可用时，$B$ 为同一历史下预先规定的回退指令，
-Without a valid correction, $B$ is executed. If the base plan is also unavailable, $B$ is the predefined fallback command for the same history,
-% 此时置 $\Lambda=0$，并将候选残差约定为 $r=0$。
-with $\Lambda=0$ and the candidate residual set to $r=0$.
-% 实际执行指令为 $u_{\mathrm{exec}}=B+\Lambda r$，
-The executed command is $u_{\mathrm{exec}}=B+\Lambda r$.
-% 在可用历史h下，候选修正相对基础动作降低失败概率的幅度为
-Given history $h$, the candidate's reduction in failure probability relative to the base action is
-$g_t(h)=Q_t^{\pi_0}(h,B)-Q_t^{\pi_0}(h,\widehat u)$.
-% 由于任务后果是失败概率，$g_t(h)\in[-1,1]$。
-Because the compared outcomes are failure probabilities, $g_t(h)\in[-1,1]$.
-% 有效收益为采用后的平均任务收益，取决于哪些修正及时采用，而非仅总体采用率。
-The effective benefit is $\Gamma_{\mathrm{exec},\mu}=\E_\mu[\Lambda g_t(h)]$;
-it depends on which corrections are adopted in time, not merely the overall adoption rate.
-
-% 参照与修正控制器在共同过程假设下共享计算状态转移律（含接收过程），仅执行修正不同；不要求不同闭环轨迹有相同实际完成时刻。
-The reference and corrected controllers share the same computation-state transition law under Assumption~\ref{ass:commonprocess}, including the reception process, and differ only in the executed correction.
-
-% \begin{proposition}[有效反馈与任务完成]
-\begin{proposition}[Effective feedback and task completion]
-\label{prop:executedtaskgain}
-% 在假设~\ref{ass:commonprocess}下，
-Under Assumption~\ref{ass:commonprocess},
-% 若完整部署策略 $\pi$ 在其访问历史上执行上述 $u_{\mathrm{exec}}$，
-if the complete deployed policy $\pi$ executes the above $u_{\mathrm{exec}}$ on its visited histories,
-% 而参考策略在相同历史上执行 $B=\pi_0(h)$，则
-while the reference policy executes $B=\pi_0(h)$ on the same histories, then
+% \subsubsection{剩余动作误差的预测}
+\subsubsection{Residual Prediction of Action Error}
+% 固定基础动作，将残差学习表述为对剩余专家动作偏差的预测。
+We treat residual learning as prediction of the action deviation left by a fixed base policy.
+% 所有比较使用相同的总体分布、专家目标、执行时刻与动作尺度。
+All comparisons use the same demonstration distribution $\nu$, expert targets, target execution steps, and action scale.
+% 使用大写E表示向量误差，避免与B3中的标量距离e(h)混淆。
+For base policy $\pi_{\mathrm b}$, let $B=\pi_{\mathrm b}(\mathcal H_t)$ and define the residual target
 \begin{equation}
- J(\pi)-J(\pi_0)
- =T\,\E_{\bar\mu_\pi}[\Lambda g_t(h)].
- \label{eq:closedlooptaskgain}
+ E=\pi_{\mathrm E}(\mathcal H_t)-B.
+ \label{eq:residualtarget}
 \end{equation}
-% 因此，实际访问分布上的有效任务收益为正，当且仅当任务完成概率高于参考策略。
-Thus, the effective task benefit under the actual visitation distribution is positive if and only if task-completion probability exceeds that of the reference policy.
-\end{proposition}
+% 三种信息均为当前决策之前可获得历史的子集；基础动作可由最小信息集合确定。
+Let $\mathcal F_{\mathrm b}\subseteq\mathcal F_{\mathrm c}\subseteq\mathcal F_{\mathrm h}\subseteq\sigma(t,\mathcal H_t)$ denote the information used to generate $B$, its augmentation with updated observations, and its further augmentation with execution history.
+The base action is $\mathcal F_{\mathrm b}$-measurable; all added information is available before the target action is executed.
+% 在有限二阶矩下，条件均值是给定信息能够预测的误差部分。
+For any such information $\mathcal F$ and $\E_\nu\norm E^2<\infty$, the ideal residual predictor and its minimum squared error are
+\begin{align}
+ r_{\mathcal F}^*&=\E_\nu[E\mid\mathcal F],\nonumber\\
+ R_\nu^*(\mathcal F)&=\E_\nu\norm{E-r_{\mathcal F}^*}^2.
+ \label{eq:optimalresidual}
+\end{align}
+% 这是不限制模型形式的预测基准，不预设动作可行性或可学习性。
+This is an unrestricted square-integrable prediction benchmark, not an assumption that a network attains it or that $B+r_{\mathcal F}^*$ satisfies all action constraints.
+The derivation is in Appendix~\ref{app:optimalresidual}.
 
-% 进一步，若 $Z_t^{\mathrm{fb}}$ 可读出执行时刻关系 $G_t$ 的估计 $\widehat G_t$ 与上下文 $\chi_t$，
-Furthermore, if $Z_t^{\mathrm{fb}}$ admits readouts of an estimate $\widehat G_t$ of the execution-time relations $G_t$ and context $\chi_t$,
-% 且这些量在 $\bar\mu_\pi$ 上满足假设~\ref{ass:taskrelations}，则可应用C的关系界。
-and these quantities satisfy Assumption~\ref{ass:taskrelations} under $\bar\mu_\pi$, the relation bound in Section~\ref{sec:representationanalysis} applies.
-% 此处 $\delta_G=\E_{\bar\mu_\pi}\norm{G_t-\widehat G_t}$ 及其余关系常数均针对反馈表示与执行时刻；
-Here, $\delta_G=\E_{\bar\mu_\pi}\norm{G_t-\widehat G_t}$ and all other relation constants concern the feedback representation and execution time.
-% 计划时刻的关系估计精度不能替代目标执行时刻的关系估计精度。
-Relation-estimation accuracy at the planning time $\tau_p$ cannot substitute for accuracy at the target execution time $t$ (Appendix~\ref{app:feedbackrelationtime}).
-% 以 $p_{\mathrm{miss}}=\Prob_{\bar\mu_\pi}(\Lambda=0)$ 表示未采用概率，结合时效界得到
-Let $p_{\mathrm{miss}}=\Prob_{\bar\mu_\pi}(\Lambda=0)$ denote the probability of nonadoption. Combining this with the timing bound gives
+% \subsubsection{额外信息的预测价值}
+\subsubsection{Predictive Value of Additional Information}
+% 额外信息只有改变了对误差的最佳预测，才有严格的潜在收益。
+Additional information has strict predictive value when it changes the best estimate of the remaining action error.
+% 同一基础策略和评价分布下，嵌套信息对应的最优误差之差为预测变化的平方。
+For $\mathcal F_0\subseteq\mathcal F_1$,
 \begin{equation}
- \begin{aligned}
- J(\pi)-J(\pi_0)\ge T\big[&
- \epsilon_{\mathrm{base}}+\Delta_{\mathrm{new}}+\Delta_{\mathrm{hist}}\\
- &-2(\epsilon_{\mathrm{rel}}+K_G\delta_G)\\
- &-\epsilon_{\mathrm{dec}}(\widehat u)-p_{\mathrm{miss}}\big].
- \end{aligned}
- \label{eq:endtoendtaskbound}
+ R_\nu^*(\mathcal F_0)-R_\nu^*(\mathcal F_1)
+ =\E_\nu\norm{r_{\mathcal F_1}^*-r_{\mathcal F_0}^*}^2.
+ \label{eq:residualinformationgain}
 \end{equation}
-% 右端为正时，信息价值及基础决策的改进空间超过表示、实现和时效损失，
-A positive right-hand side means that information value and the room for improving the base decision exceed representation, realization, and timing losses,
-% 从而给出任务完成概率提高的充分条件。
-providing a sufficient condition for increased task-completion probability.
-% 所有量在同一部署分布评价；这是固定基础策略上的反馈增益，不能将不同策略分布上的局部收益相加。
-All terms are evaluated under the same deployment distribution for a fixed base policy.
-If $\pi_0$ already includes semantics, this is a feedback-increment guarantee, not the full method's gain over RGB; local gains under different policy distributions cannot simply be added.
-% 若关系条件仅在可见等有效子域成立，关系界只适用于该条件分布；
-If the relation conditions hold only on a valid subdomain, such as visible cases, the relation bound applies only to that conditional distribution.
-% 总体收益还须计入无效子域的贡献，不能直接由式\eqref{eq:endtoendtaskbound}获得保证。
-The overall benefit must also account for the invalid subdomain and cannot be guaranteed directly by~\eqref{eq:endtoendtaskbound}.
+% 分别比较基础与当前、当前与历史，可分离更新观测和历史的潜在贡献。
+Applying this identity to $(\mathcal F_{\mathrm b},\mathcal F_{\mathrm c})$ and $(\mathcal F_{\mathrm c},\mathcal F_{\mathrm h})$ separates the potential contributions of updated observations and history.
+% 新信息若不改变条件均值，潜在收益为零。
+The gain is zero if the conditional mean is unchanged; more information alone does not imply a strict improvement.
+% 证明见对应附录，收益针对理想预测而非具体历史网络。
+Appendix~\ref{app:residualinformationgain} gives the proof.
+These gains concern optimal prediction, not the performance of a particular history model.
 
-% 该分析性充分条件不能仅凭模仿与辅助训练损失认证。
-This analytical sufficient condition cannot be certified from imitation and auxiliary training losses alone.
-% 未采用惩罚是保守的：被拒绝的候选未必有益；在r=0约定下，无候选槽位相对于当前候选的局部采用损失为零，仍可计入未采用惩罚。
-The nonadoption penalty is conservative: rejected corrections need not be beneficial, and under the $r=0$ convention a slot with no candidate has zero local adoption loss relative to its defined candidate, yet may still contribute to $p_{\mathrm{miss}}$.
+% \subsubsection{实际修正与任务表现界}
+\subsubsection{Realized Corrections and Task-Performance Bounds}
+% 实际收益取决于可预测误差是否超过残差模型自身的预测误差。
+A learned correction improves imitation accuracy only when its prediction error is smaller than the error that the available information makes correctable.
+% 实際残差是信息F的函数；定义相对理想预测的误差，不把它与训练损失等同。
+Let $r_{\mathcal F}$ be the square-integrable, $\mathcal F$-measurable residual actually applied, and let $\pi_{\mathcal F}(\mathcal H_t)=B+r_{\mathcal F}$.
+Define $\epsilon_{\mathrm{res}}(\mathcal F)=\E_\nu\norm{r_{\mathcal F}-r_{\mathcal F}^*}^2$.
+Then
+\begin{equation}
+ R_\nu(\pi_{\mathcal F})
+ =R_\nu(\pi_{\mathrm b})
+  -\E_\nu\norm{r_{\mathcal F}^*}^2
+  +\epsilon_{\mathrm{res}}(\mathcal F).
+ \label{eq:realizedresidualrisk}
+\end{equation}
+% 因而可预测部分大于实际预测误差时才降低总体模仿误差。
+Thus, $R_\nu$ decreases if $\epsilon_{\mathrm{res}}(\mathcal F)<\E_\nu\norm{r_{\mathcal F}^*}^2$.
+% 该误差包含模型限制、学习不足与动作后处理；信息收益可能被学习误差抵消。
+The realization error includes model limitations, imperfect learning, and output constraints.
+Richer information improves the learned correction only if its predictive gain exceeds any increase in this error (Appendix~\ref{app:realizedresidual}).
+
+% 返回B3：纠偏不改变A4的要求，降低总体动作误差只是收紧任务界的一条路径。
+For admissible corrected actions, the task-performance implication follows from~\eqref{eq:representationcoveragebound} under its coverage and action-sensitivity conditions.
+% 纠偏可能改变部署分布，因此评价完整组合项，而不是假定C和D不变。
+Corrections may change the deployment distribution, so the relevant quantity remains $C_\phi R_\nu(\pi)+D_\phi$ for each complete policy.
+% 在共同外部条件下，组合项减小收紧界，但不证明实际成功率排序。
+For a fixed expert baseline, horizon, and positive action-sensitivity bound, reducing this combined quantity tightens the task-failure bound.
+This provides a conditional direction for improvement, not an ordering of actual success rates.

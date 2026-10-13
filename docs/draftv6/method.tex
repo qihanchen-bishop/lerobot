@@ -1,379 +1,215 @@
-% 核心观点：可靠语义监督改善任务关系表示，历史条件反馈把新的执行证据转化为时序对齐的动作修正。
-% 叙述逻辑：离线语义监督构建 -> 任务关系引导的基础策略 -> 在线历史条件残差反馈。
-% 理论对应：控制伪标签误差 -> 保留任务关系 -> 利用新增信息并保证修正时效。
-\begin{figure*}[t]
-  \centering
-  \includegraphics[width=\textwidth]{myfigure/image2.png}
-  % 方法总览。
-  % 离线流程生成语义分割器、累积伪标签和质量信息。
-  % 基础策略联合编码RGB、软语义和受监督的任务关系查询以生成动作块。
-  % 反馈分支利用最新观测和历史信息生成残差，并修正尚未执行的动作。
-  \caption{Method overview. Quality-aware iterative segmentation constructs the frozen semantic model, cumulative pseudo-labels, and quality information used for weighted task-relation supervision. The base policy jointly encodes RGB observations, soft semantics, proprioception, and learnable relation queries to generate an action sequence. The history-conditioned feedback branch fuses the latest observation with the encoded policy context and predicts residual corrections for the action sequence.}
-  \label{fig:architecture}
-\end{figure*}
-\section{Method}
-\label{sec:method}
-
-Section~\ref{sec:analysis} shows that improving task performance from limited demonstrations depends on two related conditions: the policy representation must preserve task relations that affect action outcomes, and execution-time observations must be converted into timely and effective corrections.
-
-To instantiate these conditions, we construct the three-stage framework illustrated in Fig.~\ref{fig:architecture}.
-First, offline quality-aware iterative annotation provides reliable supervision for semantic inputs and task relation labels.
-Second, a base policy jointly encodes RGB observations, soft semantics, and supervised relation queries to generate long-horizon action chunks.
-Finally, history-conditioned feedback uses observations acquired after plan generation to correct action slots that have not yet been executed.
-
-\subsection{Quality-Aware Iterative Semantic Supervision}
-\label{sec:methodseg}
-% 命题~\ref{prop:taskrepresentation}表明，关系估计误差$\delta_G$会进入任务后果意义下的表示损失上界。
-Proposition~\ref{prop:taskrepresentation} shows that the relation-estimation error $\delta_G$ enters the upper bound on representation loss measured in task outcomes.
-% 式~\eqref{eq:pseudolabel}进一步将其分解为关系读出误差与关系伪标签误差。
-Equation~\eqref{eq:pseudolabel} further decomposes this error into relation-readout error and relation pseudo-label error.
-% 因此，关系监督能否提供有效归纳偏置，不仅取决于查询头对监督目标的拟合，还取决于生成这些目标的语义掩码是否可靠。
-Consequently, whether relation supervision provides a useful inductive bias depends not only on how well the query heads fit their supervision targets, but also on the reliability of the semantic masks from which those targets are derived.
-
-% 如图~\ref{fig:iterative-semantic-annotation}所示，本文首先以有限人工审核建立高质量种子，再通过分割预测、视频级质量筛选和合格伪标签的跨轮累积迭代扩展语义监督。
-As illustrated in Fig.~\ref{fig:iterative-semantic-annotation}, we first establish a high-quality seed set through limited manual review and then iteratively expand semantic supervision through segmentation prediction, video-level quality screening, and the accumulation of accepted pseudo-labels across rounds.
-
-
-% \subsubsection{事件引导的种子标注与迭代扩展}
-\subsubsection{Event-Guided Seed Annotation and Iterative Expansion}
-% 从每类任务中选取少量覆盖主要外观、遮挡状态和交互事件的视频。
-For each task class, we select a small number of videos that cover the principal appearances, occlusion states, and interaction events.
-% 关键帧围绕语义状态显著变化的时刻选取，例如目标首次暴露、工具接触目标和目标进入任务区域，而非按固定时间间隔采样。
-Keyframes are selected around substantial semantic-state changes, such as the first exposure of the target, tool--target contact, and entry of the target into the task region, rather than at fixed temporal intervals.
-% 标注者在关键帧提供紧致框及正负点提示，由SAM2沿时间正向和反向传播\cite{ravi2024sam2}。
-At each keyframe, an annotator supplies a tight bounding box together with positive and negative point prompts, which SAM2 propagates both forward and backward in time~\cite{ravi2024sam2}.
-% 传播分歧用于定位不稳定区间，随后结合类别相关的结构约束和人工复核修正漏分、误分及孔洞。
-Disagreement between the two propagation directions localizes unstable intervals, after which class-dependent structural constraints and manual review correct missed regions, false positives, and holes.
-% 经审核的视频掩码构成初始种子集，同时保留提示来源、传播方向与修订记录。
-The reviewed video masks form the initial seed set, while prompt provenance, propagation direction, and revision records are retained for traceability.
-
-% 初始种子按完整视频划分训练和开发验证集合，相邻帧不跨集合，以避免时间相关性造成虚高估计。
-The initial seed videos are divided into training and development-validation sets at the video level, without allowing adjacent frames to cross sets, to avoid optimistic estimates caused by temporal correlation.
-% 由此训练初始分割器后，每一轮模型在新的未标注视频集合$\mathcal U^{\mathrm{new}}$上产生逐像素类别概率。
-After training the initial segmenter, each iteration produces pixelwise class probabilities on a new set of unlabeled videos $\mathcal U^{\mathrm{new}}$.
-% 经互斥化和固定结构处理得到候选掩码；只有通过下述质量准入的候选掩码才加入扩展集。
-Mutual-exclusivity enforcement and fixed structural processing produce candidate masks, of which only those passing the quality-admission procedure below are added to the expanded set.
-% 扩展样本跨轮累积，但初始种子不再参与后续拟合，而作为固定参考集监测类别性能、关键事件性能和灾难性遗忘。
-Expanded samples accumulate across rounds, whereas the initial seed videos no longer participate in subsequent fitting and instead serve as a fixed reference set for monitoring classwise performance, key-event performance, and catastrophic forgetting.
-% 每轮均重新初始化分割器，并另以从未参与训练或模型选择的视频评价最终跨视频泛化。
-The segmenter is reinitialized in every round, and final cross-video generalization is evaluated on separate videos that have never been used for training or model selection.
-
-\suppressfloats[t]
+% 主线：可靠语义监督 -> 任务信息表示 -> 历史条件残差纠偏。
+% 单栏流程图紧随整体框架图，交由浮动队列安排。
 \begin{figure}[t]
  \centering
  \includegraphics[width=\columnwidth]{myfigure/image3.png}
- % 质量感知的迭代语义标注流程。
- % 事件关键帧提示和SAM2双向传播经一致性检查与人工修正生成种子掩码，种子仅用于初始化首个分割器。
- % 后续轮次在新视频上生成候选掩码，利用面积、质心、拓扑和运动一致性进行视频级质量准入，并将合格伪标签跨轮累积。
- % 每轮从累积数据重新初始化并训练分割器，固定验证准则不再改善时停止迭代。
- \caption{Quality-aware iterative semantic annotation. Event-keyframe prompts and bidirectional SAM2 propagation are reconciled through consistency checks and manual correction to produce seed masks, which initialize only the first segmenter. Subsequent rounds predict candidate masks on new videos and apply video-level area, centroid, topology, and motion-consistency diagnostics before admitting pseudo-labels to a cumulative pool. Each round trains a reinitialized segmenter on the expanded pool, and iteration stops when the fixed validation criterion no longer improves.}
+ % 审核后得到种子；后续仅使用累积的合格伪标签训练。
+ \caption{Quality-aware iterative annotation. Reviewed bidirectional SAM2 masks train the initial segmenter. Subsequent models learn from cumulative, quality-screened pseudo-labels; seed videos are retained for reference rather than further training.}
  \label{fig:iterative-semantic-annotation}
 \end{figure}
+\section{Method}
+\label{sec:method}
+% 理论给出保留任务信息与利用执行新证据的两条改进方向。
+Section~\ref{sec:analysis} motivates two directions: preserving information relevant to expert action selection and using new execution evidence to reduce remaining action error.
+% 图中三个模块依次提供可靠监督、学习任务信息表示并实施历史条件纠偏。
+Figure~\ref{fig:architecture} organizes these directions into three components.
+% 离线质量筛选迭代扩展少量人工审核标注。
+First, quality-aware iterative annotation expands a small manually reviewed seed set into semantic supervision.
+% RGB、语义和受监督查询共同支持基础动作块预测。
+Second, RGB observations, semantic maps, and supervised task-descriptor queries jointly support a base action-chunk policy.
+% 历史反馈利用更新观测修正尚未执行的动作。
+Third, a history-conditioned residual model uses updated observations to correct actions that have not yet been executed.
 
-% \subsubsection{事件保持的视频质量评估}
-\subsubsection{Event-Preserving Video Quality Assessment}
-% 记第$t$帧类别$c$的候选掩码为$\widetilde M_t^c$。
-Let $\widetilde M_t^c$ denote the candidate mask for class $c$ in frame $t$.
-% 质量评估同时保留模型原始输出与固定结构处理后的掩码，前者用于诊断模型误差，后者表示实际可用于监督的伪标签。
-The quality assessment retains both the raw model output and the mask after fixed structural processing: the former diagnoses model errors, whereas the latter represents the pseudo-label that is actually available for supervision.
-% 对每个分支提取紧凑状态
-For each branch, we extract the compact state
-\begin{equation}
- \bm d_{t,c}^{\mathrm{seg}}=\phi_{\mathrm{seg}}(\widetilde M_t^c),
- \label{eq:segdiagnostics}
-\end{equation}
-% 其中$\phi_{\mathrm{seg}}$概括掩码的面积、质心、包围框尺度、连通分量和孔洞结构。
-where $\phi_{\mathrm{seg}}$ summarizes mask area, centroid, bounding-box scale, connected components, and hole structure.
-% 这些量分别描述类别的规模、位置、形状与拓扑，而非构成彼此替代的正确性判据。
-These quantities describe class extent, location, shape, and topology, respectively, rather than serving as interchangeable criteria of correctness.
+\subsection{Quality-Aware Iterative Semantic Supervision}
+\label{sec:methodseg}
+% 语义掩码决定描述量标签的质量，因而需控制错误伪标签在迭代中的传播。
+Task-descriptor labels are derived from semantic masks, so segmentation errors can compromise the supervision used to preserve task information.
+% 从少量审核种子出发，视频级筛选控制扩展标注的可靠性。
+We combine reviewed seed annotations with video-level quality screening to limit error propagation as the labeled set expands (Fig.~\ref{fig:iterative-semantic-annotation}).
 
-% 直接限制相邻帧差异会将目标暴露、接触和推动等真实任务进展误判为错误。
-Directly constraining inter-frame differences can misclassify genuine task progress, including target exposure, contact, and pushing, as annotation errors.
-% 为此，本文在整段视频上为$\bm d_{1:T,c}^{\mathrm{seg}}$拟合分段鲁棒的期望轨迹。
-We therefore fit a piecewise robust expected trajectory to $\bm d_{1:T,c}^{\mathrm{seg}}$ over the entire video.
-% 持续性的水平变化形成新的状态段，孤立或短时偏离才产生异常证据。
-Persistent level changes form new state segments, whereas isolated or short-lived deviations provide anomaly evidence.
-% 同时，以前后向一致的光流建立相邻帧的有效像素对应。
-In parallel, forward--backward-consistent optical flow establishes valid pixel correspondences between adjacent frames.
-% 将前一帧掩码运动补偿到当前帧后计算轮廓一致性；光流证据不足的区域记为不可用，而不自动判为低质量。
-Contour consistency is computed after motion-compensating the previous mask into the current frame; regions with insufficient flow evidence are marked unavailable rather than automatically assigned low quality.
-% 由此得到四组互补证据
-This procedure yields four complementary evidence groups,
+\subsubsection{Event-Guided Seeds and Iterative Expansion}
+% 从覆盖主要交互与遮挡变化的少量视频中选择关键帧。
+We select a small set of videos spanning the principal interaction and occlusion states, and annotate keyframes around events such as target exposure, contact, and placement.
+% 人工框与正负点经SAM2双向传播，检查分歧并人工修正后得到种子掩码。
+Bounding boxes and positive and negative point prompts guide bidirectional SAM2 propagation~\cite{ravi2024sam2}; consistency checks, class-dependent structural processing, and manual correction produce the seed masks.
+% 种子训练初始U-Net，后续在新视频上生成候选标注。
+The seeds train an initial U-Net segmenter, which predicts candidate masks on new unlabeled videos.
+% 质量合格的标注跨轮累积，每轮重新初始化训练，种子不再用于后续拟合。
+Accepted masks accumulate across iterations, and each subsequent segmenter is reinitialized and trained on this cumulative pool without the original seed videos.
+% 种子改为固定参考，依据分割精度和异常率监测迭代。
+The seed videos then serve as a fixed reference for monitoring segmentation accuracy and temporal anomalies.
+% 不固定迭代次数，以精度保持条件下的异常改善作为继续依据。
+Iteration continues while anomaly rates improve without a material loss of segmentation accuracy.
+
+\subsubsection{Video-Level Quality Screening}
+% 质量评估需要区分真实任务变化与偶发分割异常。
+The screening procedure distinguishes sustained task changes from transient segmentation anomalies.
+% 按类别从完整视频提取规模、空间位置与拓扑轨迹，并进行分段鲁棒建模。
+For each class, we extract trajectories of mask area, spatial extent, centroid, and topology, and fit robust piecewise trends over the video.
+% 持续变化允许新的状态段，短时偏离作为异常证据，而不是直接惩罚帧间差异。
+Persistent changes can establish new segments, while short-lived departures provide anomaly evidence instead of penalizing every inter-frame change.
+% 通过可靠光流对应计算运动补偿后的掩码IoU。
+Motion-compensated mask IoU supplies additional temporal evidence on pixels with forward--backward-consistent optical-flow correspondences.
+% 四类证据分别反映规模、空间形状、拓扑与运动不一致。
+For class $c$ at frame $t$, we collect these diagnostics as
 \begin{equation}
  \bm\upsilon_{t,c}^{\mathrm{seg}}
- =\left(
- \upsilon_{t,c}^{\mathrm{area}},
- \upsilon_{t,c}^{\mathrm{space}},
- \upsilon_{t,c}^{\mathrm{topo}},
- \upsilon_{t,c}^{\mathrm{motion}}
- \right),
+ =(\upsilon_{t,c}^{\mathrm{area}},
+   \upsilon_{t,c}^{\mathrm{space}},
+   \upsilon_{t,c}^{\mathrm{topo}},
+   \upsilon_{t,c}^{\mathrm{motion}}).
  \label{eq:segevidence}
 \end{equation}
-% 分别表示相对于视频内正常轨迹的面积、空间形状、拓扑和运动不一致程度。
-which quantify area, spatial-shape, topological, and motion inconsistency relative to the normal trajectory estimated within the video.
+% 多类证据共同识别异常，避免由单一面积或运动变化决定标签无效。
+Agreement across evidence groups identifies anomalous intervals; excessive changes introduced by structural processing also trigger exclusion.
+% 帧内相关类别均通过检查时才进入后续分割训练。
+A frame enters subsequent segmentation training only when its relevant classes pass these checks.
+% 人工参考用于发现时间上稳定的系统性误分。
+The manually reviewed reference set complements temporal screening by checking for persistent semantic errors that temporal consistency alone cannot detect.
+% 分割准入与描述量权重共享诊断来源，但依照各自监督对象使用。
+The same diagnostics also determine descriptor-specific supervision weights in Section~\ref{sec:methodrelations}.
+% 离线质量建模与在线分割明确分开，在线仅需当前图像。
+Quality assessment is performed offline; the final per-view segmenters are frozen and require only current images during policy execution.
 
-% 只有多个相互独立的证据组同时超过各类别、各视频的鲁棒容差时，当前类别才被确认为硬异常。
-A class is confirmed as a hard anomaly only when multiple mutually independent evidence groups simultaneously exceed robust class- and video-specific tolerances.
-% 检测结果在局部时间邻域内扩展，以避免异常边界泄漏。
-The detected interval is expanded over a local temporal neighborhood to prevent leakage at anomaly boundaries.
-% 若结构处理相对原始输出改变了过多前景像素，则该帧也不进入下一轮分割训练。
-If structural processing changes too many foreground pixels relative to the raw output, the frame is also excluded from the next segmentation-training round.
-% 以$\eta_{t,c}^{\mathrm{seg}}\in\{0,1\}$表示类别$c$在时刻$t$未被判为硬异常的状态。
-Let $\eta_{t,c}^{\mathrm{seg}}\in\{0,1\}$ indicate that class $c$ at time $t$ has not been identified as a hard anomaly.
-% 仅当一帧中的相关类别均通过检查且不过度依赖结构处理时，其处理后掩码才进入扩展集。
-The processed masks of a frame enter the expanded set only when the relevant classes pass the checks and the result does not depend excessively on structural processing.
-% 连续质量分数仅用于排序与诊断，不解释为掩码正确概率，也不直接作为策略输入。
-The continuous quality score is used only for ranking and diagnosis; it is neither interpreted as the probability of mask correctness nor supplied directly to the deployed policy.
-
-% 该检查能够发现相对于视频自身运动与结构规律的异常，但不能排除时间上稳定的系统性误分。
-This assessment detects deviations from the video's own motion and structural regularities, but cannot rule out temporally stable systematic segmentation errors.
-% 因此，迭代模型还须在固定人工参考集上监测，并在新增伪标签不再改善独立验证性能时停止。
-The iterative model is therefore also monitored on a fixed manually reviewed reference set, and iteration stops when newly added pseudo-labels no longer improve independent validation performance.
-% 不同视角分别固定类别映射并训练分割器；策略训练前冻结最终模型。
-Class mappings and segmenters are defined separately for different views, and the final segmenters are frozen before policy training.
-% SAM2传播和整段视频质量建模可以在离线阶段使用后续帧，在线分割和策略推理则只读取当前已获得的观测。
-SAM2 propagation and whole-video quality modeling may use subsequent frames offline, whereas online segmentation and policy inference use only observations available at the current time.
-
-% \subsection{任务关系引导的视觉--语义表示}
-\subsection{Task-Relation-Guided Visual-Semantic Representation}
+\subsection{Semantic Inputs and Task-Descriptor Queries}
 \label{sec:methodrelations}
-% 软语义图表示对象类别及其空间位置，关系查询进一步约束表示保留影响决策的对象关系。
-Soft semantic maps represent object classes and their spatial locations, while relation queries further constrain the representation to preserve object relations that affect decision making.
-% 因此，语义通过两条互补路径进入动作学习：软语义图提供对象级空间结构，受监督查询提取与任务后果相关的关系。
-Semantics therefore enters action learning through two complementary pathways: soft semantic maps provide object-level spatial structure, and supervised queries extract relations associated with task outcomes.
-% 两条路径均与RGB联合使用，使策略仍能利用语义类别未覆盖的姿态、纹理和接触线索。
-Both pathways are combined with RGB observations, allowing the policy to retain pose, texture, and contact cues not covered by the semantic classes.
-% 同一图像经冻结分割器得到的语义提供归纳引导，而不增加物理观测。
-Semantics obtained from the same image by a frozen segmenter provides inductive guidance without introducing additional physical observations.
-% 其目的在于帮助联合表示保留与控制后果有关的信息\cite{zhang2021dbc,subramanian2022ais}。
-Its purpose is to help the joint representation preserve information relevant to control outcomes~\cite{zhang2021dbc,subramanian2022ais}.
-% 命题~\ref{prop:taskrepresentation}给出相应条件下关系读出误差对表示损失的约束。
-Proposition~\ref{prop:taskrepresentation} bounds representation loss in terms of relation-readout error under the stated conditions.
-% 具体设计是否改善关系读出及其在决策中的利用，由实验检验。
-Whether the proposed design improves relation readout and its use in decision making is determined experimentally.
+% 语义突出对象级结构，查询监督引导表示保留具体任务信息。
+Semantic maps emphasize object-level spatial structure, while supervised queries encourage the joint representation to retain task-relevant attributes and relationships.
+% RGB与本体信息保留类别图无法完整表达的决策线索。
+RGB and proprioception remain available for decision cues not captured by the semantic classes.
+% 这对应C中的描述量估计途径，而非声称增加输入自动改善覆盖。
+This design targets the descriptor-estimation term in~\eqref{eq:expertreconstruction} through the learned representation, rather than assuming that adding semantic channels improves coverage.
 
-% \subsubsection{RGB与软语义的联合编码}
-\subsubsection{Joint RGB and Soft-Semantic Encoding}
-% 视角$v$的分割器根据图像$I_t^v$输出类别概率$p_t^v(c,\xi)$，并通过固定颜色向量$e_c^{\mathrm{sem}}$形成三通道软语义图：
-For view $v$, the segmenter predicts class probabilities $p_t^v(c,\xi)$ from image $I_t^v$ and forms a three-channel soft semantic map using fixed color vectors $e_c^{\mathrm{sem}}$:
+\subsubsection{Joint Visual-Semantic Encoding}
+% 冻结的各视角分割器输出类别概率，并以固定颜色形成软语义图。
+For view $v$, a frozen segmenter predicts class probabilities $p_t^v(c,\xi)$ from image $I_t^v$.
+We form a soft semantic image as
 \begin{equation}
- S_t^v(\xi)=\sum_{c\in\mathcal C_v}p_t^v(c,\xi)e_c^{\mathrm{sem}}.
+ S_t^v(\xi)=\sum_{c\in\mathcal C_v}p_t^v(c,\xi)e_c^{\mathrm{sem}},
  \label{eq:methodsoftsem}
 \end{equation}
-% 其中，$\mathcal C_v$为该视角的类别集合，$\xi$为像素位置，$e_c^{\mathrm{sem}}\in[0,1]^3$为类别$c$的固定颜色编码。
-Here, $\mathcal C_v$ is the class set for view $v$, $\xi$ is a pixel location, and $e_c^{\mathrm{sem}}\in[0,1]^3$ is the fixed color encoding of class $c$.
-% 各视角维护明确的类别对应关系。
-An explicit class correspondence is maintained for each view.
-% 软颜色图是概率的压缩表示，不采用argmax硬化，也不等同于完整的多类别概率张量。
-The soft color map is a compressed representation of the probabilities; it does not use argmax hardening and is not equivalent to the full multiclass probability tensor.
+% 定义类别集合、像素和固定颜色；不进行argmax硬化。
+where $\mathcal C_v$ is the view-specific class set, $\xi$ a pixel location, and $e_c^{\mathrm{sem}}\in[0,1]^3$ a fixed class color.
+% 概率加权颜色图允许共享三通道编码器。
+This probability-weighted color representation allows RGB and semantics to use the same three-channel visual encoder without argmax hardening.
+% 各输入流分别编码后与本体信息和查询进入Transformer。
+The encoded streams from all views are combined with proprioceptive and query tokens in a transformer encoder.
+% ACT作为基础实例，不展开其标准生成结构。
+An ACT decoder~\cite{zhao2023act} reads this context to predict the base action chunk.
 
-% RGB、软语义图和本体信息经编码后共同输入动作块策略。
-RGB observations, soft semantic maps, and proprioception are encoded and jointly supplied to the action-chunk policy.
-% 本文采用ACT作为基础策略实例\cite{zhao2023act}，但语义表示并不依赖其具体生成结构。
-We instantiate the base policy with ACT~\cite{zhao2023act}, although the semantic representation does not depend on its particular generative structure.
-% 多个视角保持为独立输入流，在策略表示空间中联合，而不直接平均不同视角的像素坐标。
-Multiple views remain separate input streams and are combined in the policy representation space rather than by directly averaging pixel coordinates across views.
+\subsubsection{Supervised Descriptor Queries}
+% 按任务选择描述量组，组成理论中的向量G。
+We select $K_{\mathrm{rel}}$ descriptor groups $G^{(j)}\in\R^{d_j}$, such as visible area and relative position, which together form the task descriptor vector $G$.
+% 标签来自离线语义掩码，具体任务定义放在附录。
+Fixed geometric operators applied to the offline masks generate pseudo-labels $\widetilde G_t^{(j)}$; the task-specific definitions are given in Appendix~\ref{app:descriptorinstance}.
+% 每组一个查询，查询输出同时用于辅助读出与动作解码。
+Each group has a learnable query whose encoded output $z_t^{(j)}$ supports a prediction head,
+$\widehat G_t^{(j)}=D_j(z_t^{(j)})$, and remains available to the action decoder.
+% 约束的是可读出的任务信息，不是指定注意力图。
+Supervision therefore encourages task information to be recoverable from the policy representation without prescribing an attention map.
 
-% \subsubsection{质量门控的关系查询监督}
-\subsubsection{Quality-Gated Relation Query Supervision}
-% 根据给定任务预先选择$K_{\mathrm{rel}}$组关系$G^{(j)}\in\R^{d_j}$，例如可见程度、相对位置或区域占据关系，并规定其坐标、尺度与有效条件。
-For a given task, we preselect $K_{\mathrm{rel}}$ relation groups $G^{(j)}\in\R^{d_j}$, such as visibility, relative-position, or region-occupancy relations, together with their coordinates, scales, and validity conditions.
-% 各组共同组成第~\ref{sec:representationanalysis}节的关系向量$G$，其中$d_j$为第$j$组的维数，$\sum_jd_j=d_G$。
-Together, these groups form the relation vector $G$ in Section~\ref{sec:representationanalysis}, where $d_j$ is the dimension of group $j$ and $\sum_jd_j=d_G$.
-% 离线掩码$\widetilde M_t^{1:V}$经固定算子$\rho_j$生成关系伪标签$\widetilde G_t^{(j)}=\rho_j(\widetilde M_t^{1:V})$。
-Fixed operators $\rho_j$ transform the offline masks $\widetilde M_t^{1:V}$ into relation pseudo-labels $\widetilde G_t^{(j)}=\rho_j(\widetilde M_t^{1:V})$.
-% 这些算子只用于构造监督，不向部署策略提供真实物体状态。
-These operators are used only to construct supervision and do not provide privileged object states to the deployed policy.
-% 具体对象、关系数量和计算方式作为任务实例给出，而不固定在通用架构中。
-The specific objects, number of relations, and their computation are specified by each task instance rather than fixed by the general architecture.
-
-% 每组关系对应一个可学习查询token，与视觉和本体token共同进入编码器。
-Each relation group is assigned a learnable query token that enters the encoder together with visual and proprioceptive tokens.
-% 其输出$z_t^{(j)}$由辅助头读出关系预测$\widehat G_t^{(j)}=D_j(z_t^{(j)})$，同时作为编码器上下文供动作解码器读取。
-An auxiliary head reads the relation prediction $\widehat G_t^{(j)}=D_j(z_t^{(j)})$ from its output $z_t^{(j)}$, which also remains in the encoder context available to the action decoder.
-% 因此，关系通过受监督的隐藏表示影响动作块，而不是由人工规则将某个关系数值直接转换为动作或阶段切换。
-Relations therefore influence the action chunk through supervised hidden representations, rather than through a hand-designed rule that directly converts a relation value into an action or phase transition.
-
-% 视频级诊断需要按具体关系传播，而不能将整帧压缩为统一质量分数。
-Video-level diagnostics must be propagated according to each relation rather than compressing the entire frame into a single quality score.
-% 记$\mathcal C_j$为关系$j$涉及的语义类别，$\operatorname{sel}_j(\bm\upsilon_{t,c}^{\mathrm{seg}})$从式~\eqref{eq:segevidence}中选取会直接影响该关系的证据，并将其汇总为标量。
-Let $\mathcal C_j$ be the semantic classes involved in relation $j$, and let $\operatorname{sel}_j(\bm\upsilon_{t,c}^{\mathrm{seg}})$ select from~\eqref{eq:segevidence} the evidence that directly affects this relation and aggregate it into a scalar.
-% 例如，可见面积主要受目标面积与拓扑误差影响，目标--区域距离依赖两者的空间位置，而目标--工具向量还对工具形状和端点定位敏感。
-For example, visible area is affected primarily by target-area and topological errors, target--region distance depends on the spatial locations of both members, and the target--tool vector is additionally sensitive to tool shape and endpoint localization.
-% 关系$j$在时刻$t$的异常程度定义为
-The anomaly severity of relation $j$ at time $t$ is defined as
-\begin{equation}
- \upsilon_{t,j}^{G}
- =\max_{c\in\mathcal C_j}
- \operatorname{sel}_j(\bm\upsilon_{t,c}^{\mathrm{seg}}).
- \label{eq:relationquality}
-\end{equation}
-% 这种关系相关传播避免由无关类别的分割异常关闭有效监督，也避免某一关键类别的错误被跨类别平均所掩盖。
-This relation-specific propagation prevents segmentation anomalies in irrelevant classes from disabling valid supervision and prevents an error in a critical class from being hidden by averaging across classes.
-
-% 令$m_{t,j}^{G}\in\{0,1\}$表示关系伪标签是否在几何和语义上有定义。
-Let $m_{t,j}^{G}\in\{0,1\}$ indicate whether the relation pseudo-label is geometrically and semantically defined.
-% 对于距离或方向关系，只要任一成员不可见即取$m_{t,j}^{G}=0$。
-For a distance or directional relation, $m_{t,j}^{G}=0$ whenever either member is not visible.
-% 对于可见面积，零值只有在目标不可见得到可靠确认时才作为有效监督，未经确认的空伪掩码不等同于真实零面积。
-For visible area, zero is treated as valid supervision only when target absence has been reliably confirmed; an unverified empty pseudo-mask is not equated with true zero area.
-% 质量权重$\varpi_{t,j}^{G}\in[0,1]$由硬异常准入和关系相关异常程度共同确定：
-The quality weight $\varpi_{t,j}^{G}\in[0,1]$ combines hard-anomaly admission with relation-specific anomaly severity:
-\begin{equation}
- \begin{aligned}
- \varpi_{t,j}^{G}
- &=m_{t,j}^{G}
-   \prod_{c\in\mathcal C_j}\eta_{t,c}^{\mathrm{seg}}
-   \;g_j(\upsilon_{t,j}^{G}),\\
- g_j(x)&=
- \begin{cases}
-  1, & x\le \underline{\upsilon}_j,\\
-  \left(\dfrac{\overline{\upsilon}_j-x}
-  {\overline{\upsilon}_j-\underline{\upsilon}_j}\right)^{\gamma_j},
-  & \underline{\upsilon}_j<x<\overline{\upsilon}_j,\\
-  0, & x\ge \overline{\upsilon}_j,
- \end{cases}
- \end{aligned}
- \label{eq:relationadmission}
-\end{equation}
-% 其中$0\le\underline{\upsilon}_j<\overline{\upsilon}_j$分别定义完整监督和拒绝监督的边界，$\gamma_j>0$控制中间区间的衰减速度。
-Here, $0\le\underline{\upsilon}_j<\overline{\upsilon}_j$ define the boundaries for full and rejected supervision, respectively, and $\gamma_j>0$ controls the decay rate in the intermediate interval.
-% 这些边界在人工审核的校准视频上，根据伪关系$\widetilde G^{(j)}$相对审核关系$G^{(j)}$的误差确定，而不以最终策略成功率反向调节。
-These boundaries are determined on manually reviewed calibration videos according to the error between the pseudo-relation $\widetilde G^{(j)}$ and the reviewed relation $G^{(j)}$, rather than tuned retrospectively against final policy success.
-% 当校准样本不足以支持连续映射时，取$g_j\equiv1$，仅保留硬准入，并将连续降权作为独立消融。
-When the calibration set is insufficient to support a continuous mapping, we set $g_j\equiv1$, retain only hard admission, and treat continuous downweighting as a separate ablation.
-
-% 训练将$\varpi_{n,j}^{G}$用于关系辅助损失，并与基础模仿学习目标联合优化：
-Training uses $\varpi_{n,j}^{G}$ in the auxiliary relation loss and jointly optimizes it with the base imitation objective:
+% 描述量权重依据自身有效性与相关类别的质量，避免无关异常影响监督。
+A weight $\varpi_{n,j}^{G}\in[0,1]$ combines descriptor validity with quality evidence from the relevant semantic classes.
+% 可信、存疑及异常标签分别全量、降权或停用。
+Reliable labels receive full weight, uncertain labels are downweighted, and undefined or anomalous labels receive zero weight.
+% 无定义距离与确认的零面积需要区分。
+In particular, a distance is undefined when either object is invisible, whereas a confirmed absence can provide a valid zero-visible-area label.
+% 只停止辅助监督，不删除动作示范。
+Disabling a descriptor loss does not remove the sample's action supervision.
+% 将组内尺度归一化后的向量误差写为紧凑的辅助损失。
+With descriptors normalized to fixed scales, the training objective is
 \begin{align}
  \mathcal L_{\mathrm{rel}}
- &=\frac{1}{K_{\mathrm{rel}}}\sum_{j=1}^{K_{\mathrm{rel}}}
- \frac{\sum_{n}\sum_{k=1}^{d_j}\varpi_{n,j}^{G}\,
- \ell_{\beta_G}(\widehat G_{njk}^{(j)}-\widetilde G_{njk}^{(j)})}
- {d_j\max(1,\sum_n\varpi_{n,j}^{G})},\nonumber\\
+ &=\frac{1}{K_{\mathrm{rel}}}\sum_j
+   \frac{\sum_n\varpi_{n,j}^{G}
+      \ell_G(\widehat G_n^{(j)}-\widetilde G_n^{(j)})}
+        {\max(1,\sum_n\varpi_{n,j}^{G})},\nonumber\\
  \mathcal L_{\mathrm{base}}
  &=\mathcal L_{\mathrm{IL}}
    +\lambda_{\mathrm{rel}}\mathcal L_{\mathrm{rel}}.
  \label{eq:methodbaseloss}
 \end{align}
-% 其中，$n$为批内样本索引，$k$为第$j$组关系的分量索引，$\ell_{\beta_G}$为转折参数$\beta_G>0$的Smooth L1损失。
-Here, $n$ indexes samples in a minibatch, $k$ indexes components of relation group $j$, and $\ell_{\beta_G}$ is the Smooth L1 loss with transition parameter $\beta_G>0$.
-% $\mathcal L_{\mathrm{IL}}$为基础策略原有的动作块模仿目标，$\lambda_{\mathrm{rel}}\ge0$为关系监督权重。
-The term $\mathcal L_{\mathrm{IL}}$ is the original action-chunk imitation objective of the base policy, and $\lambda_{\mathrm{rel}}\ge0$ weights relation supervision.
-% 各关系组先按固定尺度归一化。
-Each relation group is normalized using a fixed scale.
-% 式~\eqref{eq:relationadmission}使高可靠标签完整参与监督、边界标签降低贡献、明确异常或无定义标签停止辅助监督。
-Equation~\eqref{eq:relationadmission} gives full weight to high-reliability labels, reduces the contribution of boundary cases, and disables auxiliary supervision for clearly anomalous or undefined labels.
-% 关闭关系损失时仍保留该样本的动作监督，避免删除遮挡、接触等困难但有价值的动作样本。
-Action supervision is retained when a relation loss is disabled, avoiding the removal of difficult but valuable action samples involving occlusion or contact.
-% 分割器在此阶段保持冻结。
-The segmenters remain frozen during this stage.
-% 基础策略的具体正则项和网络设置沿用其原始实现，不属于本文方法贡献。
-The base policy retains the regularization terms and network settings of its original implementation, which are not contributions of this work.
+% 定义批索引、分量平均损失和ACT原有训练目标。
+Here, $n$ indexes minibatch samples, $\ell_G$ is the component-averaged Smooth L1 loss, and $\mathcal L_{\mathrm{IL}}$ is the standard ACT training objective.
+% 质量权重仅用于监督，分割器始终冻结。
+The segmenters remain frozen, and quality weights affect auxiliary supervision rather than online policy inputs.
+% 附录仅补充标签准入及其与描述量误差的关系。
+Appendices~\ref{app:seguncertainty} and~\ref{app:pseudolabel} specify label admission and its connection to descriptor-estimation error.
 
-% 质量门控仅在离线构造监督时使用，不屏蔽部署阶段的语义输入。
-Quality gating is used only to construct offline supervision and does not mask semantic inputs during deployment.
-% 它与第~\ref{sec:methodfeedback}节的执行时效门控$\Lambda_t$相互独立。
-It is distinct from the execution-validity gate $\Lambda_t$ in Section~\ref{sec:methodfeedback}.
-% 所选关系未必足以解释全部决策，因此基础策略和后续反馈始终保留原始视觉与本体信息，而不把关系数值作为唯一策略状态。
-Because the selected relations need not explain every decision, both the base policy and the subsequent feedback module retain the original visual and proprioceptive information rather than treating relation values as the sole policy state.
-
-% \subsection{历史条件残差动作反馈}
 \subsection{History-Conditioned Residual Action Feedback}
 \label{sec:methodfeedback}
-% 基础动作块提供连续的行为计划，反馈分支用新观测与此前执行响应修正未来槽位。
-The base action chunk provides a continuous behavioral plan, while the feedback branch uses new observations and previous execution responses to correct future slots.
-% 残差始终相对于当前有效计划定义，基础策略在残差训练和部署中均保持冻结。
-Residuals are always defined relative to the currently valid plan, and the base policy remains frozen during both residual training and deployment.
+% 保留任务信息不消除旧观测下动作生成的剩余误差。
+Even with task-relevant information, actions generated from an earlier observation may not match current execution needs.
+% 固定基础策略，以新观测与历史预测剩余动作误差，承接D。
+Following Section~\ref{sec:feedbackanalysis}, we freeze the base policy and train a residual model to predict its remaining action error from updated observations, plan context, and execution history.
 
-% \subsubsection{计划条件的因果历史编码}
-\subsubsection{Plan-Conditioned Causal History Encoding}
-% 基础策略在观测时刻$\tau_p$生成动作块及关系查询上下文。
-At observation time $\tau_p$, the base policy generates an action chunk together with its relation-query context.
-% 反馈在时刻$\tau_o$获取新图像，为尚未执行的槽位$t$生成候选修正，沿用$\tau_p\le\tau_o\le t$的时刻约定。
-At time $\tau_o$, the feedback branch acquires new images and generates a candidate correction for an unexecuted slot at time $t$, following the convention $\tau_p\le\tau_o\le t$.
-% 查询在两次计划更新之间缓存，新图像则在每次反馈更新时重新编码。
-Relation queries are cached between plan updates, whereas new images are re-encoded at every feedback update.
-
-% 第$k$次反馈更新的输入记录$e_k^{\mathrm{fb}}$联合编码新图像特征、缓存查询、本体状态、因果速度估计、上一发送指令，以及当前计划中的未来基础动作和相对时序信息。
-The input record $e_k^{\mathrm{fb}}$ for the $k$th feedback update jointly encodes new image features, cached queries, proprioceptive state, a causal velocity estimate, the previously issued command, future base actions in the current plan, and relative timing information.
-% 对最近$L_{\mathrm{hist}}$条记录，用固定窗口GRU获得反馈隐藏状态：
-A fixed-window GRU encodes the most recent $L_{\mathrm{hist}}$ records into a feedback hidden state:
+\subsubsection{Plan-Conditioned History Encoding}
+% 基础策略产生动作块和查询上下文，随后新观测用于未来动作纠偏。
+The base policy generates an action chunk and query context at time $\tau_p$.
+A feedback update at $\tau_o$ predicts corrections for future execution times $t\ge\tau_o$.
+% 输入按当前状态、计划上下文及执行响应组织。
+Its input record $e_k^{\mathrm{fb}}$ combines current visual and proprioceptive features, cached query features and target base actions, and recent command--response information.
+% 查询缓存复用，新图像每次重新编码，槽位信息用于定位待修正动作。
+Query features are cached between plan updates, while images are re-encoded at each feedback update; relative timing identifies the actions being corrected.
+% 固定窗口GRU编码历史，使用不同于理论历史h的隐藏状态符号。
+A GRU encodes the most recent $L_{\mathrm{hist}}$ records:
 \begin{equation}
- h_i=\operatorname{GRU}_{\omega}(e_i^{\mathrm{fb}},h_{i-1}),
- \quad i=\max(1,k-L_{\mathrm{hist}}+1),\ldots,k.
+ h_i^{\mathrm{gru}}
+ =\operatorname{GRU}_{\omega}
+   (e_i^{\mathrm{fb}},h_{i-1}^{\mathrm{gru}}).
  \label{eq:methodgru}
 \end{equation}
-% 其中，$\omega$为GRU参数，$L_{\mathrm{hist}}$为历史窗口长度；取最后一条有效记录的输出$h_k$。
-Here, $\omega$ denotes the GRU parameters, $L_{\mathrm{hist}}$ is the history-window length, and $h_k$ is the output corresponding to the last valid record.
-% 由此，GRU可以结合此前发出的指令与随后观察到的变化解释当前画面，而不只对相邻动作作平滑。
-The GRU can thus interpret the current observation by associating previously issued commands with subsequently observed changes, rather than merely smoothing adjacent actions.
+% 窗口从零初始化，最后状态用于预测；不展开索引与隐藏维数。
+The hidden state is initialized to zero at the start of each window, and its final value $h_k^{\mathrm{gru}}$ is used for prediction.
+% 历史使模型可结合先前指令与后续响应解释当前状态。
+This history allows the model to interpret the current observation in light of previous commands and their observed responses.
 
-% 缓存查询描述$\tau_p$时的任务关系，最新图像与因果历史补充计划生成后的执行变化。
-The cached queries describe task relations at $\tau_p$, while the latest images and causal history provide evidence of execution changes after plan generation.
-% 这些信息共同构成第~\ref{sec:feedbackanalysis}节中的反馈表示$Z_t^{\mathrm{fb}}$。
-Together, these inputs constitute the feedback representation $Z_t^{\mathrm{fb}}$ analyzed in Section~\ref{sec:feedbackanalysis}.
-% GRU并不被预设为恢复完整物理状态，而只需保留当前修正所需的动作--响应信息。
-The GRU is not assumed to recover the complete physical state; it is required only to preserve the action--response information needed for the current correction.
 
-% \subsubsection{限幅残差预测与模仿监督}
-\subsubsection{Bounded Residual Prediction and Imitation Supervision}
-% 反馈头根据$h_k$输出$H_r$个未来槽位的残差。
-From $h_k$, the feedback head predicts residuals for $H_r$ future slots.
-% 第$j$个槽位的候选指令由基础动作$B_{t_{k,j}}$与限幅残差组成：
-The candidate command for slot $j$ combines the base action $B_{t_{k,j}}$ with a bounded residual:
+\subsubsection{Residual Prediction and Supervision}
+% 每个输出对应基础计划中的一个未来目标动作。
+For each of $H_r$ future slots, the residual head predicts a bounded adjustment to the corresponding base action:
 \begin{equation}
  \begin{aligned}
- r_{k,j}&=\bm\beta\odot\tanh([W_rh_k+b_r]_j),\\
- \widehat u_{k,j}&=B_{t_{k,j}}+r_{k,j},
- \qquad j=0,\ldots,H_r-1.
+ r_{k,j}&=\bm\beta\odot
+    \tanh([W_rh_k^{\mathrm{gru}}+b_r]_j),\\
+ \widehat u_{k,j}&=B_{t_{k,j}}+r_{k,j}.
  \end{aligned}
  \label{eq:methodresidual}
 \end{equation}
-% 其中，$t_{k,j}$为预定目标执行槽位，$\bm\beta\in\R_{>0}^{d_u}$为逐动作维度限幅，$W_r,b_r$为输出头参数，$\odot$为逐元素乘积。
-Here, $t_{k,j}$ is the prescribed target execution slot, $\bm\beta\in\R_{>0}^{d_u}$ contains per-action-dimension bounds, $W_r$ and $b_r$ are output-head parameters, and $\odot$ denotes elementwise multiplication.
-% 这里的$r_{k,j}$是动作指令残差，不是语义状态增量，也不在相邻时刻累积积分。
-The quantity $r_{k,j}$ is a command residual, not an increment in semantic state, and it is not integrated cumulatively across adjacent time steps.
+% 定义目标时刻、基础动作和逐维限幅。
+Here, $t_{k,j}$ is the target execution time, $B_{t_{k,j}}$ is the base command for that slot, and $\bm\beta$ bounds the residual in each action dimension.
 
-% 残差训练沿示范轨迹回放冻结的基础策略，并按部署时的时序关系构造计划和目标槽位。
-Residual training replays the frozen base policy along demonstration trajectories and constructs plans and target slots using the deployment timing convention.
-% 未来示范动作仅作为监督目标，不进入反馈输入。
-Future demonstrated actions are used only as supervision targets and do not enter the feedback input.
-% 对有效槽位，使用尺度归一化的纠偏动作误差及残差正则：
-For valid slots, we use a scale-normalized corrective action loss together with residual regularization:
+% 回放冻结基础策略并匹配观察和目标时刻，构造动作偏差监督。
+Training replays the frozen base policy on demonstration trajectories, matching the observation and target-slot timing used for execution.
+% 示范动作与基础动作的差值对应D中的残差目标E。
+For sample $n$ and slot $j$, the residual target is $E_{nj}=u_{nj}^{\mathrm E}-B_{nj}$, the demonstrated command minus the base command at the same execution step.
+% 有效样本集合上以归一化Smooth L1加残差正则训练。
+Over valid sample--slot pairs $\mathcal V$, we minimize
 \begin{equation}
- \begin{aligned}
  \mathcal L_{\mathrm{res}}
- &=\frac{1}{d_u\max(1,\sum_{n,j}m_{nj})}
- \sum_{n,j,c}m_{nj}\\
- &\quad{}\times\Big[\ell_{\beta_r}\!\left(
- \frac{B_{njc}+r_{njc}-u^{\mathrm E}_{njc}}{\sigma_c}
- \right)\\
- &\qquad{}+\lambda_r(r_{njc}/\sigma_c)^2\Big].
- \end{aligned}
+ =\frac{1}{|\mathcal V|}\sum_{(n,j)\in\mathcal V}
+ \left[
+ \ell_r\!\left(\frac{r_{nj}-E_{nj}}{\bm\sigma}\right)
+ +\frac{\lambda_r}{d_u}
+       \norm{\frac{r_{nj}}{\bm\sigma}}^2
+ \right],
  \label{eq:methodresloss}
 \end{equation}
-% 其中，$n$为回放样本索引，$j$为目标槽位索引，$c$为动作维度索引，$m_{nj}$为槽位有效标记，$u^{\mathrm E}_{njc}$为对应示范指令。
-Here, $n$ indexes replay samples, $j$ indexes target slots, $c$ indexes action dimensions, $m_{nj}$ is the slot-validity indicator, and $u^{\mathrm E}_{njc}$ is the corresponding demonstrated command.
-% $\sigma_c>0$为训练集动作尺度，$\beta_r>0$与$\lambda_r\ge0$为损失参数。
-The quantity $\sigma_c>0$ is the training-set action scale, while $\beta_r>0$ and $\lambda_r\ge0$ are loss parameters.
-% 离线回放不模拟残差执行后改变的环境响应，因而该目标只学习示范分布上的局部修正。
-Offline replay does not simulate the environment response that would follow execution of a residual, so this objective learns only local corrections on the demonstration distribution.
+% 损失按分量平均，尺度来自训练动作，除法按元素进行。
+where $\ell_r$ is component-averaged Smooth L1, $\bm\sigma$ contains training-set action scales, and division is elementwise.
+% 未来动作仅用于标签，不输入反馈模型。
+Future demonstrated commands provide labels only and are not feedback inputs.
+% 稳健训练目标与D的平方误差评价区分，用一句说明即可。
+This robust training objective is a surrogate for error reduction; the squared-error criterion in Section~\ref{sec:feedbackanalysis} is evaluated separately on held-out data.
+% 回放不模拟残差影响后的环境响应，闭环结果需实际验证。
+Replay learns corrections on demonstration histories, while their effect on subsequent execution is evaluated in closed-loop trials.
 
-% \subsubsection{目标槽位对齐与基础计划回退}
-\subsubsection{Target-Slot Alignment and Base-Plan Fallback}
-% 每个残差绑定其生成时的基础计划和目标执行槽位，只能修正尚未执行的对应动作。
-Each residual is bound to the base plan and target execution slot for which it was generated and may modify only the corresponding unexecuted action.
-% 新计划替换旧计划，迟到或过期的残差被丢弃，从而避免把修正施加到不匹配的动作块。
-A new plan supersedes the previous plan, and late or expired residuals are discarded to prevent corrections from being applied to mismatched action chunks.
-% 执行指令写为$u_t=B_t+\Lambda_t r_t$，其中$\Lambda_t$仅表示计划、槽位和时效是否有效。
-The executed command is $u_t=B_t+\Lambda_t r_t$, where $\Lambda_t$ indicates only plan, slot, and timing validity.
-% 无有效残差时退回基础计划。
-When no valid residual is available, execution falls back to the base plan.
-% 具体调度和超时设置见附录~\ref{app:slottiming}。
-The specific scheduling and timeout settings are given in Appendix~\ref{app:slottiming}.
-
-% 由此，基础动作块提供长时域行为结构，GRU利用动作--响应历史生成局部修正，而槽位门控保证该修正只作用于其条件化的未来计划。
-The base action chunk thus supplies long-horizon behavioral structure, the GRU uses action--response history to generate local corrections, and slot gating ensures that each correction acts only on the future plan on which it was conditioned.
-% 具体关系定义、网络设置和调度参数列于附录~\ref{app:methoddetails}。
-Concrete relation definitions, network settings, and scheduling parameters are provided in Appendix~\ref{app:methoddetails}.
+\subsubsection{Execution Alignment}
+% 残差只施加于匹配的计划和未来动作，过期即丢弃。
+Each residual is attached to its originating plan and target slot; corrections for replaced plans or elapsed slots are discarded.
+% 无有效残差则保留基础动作。
+The executed command is
+$u_t=B_t+\Lambda_t r_t$,
+where $\Lambda_t$ indicates plan and timing validity, so an unavailable correction leaves the base command unchanged.
+% 对齐确保修正的是训练所针对的动作，具体细节放附录。
+This alignment applies the correction to the action it was trained to modify; the timing convention is summarized in Appendix~\ref{app:slottiming}.

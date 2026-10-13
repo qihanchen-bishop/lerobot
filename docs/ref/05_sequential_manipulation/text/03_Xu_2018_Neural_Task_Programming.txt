@@ -1,0 +1,1284 @@
+                                                                              Neural Task Programming:
+                                                                  Learning to Generalize Across Hierarchical Tasks
+                                                Danfei Xu∗1 , Suraj Nair∗2 , Yuke Zhu1 , Julian Gao1 , Animesh Garg1 , Li Fei-Fei1 , Silvio Savarese1
+
+                                                                                                                        Task Demonstration                                          Task Final State
+                                            Abstract— In this work, we propose a novel robot learning                                                         Env.
+                                         framework called Neural Task Programming (NTP), which                                                         Robot API   State obs.
+
+
+
+
+                                                                                                              Task(i)
+                                         bridges the idea of few-shot learning from demonstration and                   ```                      NTP   Task-Conditional
+                                         neural program induction. NTP takes as input a task speci-                                                         Policy
+                                         fication (e.g., video demonstration of a task) and recursively
+                                         decomposes it into finer sub-task specifications. These specifica-         A                        B         C                        D
+                                         tions are fed to a hierarchical neural program, where bottom-
+arXiv:1710.01813v2 [cs.AI] 14 Mar 2018
+
+
+
+
+                                         level programs are callable subroutines that interact with the
+                                         environment. We validate our method in three robot manipula-
+                                         tion tasks. NTP achieves strong generalization across sequential
+                                         tasks that exhibit hierarchal and compositional structures. The
+                                         experimental results show that NTP learns to generalize well to-     Fig. 1: (top) At test time, NTP instantiates a task-conditional policy
+                                         wards unseen tasks with increasing lengths, variable topologies,     (a neural program) that performs the specified task by interpreting a
+                                         and changing objectives. stanfordvl.github.io/ntp/                   demonstration of a task. The policy interacts with the environment
+                                                                                                              through robot APIs. (bottom) We evaluate NTP on Block Stacking
+                                                                 I. I NTRODUCTION                             (A,B), Object Sorting (C, D) and Table Clean-up (Figure 8) tasks in
+                                                                                                              both simulated and real environment.
+                                            Autonomy in complex manipulation tasks, such as object
+                                         sorting, assembly, and de-cluttering, requires sequential            the procedure and the final objective of a task. It can either be
+                                         decision making with prolonged interactions between the              a task demonstration recorded as a state trajectory, first/third-
+                                         robot and the environment. Planning for a complex task and,          person video demonstrations, or even a list of language
+                                         vitally, adapting to new task objectives and initial conditions      instructions. In this work, we use task demonstration as
+                                         is a long-standing challenge in robotics [6, 12].                    the task specification. We experiment with two forms of
+                                            Consider an object sorting task in a warehouse setting –          task demonstration: location trajectories of objects that are
+                                         it requires sorting, retrieval from storage, and packing for         involved in a task, and a third-person video demonstration
+                                         shipment. Each task is a sequence of primitives – such               of a task. NTP decodes the objective of a task from the
+                                         as pick_up, move_to, and drop_into – that can be                     input specification and factorizes it into sub-tasks, interacting
+                                         composed into manipulation sub-tasks such as grasping and            with the environment with closed-loop feedback until the
+                                         placing. This problem has an expansive space of variations           goal is achieved (Figure 1 right). Each program call takes as
+                                         – different objects-bin maps in sorting, permutations of sub-        input the environment observation and a task specification,
+                                         tasks, varying length order lists – resulting in a large space of    producing the next sub-program and a corresponding sub-task
+                                         tasks. As a concrete example, Figure 1(C) shows a simplified         specification. The lowest level of the hierarchy is symbolic
+                                         setup of the object sorting task. The task is to transport           actions captured through a Robot API.
+                                         objects of four categories to four shipping containers. There           This hierarchical decomposition encourages information
+                                         is a total of 256 possible mappings between object categories        hiding and modularization, as lower-level modules only
+                                         and containers, and the variable number of object instances          access their corresponding sub-task specifications that pertain
+                                         further increases the complexity. In this paper, we attempt to       to their functionality. It prevents the model from learning
+                                         address two challenges in complex task planning domains,             spurious dependencies on training data, resulting in better
+                                         namely (a) learning policies that generalize to new task             reusability. Essentially, NTP addresses the key challenges in
+                                         objectives, and (b) hierarchical composition of primitives for       task generalization: meta-learning for cross-task transfer and
+                                         long-term environment interactions.                                  hierarchical model to scale to more complex tasks. Hence,
+                                            We propose Neural Task Programming (NTP), a unified,              NTP builds on the strengths of neural programming and
+                                         task-agnostic learning algorithm that can be applied to a            hierarchical RL while compensating for their shortcomings.
+                                         variety of tasks with latent hierarchical structure. The key            We demonstrate that NTP generalizes to three kinds of
+                                         underlying idea is to learn reusable representations shared          variations in task structure: 1) Task Length: varying number
+                                         across tasks and domains. NTP interprets a task specification        of steps due to the increasing problem size (e.g., having
+                                         (Figure 1 left) and instantiates a hierarchical policy as a neural   more objects to transport); 2) Task Topology: the flexible
+                                         program (Figure 1 middle), where the bottom-level programs           permutations and combinations of sub-tasks to reach the same
+                                         are primitive actions that are executable in the environment.        end goal (e.g., manipulating objects in different orders); and
+                                         A task specification is defined as a time-series that describes      3) Task Semantics: the varying task definitions and success
+                                           * These authors contributed equally to the paper                   conditions (e.g., placing objects into a different container).
+                                           1 Stanford Vision & Learning Lab, 2 CS, Caltech.                      We evaluate NTP on three table-top manipulation tasks
+            State                    Observation                                             Output program
+                                                                                                                  Fig. 2: Neural Task Programming
+         observation                  Encoder                               Core                                  (NTP): Given an input program, a task
+                                                   Task Spec.              Network            End-of-program
+            Input “pick_and_place”                  Encoder                                     probability       specification, and the current environ-
+          program
+                                                                Is output Yes
+                                                                                  API
+                                                                                              API arguments       ment observation, a NTP model predicts
+                                                                                Decoder
+          Input task                 Task Spec.                 program
+                                                                Primitive
+                                                                                                                  the sub-level program to run, the sub-
+         specification               Interpreter
+                                                                    ?     No
+                                                                                Task Spec.     Output task        sequence of the task specification that the
+                                     NTP                                         Selection     specification
+                                                                                                                  sub-level program should take as input,
+                                                                                                                  and if the current program should stop.
+that require long-term interactions: Block Stacking, Object                               Hierarchical Skill Composition: The second challenge we
+Sorting, and Table Clean-up. We evaluate each task in both                                consider is the hierarchical composition of primitives to
+simulated and real-robot setups.                                                          enable long-term robot-environment interaction. The idea of
+Summary of Contributions:                                                                 using hierarchical models for complex tasks has been widely
+1) Our primary contribution is a novel modeling framework:                                explored in both reinforcement learning and robotics [17, 28].
+NTP that enables meta-learning on hierarchical tasks.                                     A common treatment to manage task structure complexity
+2) We show that NTP enables knowledge transfer and one-                                   is to impose hierarchy onto the learned policy. The options
+shot demonstration based generalization to novel tasks with                               framework composes primitive actions into multi-step actions,
+increasing lengths, varying topology, and changing semantics                              which facilitates policy learning at higher-level semantic
+without restriction on initial configurations.                                            and/or temporal abstraction [13, 29]. Notable examples
+3) We also demonstrate that NTP can be trained with visual                                include structured reinforcement learning methods, especially
+input (images and video) end-to-end.                                                      hierarchical variants of RL that handle decomposition through
+                                                                                          multi-stage policies operating over options [4, 19, 23].
+           II. BACKGROUND & R ELATED WORK                                                 However, the naïve use of a hierarchical RL model with
+Skill Learning: The first challenge is learning policies that                             "sub-policies" or options optimized for a specific task doesn’t
+adapt to new task objectives. For learning a single task                                  guarantee modularity or reusability across task objectives.
+policy, traditional methods often segment a complex task                                     The core idea of NTP resonates with recent works on
+into hand-engineered state machine composed of motion                                     dynamic neural networks, which aim to learn and reuse prim-
+primitives [6, 12, 27]. Although the model-based approaches                               itive network modules. These methods have been successfully
+are well-founded in principle, they require meticulous model                              applied to several domains such as robot control [1] and
+specification and task-specific treatment leading to challenges                           visual question answering [2]. However, they have exhibited
+in scaling. Contrarily, learning-based methods such as re-                                limited generalization ability across tasks. In contrast, we
+inforcement learning (RL) have yielded promising results                                  approach the problem of hierarchical task learning via neural
+using end-to-end policy learning that obviates the need for                               programming to attain modularization and reusability [24]. As
+manually designed state representations through data-driven                               a result, our model achieves significantly better generalization
+task-salient features [20, 33]. Yet these methods fall short                              results than non-hierarchical models such as [10].
+because they need task-specific reward functions [21].                                    FSMs and Neural Program Induction: An exciting and
+Learning from Demonstrations: LfD fills these gaps by                                     non-intuitive insight of this paper is that the well-studied
+avoiding the need to define state machines or reward functions.                           Finite State Machine (FSM) model lends itself to learning
+The objective in LfD is to learn policies that generalize beyond                          reusable hierarchical policies thereby addressing the problem
+the provided examples and are robust to perturbations [3, 17]                             of composability without the need for hand-crafting state
+A common treatment to LfD is to model data as samples                                     transitions. There have been a few studies learning FSMs
+from an expert policy for a fixed task, and use behavior                                  from data [14, 18]. In line with the idea, recent works in neural
+cloning [16, 25] or reward function approximation [22] to                                 programming using deep models have enabled symbolic
+output an expert-like policy for that task. However, learning                             reasoning systems to be trained end-to-end, which have shown
+policies that generalize to new objectives with LfD remains                               potential to handle multi-modal and raw input/out data [9,
+largely an unexplored problem.                                                            24] and achieve symbolic generalization [7].
+Few-Shot Generalization in LfD: Our work is an instan-                                       NTP belongs to a family of neural program induction
+tiation of the decades-old idea of meta-learning with few                                 methods, where the goal is to learn a latent program
+examples [11, 30]. It has seen a recent revival in deep learning                          representation that generates program outputs [9, 24]. While
+in part because it can address the problems above [31].                                   these models have been shown to generalize on task length,
+Our setting resembles learning by demonstration (LfD) in                                  they are tested on basic computational tasks only with limited
+robotics [5], particularly one-shot imitation [10, 32]. Our                               generalization to task semantics and topology. Similar to NTP,
+method learns to learn from an input task specification during                            Neural Programmer-Interpreter (NPI) [24] has proposed to
+training. At test time, it generates a policy conditioned on a                            use a task-agnostic recurrent neural network to represent
+single demonstration provided as a time-series showing the                                and execute programs. In contrast to previous work on
+task execution. While similar in these aspects, existing works                            neural program induction, NPI-based models are trained with
+in both skill learning and LfD are inept at tasks with sparse                             richer supervision from the full program execution traces and
+reward functions and complex hierarchical structures such as                              can learn semantically meaningful programs with high data
+Montezuma’s Revenge [19].                                                                 efficiency. However, program induction, including NPI, is not
+ …                                                                                                                                                                                                                                         …
+
+
+     Env. Observation         Input Task Spec.                                                                                                                                         Env. Observation          Input Task Spec.
+     Pin: block_stacking      EOP: False                                                                                                                                               Pin: block_stacking       EOP: False
+     Pout: pick_and_place     Output Task Spec.                                                                                                                                        Pout: pick_and_place      Output Task Spec.
+
+
+
+
+                                                                                                                                                                              return
+             Env. Observation        Input Task Spec.                                                                        Env. Observation         Input Task Spec.
+
+             Pin: pick_and_place     EOP: False                                                                              Pin: pick_and_place      EOP: True
+
+             Pout: pick              Output Task Spec.                                                                       Pout: place              Output Task Spec.
+
+
+
+
+                                                                                                                                                                                                                                            return
+                                                                                                                    return
+                     Env. Observation       Input Task Spec.            Env. Observation        Input Task Spec.                   Env. Observation        Input Task Spec.                Env. Observation         Input Task Spec.
+
+                     Pin: pick              EOP: False                  Pin: pick               EOP: True                          Pin: place              EOP: False                      Pin: place               EOP: True
+
+                     Pout: move_to          Args: block_E               Pout: grip              Args: block_E                      Pout: move_to           Args: block_B                   Pout: release            Args: N/A
+
+
+                                     move_to (block_E)                                     grip (block_E)                                          move_to (block_B)                                          release()
+                                                               return                                              return                                                         return                                               return
+
+Fig. 3: Sample execution trace of NTP on a block stacking task. The task is to stack lettered blocks into a specified configuration (block_D
+on top of block_E, block_B on top of block_D, etc). Top-level program block_stacking takes in the entire demonstration as
+input (red window), and predicts the next sub-program to run is pick_and_place, and it should take the part of task specification
+marked by the orange window as the input specification. The bottom-level API call moves the robot and close / open the gripper. When
+End of Program (EOP) is True, the current program stops and return its caller program.
+capable of generalizing to novel programs without training.                                                          specification of a new task ψ(t) is input to NTP. The meta-
+   NTP is a meta-learning algorithm that learns to instantiate                                                       policy then generates a policy π(a|o; ψ(t)) : O → A, to reach
+neural programs given demonstrations of tasks, thereby                                                               task-completion state sT where g(sT ,t) = 1.
+generalizing to unseen tasks/programs. Intuitively, NTP                                                              Why use Neural Programming for LfD? Previous work has
+decomposes the overall objective (e.g., object sorting) into                                                         mostly used a monolithic network architecture to represent a
+simpler objectives (e.g., pick and place) recursively. For                                                           goal-driven policy [10, 26, 33]. These methods cannot exploit
+each of such sub-tasks, NTP delegates a neural program                                                               the compositional task structures to facilitate modularization
+to perform the task. The neural programs, together with the                                                          and reusability. Instead, we represent our policy π̃ as a
+task decomposition mechanism, are trained end-to-end.                                                                neural program that takes a task specification as its input
+   While previous work has largely focused on executing a                                                            argument. As illustrated in Figure 2, NTP uses a task-agnostic
+pre-defined task one at a time NTP not only exhibits one-shot                                                        core network to decide which sub-program to run next and
+generalization to tasks with longer lengths as NPI, but also                                                         adaptively feeds a subset of the task specification to the
+generalizes to sub-task permutations (topology) and success                                                          next program. Intuitively, NTP recursively decomposes a
+conditions (semantics).                                                                                              task specification and solves a hierarchical task by divide-
+                                                                                                                     and-conquer. Figure 3 highlights this feature with a sample
+                            III. P ROBLEM F ORMULATION                                                               execution of a task. Our method extends upon a special type of
+                                                                                                                     neural programming architecture named Neural Programmer-
+   We consider the problem of an agent performing actions                                                            Interpreter (NPI) [7, 24]. NPI generalizes well to input size but
+to interact with an environment to accomplish tasks. Let T                                                           cannot generalize to unseen task objectives. NTP combines
+be the set of all tasks, S be the environment state space,                                                           the idea of meta-learning and NPI. The ability to interpret
+and A be the action space. For each task t ∈ T, the Boolean                                                          task specifications and instantiate policies accordingly makes
+function g : S × T → {0, 1} defines the success condition of                                                         NTP generalize across tasks.
+the task. Given any state s ∈ S, g(s,t) = 1 if the task t is
+completed in the state s, and g(s,t) = 0 otherwise. The task                                                         A. Neural Programmer-Interpreter (NPI)
+space T can be infinite. We thus need a versatile way to                                                                Before introducing our NTP model, it is useful to briefly
+describe the task semantics. We describe each task using a                                                           overview the NPI paradigm [24]. NPI is a type of neural
+task specification ψ(t) ∈ Ψ, where Ψ is the set of all possible                                                      program induction algorithm, in which a network is trained
+task specifications. Formally, we consider a task specification                                                      to imitate the behavior of a computer program, i.e., the
+as a sequence of random variables ψ(t) = {x1 , x2 , . . . , xN }.                                                    network learns to invoke programs recursively given certain
+   NTP takes a task specification ψ(t) as input in order to                                                          context or stop the current program and return to upper-
+instantiate a policy. ψ(t) is defined as a time series that                                                          level programs. The core of NPI is a long-short memory
+describes the procedure and the final objective of the task. In                                                      (LSTM) [15] network. At the i-th time step, it selects the
+experiments, we consider two forms of task specifications:                                                           next program to run conditioned on the current observation
+trajectories of object locations and raw video sequences.                                                            oi and the previous LSTM hidden units hi−1 . A domain-
+In many real-world tasks, the agent has no access to the                                                             specific encoder is used to encode the observation oi into a
+underlying environment states. It only receives a sample of                                                          state representation si . The NPI controller takes as input the
+environment observation o ∈ O that corresponds to the state                                                          state si , the program embedding pi retrieved from a learnable
+s, where O is the observation space. Our goal is to learn                                                            key-value memory structure [M key ; M prog ], and the current
+a “meta-policy” that instantiates a feedback policy from a                                                           arguments ai . It generates a program key, which is used to
+specification of a task, π̃ : Ψ → (O → A). At test time, a                                                           invoke a sub-program pi+1 using content-based addressing,
+the arguments to the next program ai+1 , and the end-of-                       Algorithm 1 NTP Inference Procedure
+program probability ri . The NPI model maintains a program                       Inputs: task specification ψ, program id i, and environment
+call stack. Each time a sub-program is called, the caller’s                      observation o
+LSTM hidden units embedding and its program embedding is                         function RUN(i, ψ)
+pushed to the stack. Formally, the NPI core has three learnable                     r ← 0, p ← Mi,:prog , s ← fENC (o), c ← fT SE (ψ)
+components, a domain-specific encoder fenc , an LSTM flstm ,                        while r < α do
+and an output decoder fdec . The full update being: si =                                k, r ← fCN (c, p, s), ψ2 ← fT SI (ψ, p, s)
+ fenc (oi , ai ) hi = flstm (si , pi , hi−1 ) ri , pi+1 , ai+1 = fdec (hi ).            i2 ← arg max j=1...N (M key  j,: k)
+When executing a program with the NPI controller, it performs                           if program i2 is primitive then . if i2 is an API
+one of the following three things: 1) when the end-of-program                                a ← fT SI (ψ2 , i2 , s)            . decode API args
+probability exceeds a threshold α (set to 0.5), this program is                              RUN_API(i2 , a)              . run API i2 with args a
+popped up from the stack and control is returned to the called;                         else
+2) when the program is not primitive, a sub-program with its                                 RUN(i2 , ψ2 ) . run program i2 w/ task spec ψ2
+arguments is called; and 3) when the program is primitive, a                            end if
+low-level basic action is performed in the environments. The                        end while
+LSTM core is shared across all tasks.                                            end function
+              IV. N EURAL TASK P ROGRAMMING
+                                                                               index as the API argument and calls external functions to
+Overview. NTP has three key components: Task Specification                     move the gripper to above the object whose position is either
+Interpreter fT SI , Task Specification Encoder fT SE , and a                   given by the simulator or predicted by an object detector.
+core network fCN (Figure 2. The Task Specification Encoder                     grip closes the gripper and release opens the gripper.
+transforms a task specification ψi into a vector space. The
+                                                                               Task Specification Interpreter. The Task Specification Inter-
+core network takes as input the state si , the program pi , and
+                                                                               preter, taking a task specification as input, chooses to perform
+the task specification ψi , producing the next sub-program
+                                                                               one of the two operations: (1) when the current program p
+to invoke pt+1 and an end-of-program probability rt . The
+                                                                               is not primitive, it predicts the sub-task specification for the
+program returns to the caller when rt exceeds a threshold α
+                                                                               next sub-program; and (2) when p is primitive (i.e., an API),
+(set to 0.5). We detail the inference procedure in Algorithm 1.
+                                                                               it predicts the arguments of the API.
+NTP vs NPI: We highlight three main differences of NTP
+than the original NPI: (1) NTP can interpret task specifications                  Let ψi be the task specification of the i-th program
+and perform hierarchical decomposition and thus can be                         call, where ψi is a sequence of random variables ψi =
+considered as a meta-policy; (2) it uses APIs as the primitive                 {x1 , x2 , . . . , xNi }. The next task specification ψi+1 is deter-
+actions to scale up neural programs for complex tasks; and (3)                 mined by three inputs: the environment state si , the current
+it uses a reactive core network instead of a recurrent network,                program pi , and the current specification ψi . When pi is a
+making the model less history-dependent, enabling feedback                     primitive, TSI uses an API-specific decoder (i.e., an MLP)
+control for recovery from failures. In addition to the three key               to predict the API arguments from the tuple (si , pi , ψi ).
+components, NTP implements two modules similar to the NPI
+                                                                                  We focus on the cases when pi is not primitive. In this case,
+architectures [7, 24]: (1) domain-specific task encoders that
+                                                                               TSI needs to predict a sub-task specification ψi+1 for the
+map an observation to a state representation si = fENC (oi ), and
+                                                                               next program pi+1 . This sub-task specification should only
+(2) a key-value memory that stores and retrieves embeddings:
+                                                                               access relevant information to the sub-task. To encourage
+ j∗ = arg max j=1...N (M key                 prog
+                         j,: ki ) and pi = M j∗ ,: , where ki is the           information hiding from high-level to low-level programs, we
+program key predicted by the core network.
+                                                                               enforce the scoping constraint, such that ψi+1 is a contiguous
+Scaling up NTP with APIs. The bottom-level programs in
+                                                                               subsequence of ψi . Formally, given ψi = {x1 , x2 , . . . , xNi }, the
+NPI correspond to primitive actions that are executable in the
+                                                                               goal is to find the optimal contiguous subsequence ψi+1 =
+environment. To scale up neural programs in coping with the
+                                                                               {x p , x p+1 , . . . , xq−1 , xq }, where 1 ≤ p ≤ q ≤ Ni .
+complexity of real-world tasks, it is desirable to use existing
+tools and subroutines (i.e., motion planner) such that learning                Subsequence Selection (Scoping). We use a convolutional
+can be done at an abstract level. In computer programming,                     architecture to tackle the subsequence selection problem.
+application programming interfaces (APIs) have been a                          First, we embed each input element ψi = {x1 , x2 , . . . , xNi }
+standard protocol for developing software by using basic                       into a vector space φi = {w1 , w2 , . . . , wNi }, where each wi ∈
+modules. Here we introduce the concept of API to neural                        Rd . We perform temporal convolution at every temporal
+programming, where the bottom-level programs correspond to                     location j of the sequence φi , where each convolutional
+a set of robot APIs, e.g., moving the robot arm using inverse                  kernel is parameterized by W ∈ Rm×dk and b ∈ Rm , which
+kinematics. Each API takes specific arguments, e.g., an object                 takes a concatenation of k consecutive input elements and
+category or the end effector’s target position. NTP jointly                    produces a single output yij ∈ Rm . We use relu as the
+learns to select APIs functions and to generate their input                    nonlinearities. The outputs from all convolutional kernels
+arguments. The APIs that are used in the experiments are                       yij are concatenated with the program embedding pi and the
+move_to, grip, and release. move_to takes an object                            encoded states si into a single vector h j = [pi ; yij ; si ]. Finally,
+    Task Semantics Variation    C                    C D                    three dimensions of variation: length, topology, and semantics,
+                                A B      D E         A B         E
+                                                                            as illustrated in Figure 4, (2) Can NTP use image-based input
+                                B                                           without access to ground truth state, and (3) Would NTP
+          A B C D E             A     C D E          B
+                                                     A
+                                                           D
+                                                           C     E
+                                                                            also work in real-world tasks which have combinations of
+                                    D                                       these variations. We evaluate NTP in three robot manipulation
+                                A B C       E
+    Task Topology Variation                                                 tasks: Object Sorting, Block Stacking, and Table Clean-up.
+                                                                            Each of these tasks requires multiple steps to complete and
+                                                                            can be recursively decomposed into repetitive sub-tasks.
+    Task Length Variation
+                                                                            Input State Representation. We use an expert policy to
+                                                                            generate program execution traces as training data. An expert
+Fig. 4: The variability of a task structure consists of changing            policy is an agent with hard-coded rules that call programs
+success conditions (task semantics), variable subtask permutations
+(task topology), and larger task sizes (task length). We evaluate the       (move_to, pick_and_drop, etc.) to perform a task. In
+ability of our proposed model in generalizing towards these three           our experiment, we use the demonstration of a robot carrying
+types of variations.                                                        out a task as the task specification. For all experiments, unless
+we compute the softmax probability of four scoping labels                   specified, the state representation in the task demonstrations
+Pr j (l ∈ {Start, End, Inside, Outside}). These scoping                     is in the form of object position trajectories relative to the
+labels indicate whether this temporal location is the start/end             gripper frame. In the Block Stacking experiment, we also
+point of the correct subsequence, or if it resides inside/outside           report the results of using a learned object detector to predict
+the subsequence. We use these probabilities to decode the                   object locations and the results of directly using RGB video
+optimal subsequence as the output sub-task specification ψi+1 .             sequence as state observations and task demonstrations.
+   The decoding process can be formulated as the maximum                    Simulator Setup. We conduct our experiments in a 3D
+contiguous subsequence sum problem, which can be solved                     environment simulated using the Bullet Physics engine [8].
+optimally in linear time. However in practice, taking the                   We use a disembodied PR2 gripper for both gathering
+start and end points with the highest probabilities results in              training data and evaluation. We also evaluate NTP on a
+a good performance. In our experiments, we set ψi+1 =                       simulated 7-DoF Sawyer arm with a parallel-jaw gripper as
+{xst , xst+1 , . . . , xed }, where st = arg max j=1...Ni Pr j (Start)      shown in Figure 1 and Figure 8. Since NTP only considers
+and ed = arg max j=1...Ni Pr j (End). This process is illustrated           end-effector pose, the choice of robot does not affect its
+in Figure 3, wherein the model factorizes a video sequence                  performance in the simulated environment.
+which illustrates the procedure of pick_and_place into a                    Real-Robot Setup. We also demonstrate NTP’s performance
+fraction that only illustrates pick. This convolutional TSI                 on the Block Stacking and the Object Sorting tasks on a 7-
+architecture is invoked recursively along the program exe-                  DoF Sawyer arm using position control. We use NTP models
+cution trace. It decomposes a long task specification into                  that are trained with simulated data. Task demonstration are
+increasingly fine-grained pieces from high-level to low-level               obtained in the simulator, and the instantiated NTP models
+tasks. This method naturally enforces the scoping constraint.               are executed on the robot. All real-robot experiments use
+Our experimental results show that such information hiding                  object locations relative to the gripper as state observations.
+mechanism is crucial to good generalization.                                A Kinect2 camera is used to localize objects in the 3D scene.
+Model Training. We train the model using rich supervision                   Evaluation Metrics. We evaluate NTP on three variations
+from program execution traces. Each execution trace is a                    of task structure as illustrated in Figure 4: 1) task length:
+list of tuples {ξt | ξt = (ψt , pt , st ),t = 1 . . . T }, where T is the   varying number of steps due to the increasing problem size
+length of the execution trace. Our training objective is to                 (e.g., having more objects to transport); 2) task topology:
+maximize the probability of the correct executions over all                 variations in permutations of steps of sub-tasks to reach the
+the tasks in the dataset D = {(ξt , ξt+1 )}, such that θ ∗ =                same end goal (e.g., manipulating objects in different orders);
+ΣD log Pr[ξt+1 |ξt ; θ ].                                                   and 3) task semantics: the unseen task objectives and success
+   We collect a dataset that consists of execution traces from              conditions (e.g., placing objects into a different container).
+multiple types of tasks and their task specifications. For                     We evaluate Task length on the Object Sorting task varying
+each specification, we provide the ground-truth hierarchical                the number of objects instances from 1 to 10 per category.
+decomposition of the specification for training by rolling                  Further, we evaluate Task Topology on the Block Stacking task
+a hard-coded expert policy. We use cross-entropy loss at                    with different permutations of pick-and-place sub-tasks that
+every temporal location of the task specification to supervise              lead to the same block configurations. Finally, we evaluate
+the scoping labels. We also adopted the idea of adaptive                    Task Semantics on Block Stacking on a held-out set of task
+curriculum from NPI [24], where the frequency of each mini-                 demonstrations that lead to unseen block configurations as
+batch being fetched is proportional to the model’s prediction               task objectives.We report success rates for simulation tasks,
+error with respect to the corresponding program.                            and we analyze success rates, causes of failure, and proportion
+                                                                            of task completed for real-robot evaluation. All objects are
+                   V. E XPERIMENTAL S ETUP                                  randomly placed initially in all of the evaluation tasks in both
+   The goal of our experimental evaluation is to answer the                 the simulated and the real-robot setting.
+following questions: (1) Does NTP generalize to changes in all              Baselines. We compare NTP to four baselines architecture
+                        Object Sorting: Task Length
+                                                                       failures: a grasp failure and a collision checking failure.
+
+                                                                                VII. E XPERIMENT 2: B LOCK S TACKING
+                                                                       Setup. The goal of Block Stacking is to stack a set of blocks
+                                                                       into a target configuration, similar to the setup in [10]. We use
+                                                                       8, 5×5 cm wooden cubes of different colors both in simulation
+                                                                       and with real-robot. We randomly generate 2000 distinct
+                                                                       Block Stacking task instances. Two tasks are considered
+                                                                       equivalent if they have the same end configuration. We use a
+Fig. 5: Task Length: Evaluation of the Object Sorting in simulation.   maximum of 1000 training tasks and 100 trials for each task,
+The axes represent mean success rate (y) with 100 evaluations          leaving the remaining 1000 task instances as unseen test cases.
+each and the number of objects in unseen task instances (x). NTP       A task is considered successful if the end configuration of the
+generalizes to increasingly longer tasks while baselines do not.       blocks matches the task demonstration. We evaluate both seen
+variations. (1) Flat is a non-hierarchical model, similar to [10],     and unseen tasks, i.e., whether the end configuration appears
+that takes as input task demonstration and current observation,        in training set. We use N = 8 blocks in our evaluation.
+and directly predicts the primitive APIs instead of calling            Simulator. Figure 6 shows that all models except the Flat
+hierarchical programs. (2) Flat (GRU) is the Flat model with           baseline are able to complete the seen tasks at around 85%
+a GRU cell. (3) NTP (no scope) is a variant of the NTP                 success rate. The performance of the Flat baseline decreases
+model that feeds the entire demonstration to the subprograms,          dramatically when training with more than 400 tasks. It is
+thereby discarding the scoping constraint. (4) NTP (GRU) is a          because the Flat model has very limited expressiveness power
+complete NTP model with a GRU cell. This is to demonstrate             to represent complex tasks. The Flat (GRU) model performs
+that the reactive core network in NTP can better generalize            surprisingly well on the seen tasks. However, as shown in
+to longer tasks and recover from unexpected failures due to            Figure 6, both Flat and Flat (GRU) fail to generalize to unseen
+noise, which is crucial in robot manipulation tasks.                   tasks. We hypothesize that the Flat (GRU) baseline simply
+                                                                       memorizes the training sequences. On the other hand, NTP
+           VI. E XPERIMENT 1: O BJECT S ORTING                         achieves increasingly better performances when the diversity
+                                                                       of the training data increases.
+Setup. The goal of Object Sorting is to transport objects                 We evaluate task topology generalization on random
+randomly scattered on a tabletop into their respective shipping        permutations of the pick-and-place sub-tasks that lead to
+containers stated in the task demonstration. We use 4 object           the same end configuration. Specifically, the task variations
+categories and 4 containers in evaluating the Object Sorting           are generated by randomly shuffling the order that the "block
+task. In the real robot setup, a toy duck, toy frog, lego block,       towers" are built in the training tasks. Figure 6 illustrates
+and marker are used as the objects for sorting, and are sorted         that NTP generalizes better towards variable topologies when
+into 4 black plastic bins. This results in a total of 44 = 256         trained on a larger variety of tasks. We find that increasing
+category-container combinations (multiple categories may be            the diversity of training data facilitates NTP to learn better
+mapped to the same container). However, as each category               generalizable modules.
+can be mapped to 4 possible containers, a minimum of 4
+                                                                          Next, we evaluate task semantics generalization. The
+tasks can cover all possible category-container pairs. We
+                                                                       variability of real-world environments prevents any task-
+select these 4 tasks for training and the other 252 unseen
+                                                                       specific policy learning method from training for every
+tasks for evaluation. We train all models with 500 trajectories.
+                                                                       possible task. Figure 6(A) illustrates that NTP generalizes
+Each test run is on 100 randomly-selected unseen tasks.
+                                                                       well to novel task demonstrations and new goals. As the
+Simulator. As shown in Figure 5, NTP significantly out-                number of training tasks increases, both NTP and its recurrent
+performs the flat baselines. We examine how the task size              variation steadily improve their performance on the unseen
+affects its performance. We vary the numbers of objects to be          tasks. When trained with 1000 tasks, their performances on
+transported from 4 to 40 in the experiments. The result shows          unseen tasks are almost on par with that of seen tasks.
+that NTP retains a stable and good performance (over 90%) in              The performance gaps between NTP (no scope) and NTP
+longer tasks. On the contrary, the flat models’ performances           highlight the benefit of the scoping constraint. NTP (no scope)
+decline from around 40% to around 25%, which is close to               performance drops gradually as the task size grows implying
+random. The performance of the NTP (GRU) model also                    that the programs in NTP learn modularized and reusable
+declines faster comparing to the NTP model as the number of            semantics due to information hiding, which is crucial to
+objects increases. This comparison illustrates NTP’s ability           achieving generalization towards new tasks.
+to generalize towards task length variations.
+                                                                       Real robot. Table I shows the results of the Object Sorting
+Real robot. Table I shows the results of the Object Sorting            task in the real world setting. We carried out 20 trails of
+task on the robot. We use 4 object categories with 3 instances         randomly selected unseen Block Stacking tasks. Out of the 2
+of each category. We carried out a total of 10 evaluation trials       failure cases, one is caused by an incorrect placing; the other
+on randomly selected unseen Object Sorting tasks. 8 trials             is caused by the gripper knocking down a stacked tower and
+completed successfully, and 2 failed due to of manipulation            not able to recover from the error.
+               A. Seen Task Objectives   Block Stacking: Task Semantics            B. Unseen Task Objectives        Block Stacking: Task Topology
+
+
+
+
+Fig. 6: Task Semantics: Simulated evaluation of the Block Stacking. The x-axis is the number of tasks used for training. The y-axis is
+the overall success rate. (A) and (B) show that NTP and its variants generalize better to novel task demonstrations and objectives as the
+number of training tasks increases.
+Task Topology: Simulated evaluation of the Block Stacking. NTP shows better performance in task topology generalization as the number
+of training tasks grows. In contrast, the flat baselines cannot handle topology variability.
+
+     A. Seen Task Objectives
+                                 Block Stacking: Visual State         B. Unseen Task Objectives   Fig. 7: NTP with Visual State: NTPVID (Detector) uses an
+                                                                                                  object detector on images which is subsequently used as state
+                                                                                                  in NTP. NTP (E2E) is an end-to-end model trained completely
+                                                                                                  on images with no low-level state information. We note that
+                                                                                                  in the partial observation case (only video), similar learning
+                                                                                                  trends were observed as compared to fully observed case (NTP
+                                                                                                  (Full State)), albeit with a decrease in performance.
+                   N/A
+
+
+
+
+                                                                N/A
+                                                     N/A
+       N/A
+
+
+
+
+A. Adversarial Dynamics                                                                 based architecture, predicting the position of the N-task
+   We show that the reactive core network in NTP enables                                objects from an input image of size 224 × 224.
+it to better recover from failures compared to its recurrent                               We note that NTPVID (E2E) outperforms NTPVID (De-
+variation. We demonstrate this by performing Block Stacking                             tector) and achieves a higher success rate despite only having
+under an adversary. Upon stacking each block, an adversary                              partial state information. Both of these methods are inferior
+applies a force to the towers with a probability of 25%. The                            to the full-state NTP version. NTPVID (Detector) does
+force can knock down the towers. We evaluate NTP and its                                not generalize due to task-specific state representation, and
+recurrent variant on the 1000 unseen tasks. Table II shows that                         cascading errors in detection propagate to NTP reducing
+under the same adversary, the success rate of NTP with the                              performance even when using a very deep network for the
+GRU core decreases by 46%, whereas the success rate of NTP                              detection. The detector errors are Gaussian with standard
+only decreases by 20%. This indicates that a reactive model                             deviation of 2 cm. However, this performance comes at a
+is more robust against unexpected failures as its behavior is                           computational cost. NTPVID (E2E) was trained on 1000
+less history dependent than the recurrent counterpart. We also                          training tasks for 10 days on 8 Nvidia Titan X GPUs. NTPVID
+demonstrate this feature in the supplementary video in the                              (Detector) was trained for 24 hours on a single GPU. Due
+real world setting.                                                                     to computational cost, we only evaluated NTPVID (E2E) on
+                                                                                        400 and 1000 training tasks.
+B. NTP with Visual State
+   This experiment examines the ability of NTP to learn when                                         VIII. E XPERIMENT 3: TABLE C LEAN - UP
+demonstrations come in the form of videos and the state is
+a single image. Unlike the full state information used in                               Setup. We also evaluate NTP on the Table Clean-up task,
+experiments thus far, we train an NTP model NTPVID (E2E)                                which exemplifies a practical real-world task. Specifically, the
+to jointly learn a policy and task-relevant features without                            goal of the task is to clear up to 4 white plastic bowls and
+explicit auxiliary supervision. An alternative is to use a 2-                           20 red plastic forks into a bin such that the resulting stack of
+phase pipeline with an object detector as state preprocessor                            bowls and forks can be steadily carried away in a tray. Task
+for NTP, termed as NTPVID (Detector). The detector is a                                 variation comes in task length, where the number of utensils
+separately trained CNN to predict object position in R3 .                               varies, and task topology, where the ordering in which bowls
+   We explore these results in Figure 7, where we see compare                           are stacked can vary. Using trajectories as demonstrations
+the visual models (NTPVID (E2E) and NTPVID (Detector))                                  and object positions as state space, a model is trained using
+against the best full state model (NTP), all trained on 100                             1000 task instances.
+demonstrations per task, for a varying number of tasks. For                             Simulator. We observe that performance varies between
+NTPVID (E2E) we use a 7-layer convolutional network,                                    55%-100% where increasing errors with more objects are
+which takes as input a 64 × 64 image and outputs a length                               attributed to failures in collision checking, not incorrect
+128 feature vector. For NTPVID (Detector) , we use a VGG16                              decisions from NTP. The result shows that NTP retains
+       (e.g. grasping failures and collisions).                                                                                                                                                       3 B, 2 F              0.60
+  Tasks              # Trials
+                     Tasks            Success
+                                       # Trials        NTP Fail NTP
+                                                       Success    Manip.
+                                                                    Fail Fail
+                                                                          Manip. Fail                                                                                                                 3 B, 3 F              0.55
+   Blk. Stk.            20Stk.
+                      Blk.               0.9
+                                          20             0.05
+                                                         0.9     0.050.05     0.05
+   Sorting              10               0.8
+                                                                                                                             Fig. 8: Table Cleanup: in simulated and real environment.The table
+                      Sorting             10             0.80      0 0.20     0.20
+                                                                                                                             shows success rates for varying numbers of forks and bowls in
+      RecoverII:from
+  II: TABLE             failure:
+                  Recover    fromEvaluation    results of
+                                   failure: Evaluation        the Block
+                                                          results  of the Block                                              simulated evaluation.
+   Task   in a simulated
+      Stacking   TABLE
+                Task in a I:  Real Robot
+                           adversarial
+                           simulated       Evaluation:
+                                         environment.
+                                      adversarial         We findof
+                                                          Results
+                                                   environment.      that
+                                                                    We20find
+                                                                          unseen
+                                                                              that Block                                        # Bowls,    Success
+      NTP with
+  h GRU          Stacking
+                 GRU
+            performs       evaluations
+                       performs
+                      markedly         andwith
+                                 markedly
+                                  worse     10 unseen
+                                            worse   withsorting  evaluations
+                                                           intermittent
+                                                intermittent    failures.     on
+                                                                         failures.  8: Table Cleanup: in simulated and real environment.The
+                                                                                 Sawyer
+                                                                               Fig.                                             # Forks       table
+                 robot for the NTP model trained on simulator. NTP Fail          denotes
+                                                                               shows   success rates for varying numbers of forks   and   bowls  in
+                                                                                                                                 2 B, 1 F    1.00
+        Model an Model  No failure
+                     algorithmic   No failure
+                                        With
+                                  mistake,  while With
+                                              failures
+                                                   Manip.failures
+                                                             Fail denotes a mistake    in evaluation.
+                                                                               simulated                                         2 B, 2 F    0.95
+           NTP      NTP
+                  physical interaction
+                            0.863     0.863
+                                       (e.g. grasping 0.663
+                                              0.663 failures and collisions).                                                                                                                              3 B, 2 F             0.75
+           NTP (GRU)NTP (GRU)
+                            0.884
+                          Tasks
+                                       0.884 0.422    0.422
+                                      # Trials Success NTP Fail Manip. Fail [5]                                         P. Bacon, J. Harb, and D. Precup, “The option-critic                                3 B, 3architecture”,
+                                                                                                                                                                                                                       F           0.55
+      Simulator.         We      useBlk.aStk.full    Sawyer
+                                                        20           robot
+                                                                      0.9         model
+                                                                                      0.05 instead     0.05 of a        arXiv preprint arXiv:1609.05140, 2016.
+putational cost, we Sorting         only evaluated      10         NTPVID (E2E)                     on0.20 [6] A. Billard,     Fig. 8:S. Table
+                                                                                                                                            Calinon,   Clean-up:
+                                                                                                                                                           R. Dillmann,    in simulated
+                                                                                                                                                                                     and S. Schaal,  and real   “Robotenvironment.The
+                                                                                                                                                                                                                              program-
+d 1000gripper     only, and
+             training        tasks. we evaluate              NTP 0.8   performance      0
+                                                                                                 on this    task        ming   table
+                                                                                                                               by      shows
+                                                                                                                                   demonstration”, success       rates
+                                                                                                                                                                in         for
+                                                                                                                                                                     Handbook     varying of     numbers
+                                                                                                                                                                                               robotics,          of
+                                                                                                                                                                                                                 2008. forks and bowls
+                    TABLE II: Adversarial Dynamics: Evaluation results of the Block
+      in a simulator.Stacking  WeTask   observe         that performance
+                                             in a simulated                               varies between
+                                                                     adversarial environment.                    [7] that
+                                                                                                            We find            in the “A
+                                                                                                                        R. Brooks,      simulated
+                                                                                                                                               robust evaluation.
+                                                                                                                                                           layered control system for a mobile robot”,
+      55%-90%
+    VIII. E XPERIMENT   where
+                     NTP with GRU     increasing
+                                            3:performs      errors
+                                                TABLEmarkedly           with
+                                                                 C LEANworse        more        objects      can
+                                                                                   U P with intermittent failures.      IEEE   journal
+                                                                                                                       Fig. 9: Table Cleanup:on   roboticsinand          automation,
+                                                                                                                                                                   simulated           and real  1986. environment.The table
+      be attributed to failures                   in    collision          checking,not             incorrect    [8]    Bullet  [11]
+                                                                                                                                Physics  L.   Fei-Fei,
+                                                                                                                                              Library,     R.   Fergus,      and     P.
+                                                                                                                                                             http://bulletphysics.org/.  Perona,      “One-shot learning of object
+                                                                                                                       shows     success        rates     for    varying          numbers            of     forks and and       bowls      in
+ p. We also evaluate NTP                   Model on the          No practical
+                                                                       failure With        task      of
+                                                                                                failures         [9] simulated           categories”,
+                                                                                                                                         Shin, and IEEE
+                                                                                                                        J. Cai, R.evaluation.                 D. Song, transactions“Making   on pattern
+                                                                                                                                                                                                      neuralanalysisprogramming        machine
+      decisions from NTP. NTP                                        0.863                   0.663                                       intelligence,       vol.  28,    no.   4,   pp.   594–611,         2006.
+g the table, which combines                              the features0.884theof          stacking                       architectures generalize via recursion”, ICLR, 2017.
+      Real robot. We haveNTP                 also  (GRU)
+                                                       transferred                   trained 0.422model on
+                                                                                                               [10]     [14]    [12]
+                                                                                                                                R. Fox,
+                                                                                                                        C. Devin,
+                                                                                                                                         R. E. S. Fikes,
+                                                                                                                                     A.generalized
+                                                                                                                                           Gupta,   Krishnan,P. E. Hart,
+                                                                                                                                                        T. robot
+                                                                                                                                                            Darrell,
+                                                                                                                                                                              and N.and
+                                                                                                                                                                     I. Stoica,
+                                                                                                                                                                           P. Abbeel,
+                                                                                                                                                                                           J. Nilsson,
+                                                                                                                                                                                                 K. Goldberg,
+                                                                                                                                                                                                and
+                                                                                                                                                                                                              “Learning and executing
+                                                                                                                                                                                                        S. Levine, “Multi-Level
+                                                                                                                                                                                                                           “Learning
+ ting. Specifically,             the
+                     its generalization  goal       of    the    task
+                                                        abilitythe         is    to
+                                                                     in feasibility   clear
+                                                                           a task thatasrequires upto                                                                plans”,      ARTIFICIAL            INTELLIGENCE,                1972.
+      the real-Sawyer             arm to evaluate                                                   shown multiple
+                                                                                                                in      Modular Discovery of
+                                                                                                                                [13]Neural
+                                                                                                                                         R. Fox,
+                                                                                                                                                     Deep Options”,
+                                                                                                                                                 Network         PoliciesI. in
+                                                                                                                                                        S. Krishnan,              for preprint
+                                                                                                                                                                                  Stoica,Multi-Task  arXiv:1703.08294,
+                                                                                                                                                                                               and K. Goldberg,and Multi-Robot        2017.
+                                                                                                                                                                                                                               “Multi-Level
+   plastic    bowls
+      Figure 9. We        and
+                     dimensions    20    red     plastic
+                                           of generalization.
+                            also demonstrate                    forks       into     a   bin
+                                                             this task in the supplementary      such                   [15]    C.  L.
+                                                                                                                        Transfer”, arXiv Giles,      C.
+                                                                                                                                                 preprint
+                                                                                                                                         Discovery        B.    Miller,      D.
+                                                                                                                                                                arXiv:1609.07088,
+                                                                                                                                                          of Deep                  Chen,
+                                                                                                                                                                       Options”, in Preprint   H.-H.2017.  Chen,      G.-Z.       Sun,
+                                                                                                                                                                                                            arXiv:1703.08294, 2017.      and
+    resulting                                                                                                                   Y.-C.  Lee,     “Learning        and    extracting        finite    state    automata        with    second-
+      video in stack Real
+                   the     realofworld
+                               robot.  bowls        and forks
+                                            Wesetting.
+                                                    have                  can be steadily
+                                                              also transferred                                 [11]
+                                                                                            the trained model on        J.
+                                                                                                                        P.
+                                                                                                                           Devlin,
+                                                                                                                                [14]
+                                                                                                                                order
+                                                                                                                           Kohli,
+                                                                                                                                     J.   Uesato,
+                                                                                                                                         C.    L.
+                                                                                                                                        recurrent
+                                                                                                                                                   Giles,S.
+                                                                                                                                         Y.-C. Lee, neural
+                                                                                                                                    “RobustFill:
+                                                                                                                                                             Bhupatiraju,
+                                                                                                                                                              C.
+                                                                                                                                                         “Learning
+                                                                                                                                                           Neural
+                                                                                                                                                                  B.    Miller,
+                                                                                                                                                                    networks”,
+                                                                                                                                                                                      R.
+                                                                                                                                                                                     D.
+                                                                                                                                                                         and extracting
+                                                                                                                                                                        Program
+                                                                                                                                                                                           Singh,
+                                                                                                                                                                                           Chen,
+                                                                                                                                                                                        Learning,
+                                                                                                                                                                                                         A.-r.
+                                                                                                                                                                                                      H.-H.
+                                                                                                                                                                                                           vol.
+                                                                                                                                                                                                 finite state
+                                                                                                                                                                                           Learning          under
+                                                                                                                                                                                                                  Mohamed,
+                                                                                                                                                                                                                Chen,
+                                                                                                                                                                                                                  4,  no.
+                                                                                                                                                                                                                  automata
+                                                                                                                                                                                                                           G.-Z.
+                                                                                                                                                                                                                        Noisy3, with
+                                                                                                                                                                                                                                       and
+                                                                                                                                                                                                                                      Sun,
+                                                                                                                                                                                                                                  2008.
+                                                                                                                                                                                                                                            and
+                                                                                                                                                                                                                                        second-
+                                                                                                                                                                                                                                     I/O”,
+   away in a tray.            Task variation
+                     the real-Sawyer                arm tocomes  evaluate    in thetaskfeasibility
+                                                                                             length, as shown [16]      in      A. Graves,
+                                                                                                                                         order    G.  Wayne,neural
+                                                                                                                                                  recurrent         and I.networks”,
+                                                                                                                                                                               Danihelka,          “Neuralvol.    Turing
+                                                                                                                                                                                                                       4, no.Machines”,
+                                                                                                                        arXiv preprint        arXiv:1703.07469,                 2017. Learning,                                  3, 2008.
+ he number ofFigure      IX.
+                         utensils D ISCUSSION
+                                 8.   Wevaries,
+                                            demonstrate and & task
+                                                                 Fthis
+                                                                    UTURE task in
+                                                                          topology, WtheORK   supplementary
+                                                                                              where                 video       arXiv preprint
+                                                                                                                                [15]     S.  Hochreiter arXiv:1410.5401,
+                                                                                                                                                              and  J.  Schmidhuber,    2014.“Long short-term memory”, Neural
+                                                                                                               [12] A. Dosovitskiy and V. Koltun, “Learning to act by predicting the
+                     in thebowls real    world       setting.                                                           [17] S. Hochreiter
+                                                                                                                                         computation,and J. vol.
+                                                                                                                                                               Schmidhuber,
+                                                                                                                                                                     9, no. 8, pp.     “Long      short-term
+                                                                                                                                                                                           1735–1780,          1997.memory”, Neural
+ eringWe    in introduced
+                 which               Neural  areTask  stacked Programming
+                                                                       can vary.(NTP),        Usinga meta- future”,[16]           ICLR,
+                                                                                                                                computation,
+                                                                                                                                         T. M.2017.  vol. 9, D.
+                                                                                                                                                   Jochem,       no.A.8,Pomerleau,
+                                                                                                                                                                            pp. 1735–1780,   and C. E.   1997.Thorpe, “Maniac: A next
+  rieslearning     framework that                 learns       modular                                         [13] [18]Y. Duan,T. M.M.Jochem,Andrychowicz,               B. C.         Stadie,        J. Ho,        J. Schneider,
+         as demonstrations                IX. and      object
+                                                   D ISCUSSION             & Fand
+                                                                     positions      UTUREreusable
+                                                                                           as state
+                                                                                                 W ORK   neural
+                                                                                                                        I. Sutskever,
+                                                                                                                                         generation    D.neurally       based
+                                                                                                                                                            A. Pomerleau,         autonomous
+                                                                                                                                                                                      and    C. E. roadThorpe, follower”,
+                                                                                                                                                                                                                     “Maniac:   in Int’l   Conf.
+                                                                                                                                                                                                                                      A next
+                                                                                                                                         onP.Intelligent
+                                                                                                                                generation        Abbeel,based
+                                                                                                                                                 neurally         and autonomous
+                                                                                                                                                                Autonomous W. Zaremba,Systems,  road   “One-Shot
+                                                                                                                                                                                                     IOS      Publishers,
+                                                                                                                                                                                                          follower”,       inImitation
+                                                                                                                                                                                                                                Amsterdam.,
+                                                                                                                                                                                                                                Int’l Conf.
+      programs
+a model is trained     for     hierarchical
+                                   using 1000
+                          We introduced                   tasks.
+                                                     Neural           We
+                                                            demonstrations.     demonstrate
+                                                                   Task Programming (NTP), a meta-      NTP’s           Learning”,     arXiv      preprint
+                                                                                                                                         Pittsburgh,             arXiv:1703.07326,
+                                                                                                                                                           PA, 1993,       pp.    15–18. IOS 2017.
+                                                                                                                                on Intelligent         Autonomous            Systems,                  Publishers, Amsterdam.,
+ tedstrengths
+        world. We    in two use robot
+                     learning            full manipulation
+                                     aframework  Sawyer           learnstasks
+                                                           that robot         model
+                                                                               modular thatinstead
+                                                                                                require
+                                                                                               and          pro-
+                                                                                                     reusable  [14]     Y. Duan,
+                                                                                                                   neural       [17]     J. Kober,
+                                                                                                                                    J. Schulman,
+                                                                                                                                Pittsburgh,       PA, J.    A.
+                                                                                                                                                             X. Bagnell,
+                                                                                                                                                         1993,    Chen,
+                                                                                                                                                                   pp. 15–18.  P.andL.J.Bartlett,
+                                                                                                                                                                                            Peters, “Reinforcement
+                                                                                                                                                                                                           I. Sutskever, learning  and P. in
+                                                                                                                                        2robotics:     AFern,
+                                                                                                                                                           survey”,      The Int’l       Journal     ofGoetschalckx,
+                                                                                                                                                                                                           Robotics     Research,       vol. 32,
+      longed     and     complex           interactions
+  ipper only, and we evaluate NTP performance on
+                     programs            for    hierarchical      with      the
+                                                                        tasks.      environment.
+                                                                                     We       demonstrate   NTP   NTP’s Abbeel,
+                                                                                                                        [19]    K.“RL
+                                                                                                                                    Judah, :  Fast
+                                                                                                                                                A.   Reinforcement
+                                                                                                                                                     P.            P.           Learning
+                                                                                                                                                                       Tadepalli,         and     via
+                                                                                                                                                                                                  R.     Slow       Reinforcement
+                                                                                                                                                                                                                                “Imitation
+                                                                                                                        Learning”,       no. 11,preprint
+                                                                                                                                       arXiv         pp. 1238–1274,            2013.
+                                                                                                                                                                 arXiv:1611.02779,                    2016.
+                                                                                                                                learning      with    demonstrations            and      shaping       rewards”,        in   AAAI,      2014.
+ k inachieves       strong
+         a simulator.strengths We  generalization
+                                        in    three that
+                                        observe           robot results        towards varies
+                                                                     manipulation
+                                                                   performance                  task
+                                                                                                tasks length,
+                                                                                                          that require
+                                                                                                               [15] [20]
+                                                                                                                                [18] S. Krishnan*, A. Garg*, S. Patil, C. Lea, G. Hager, P. Abbeel, and
+                                                                                                                        L. Fei-Fei,    R.K. Fergus,         and“Transition
+                                                                                                                                                                   P. Perona,           “One-shot
+                                                                                                                                                                                             clustering:learning             of   object
+                                                                                                                                J. Kober,       J. A. Bagnell,          and J. state Peters,      “Reinforcement              learning      in
+      topology, and          semantics.
+                     prolonged           and      This work
+                                                  complex              opens up with
+                                                                   interactions           the opportunity
+                                                                                                   the   environment.                          Goldberg,                                                        Unsupervised           surgical
+n 55%-90% where increasing errors with more objects                                                                             robotics:
+                                                                                                                        categories”,      IEEEA   survey”,      The
+                                                                                                                                                     transactions       Int’lon Journal
+                                                                                                                                                                                     pattern   of
+                                                                                                                                         trajectory segmentation for robot learning”, IJRR, 2018.   Robotics
+                                                                                                                                                                                                    analysis        Research,
+                                                                                                                                                                                                                     and      machinevol.  32,
+      to use generalizable
+                     NTP achieves       neural       programs fortowards
+                                                generalization                modeling     taskhierarchical
+                                                                                                   length, topology,            no. 11,T.
+                                                                                                                        intelligence,
+                                                                                                                                [19]        pp.
+                                                                                                                                         vol.     1238–1274,
+                                                                                                                                               D.28,     no. 4, pp.
+                                                                                                                                                    Kulkarni,       K.2013.594–611, 2006.
+                                                                                                                                                                          Narasimhan,            A. Saeedi, and J. Tenenbaum,
+attributed to failures in collision checking,not incorrect                                                              [21]    S. Krishnan*,         A. Garg*,
+      tasks. We and   intend       to extend
+                             semantics.           This thisworkframework
+                                                                      opens uptothe        tackle     a richer
+                                                                                                opportunity    [16]to use
+                                                                                                                        R. E. Fikes,     P. E. Hart,
+                                                                                                                                        “Hierarchical          deepN.S.
+                                                                                                                                                             and           J.Patil,
+                                                                                                                                                                               Nilsson,
+                                                                                                                                                                         reinforcement  C. Lea,       G. Hager,
+                                                                                                                                                                                                “Learning
+                                                                                                                                                                                                  learning:         and P. executing
+                                                                                                                                                                                                                            Abbeel,
+                                                                                                                                                                                                                   Integrating            and
+                                                                                                                                                                                                                                      temporal
+ns from       NTP.   generalizable             neural
+      set of complex tasks on real robots in future work.     programs            for    modeling          hierarchical         K. Goldberg,
+                                                                                                                        generalized      abstraction
+                                                                                                                                        robot          “Transition
+                                                                                                                                                   plans”, and Artificial
+                                                                                                                                                                 intrinsic  state     clustering:
+                                                                                                                                                                                motivation”,
+                                                                                                                                                                                  Intelligence,            Unsupervised
+                                                                                                                                                                                                     in NIPS,
+                                                                                                                                                                                                           1972.    2016.           surgical
+                                                                                                                                trajectory
+                                                                                                                                [20]S. V.       segmentation
+                                                                                                                                              Mnih,     K. I.         for robot
+                                                                                                                                                             Kavukcuoglu,            D.learning”,
+                                                                                                                                                                                          Silver,    A. IJRR,
+                                                                                                                                                                                                           A. Rusu, 2018. J. Veness, M. G.
+ orld. We have       tasks. also Fortransferred
+                                         future work,the          wetrained
+                                                                         intend to    model         on
+                                                                                            1) improve         [17] state
+                                                                                                               the      R. Fox,
+                                                                                                                        [22]    T.  D.
+                                                                                                                                         Krishnan,
+                                                                                                                                          Kulkarni,
+                                                                                                                                         Bellemare,         K.
+                                                                                                                                                           A.
+                                                                                                                                                                 Stoica,
+                                                                                                                                                                  Narasimhan,
+                                                                                                                                                               Graves,      M.
+                                                                                                                                                                                and       K. Goldberg,
+                                                                                                                                                                                           A.
+                                                                                                                                                                                  Riedmiller,    Saeedi,
+                                                                                                                                                                                                     A.    K.   and
+                                                                                                                                                                                                                     “Multi-Level
+                                                                                                                                                                                                                        J. Tenenbaum,
+                                                                                                                                                                                                               Fidjeland,      G.    Ostrovski,
+  -Sawyer arm             to evaluate          Rthe        feasibility                                                  Discovery     of    Deep      Options”,         in   preprint         arXiv:1703.08294,                  2017.
+                     encoder        to extract    EFERENCES
+                                                     more      task-salientasinformation
+                                                                                       shown insuch as object “Hierarchical                           deep reinforcement
+                                                                                                                                         et al., “Human-level             control through  learning: deep Integrating
+                                                                                                                                                                                                              reinforcementtemporal  learning”,
+                                                                                                               [18] C. L. Giles, Nature,   C. B. vol. Miller,       D.    Chen,
+                                                                                                                                                            518, no.motivation”,        H.-H.
+                                                                                                                                                                          7540, pp. 529–533,        Chen,        G.-Z.       Sun,      and
+ 8. We  [1] also
+               J. Andreas,
+                   demonstrate  D. Klein,
+                     relationships,           2)and
+                                             this      S. Levine,
+                                                      task
+                                                    devise     in   the
+                                                                a richer“Modular
+                                                                               set ofmultitask
+                                                                             supplementary APIs such  reinforce-
+                                                                                                            as velocity         abstraction and intrinsic                                     in NIPS,2015.    2016.
+               mentand learning     with policycontrollers,
+                                                       sketches”, in and     ICML,
+                                                                                                                        Y.-C.  Lee,
+                                                                                                                        [23] [21]    “Learning
+                                                                                                                                V. Mnih, A. Y. K. Ng,   and    extracting
+                                                                                                                                                          D. Harada, D.
+                                                                                                                                                    Kavukcuoglu,                  finite
+                                                                                                                                                                             andSilver,     state
+                                                                                                                                                                                     S. J. Russell,   automata
+                                                                                                                                                                                               A. A. Rusu,   “Policy   with     second-
+                                                                                                                                                                                                                     J. invariance
+                                                                                                                                                                                                                         Veness, M.under    G.
+n the[2]realJ. world         torque-based                                           3) 2017.
+                                                                                         extend this framework
+                  Andreas,setting.
+                                M. Rohrbach, T. Darrell, and D. Klein, “Neural module                                   order recurrent  reward
+                                                                                                                                Bellemare,     neural      networks”,
+                                                                                                                                                 A.transformations:
+                                                                                                                                                      Graves,                   Learning,
+                                                                                                                                                                               Theory
+                                                                                                                                                                   M. Riedmiller,           and    vol.
+                                                                                                                                                                                              A. application 4, no.to3,reward
+                                                                                                                                                                                                    K. Fidjeland,          G.2008.    shaping”,
+                                                                                                                                                                                                                                 Ostrovski,
+                     to tackle
+               networks”,      in CVPR,more 2016.
+                                                complex tasks on real robots.                                  [19] A. Graves,  et al.,G.in  Wayne,
+                                                                                                                                              ICML, 1999,
+                                                                                                                                         “Human-level      and control
+                                                                                                                                                                  I. Danihelka,
+                                                                                                                                                                  pp.          through“Neural
+                                                                                                                                                                        278–287.                             Turing Machines”,
+                                                                                                                                                                                              deep reinforcement                 learning”,
+         IX. B.DD.
+        [3]        ISCUSSION
+                        Argall, S. Chernova,& F UTURE   M. Veloso,  W    ORK
+                                                                          and B. Browning, “A Survey                            [22]
+                                                                                                                                Nature,A.vol.
+                                                                                                                        arXiv preprint         Y. Ng518,and no.S.7540,
+                                                                                                                                              arXiv:1410.5401,     J. Russell,2014.
+                                                                                                                                                                             pp.      “Algorithms
+                                                                                                                                                                                     529–533,         2015. for inverse reinforcement
+                                                        ACKNOWLEDGMENT                                         [20] [24]S. Hochreiter    learning.”,
+                                                                                                                                A. Murali,andS.J. Sen,    in ICML, 2000.
+                                                                                                                                                     Schmidhuber,
+                                                                                                                                                             B. Kehoe, A.     “LongGarg,short-term
+                                                                                                                                                                                              S. McFarland,    memory”,          Neural
+                                                                                                                                                                                                                      et al., “Learning
+               of Robot Learning from Demonstration”, Robotics and Autonomous
+ ntroduced         Neural
+               Systems,           Task
+                                   57, no.Programming
+                            vol.research
+                          This                 5, pp.
+                                              was         469–483,
+                                                     performed             (NTP),
+                                                                     at 2009.
+                                                                         the                a meta-
+                                                                               SVL at Stanford        in affiliation with
+                                                                                                                                [23] R.vol.
+                                                                                                                        computation,
+                                                                                                                                by observation
+                                                                                                                                              Parr9,and no. S.8,J. pp.
+                                                                                                                                                          for
+                                                                                                                                                                    Russell,
+                                                                                                                                                                 surgical
+                                                                                                                                                                                  “Reinforcement
+                                                                                                                                                                          1735–1780,
+                                                                                                                                                                                subtasks:         1997.      learning with hierarchies
+                                                                                                                                                                                                   Multilateral          cutting       of 3d
+                                                                                                                                         of machines”, in NIPS, 1998.
+g framework
+        [4] P. Bacon,thethat  J. learns
+                                  Harb,
+                           Stanford     AIand  modular
+                                             Lab,       Precup,and
+                                                   D.Stanford-Toyota“Thereusable   Center. neural
+                                                                              option-critic
+                                                                             AI                                [21] T. M. Jochem,
+                                                                                                  architecture”,                [24]     S. D.
+                                                                                                                                viscoelastic  Reed A. and
+                                                                                                                                                  and    Pomerleau,
+                                                                                                                                                         2d N. orthotropic   andtissue
+                                                                                                                                                                   de Freitas,        C.“Neural
+                                                                                                                                                                                           E.phantoms”,
+                                                                                                                                                                                                Thorpe,         “Maniac:
+                                                                                                                                                                                                                  in IEEE Int’l
+                                                                                                                                                                                                      programmer-interpreters”,  A next Conf.in
+               arXiv preprint arXiv:1609.05140, 2016.                                                                   generation    neurally
+                                                                                                                                on Robotics          based
+                                                                                                                                                    and         autonomous
+                                                                                                                                                           Automation,           ICRA, road     follower”,
+                                                                                                                                                                                             2015.                 in  Proceedings
+ms for  [5] hierarchical
+               A. Billard, S. Calinon,  tasks.R. Dillmann,
+                                                       We Rdemonstrateand S. Schaal, NTP’s
+                                                                  EFERENCES                   “Robot program-           [25]    A. Y. S.
+                                                                                                                        of the [25]
+                                                                                                                                         ICLR, 2016.
+                                                                                                                                         Ng,Ross,
+                                                                                                                                International    D. Harada,
+                                                                                                                                                      Conference    and on   S.andJ.   Russell,
+                                                                                                                                                                                   Intelligent        “Policy
+                                                                                                                                                                                                       Autonomous   invarianceSystems, under
+                                                                                                                                                       G. J. Gordon,                   D.   Bagnell,       “A reduction          of imitation
+hs in twoming     robotby     manipulation
+                            demonstration”,           in    tasks
+                                                           Handbook    thatof      require
+                                                                                robotics,
+                        [1] J. Andreas, D. Klein, and S. Levine, “Modular multitask reinforce-
+                                                                                                  pro-
+                                                                                              2008.                     IOS     rewardlearning
+                                                                                                                              Publishers,  transformations:
+                                                                                                                                                Amsterdam.,
+                                                                                                                                                       and            Theory
+                                                                                                                                                              structuredPittsburgh,  and application
+                                                                                                                                                                               prediction     PA,
+                                                                                                                                                                                                to    1993,
+                                                                                                                                                                                                     no-regret  to
+                                                                                                                                                                                                                 pp. reward
+                                                                                                                                                                                                                        15–18.
+                                                                                                                                                                                                                     online       shaping”,in
+                                                                                                                                                                                                                                learning”,
+                                                                                                                                in ICML,   P. 1999,
+                                                                                                                                                 Conf. pp.      278–287.Intelligence
+ and [6]       R. Brooks,
+         complex                “A robust
+                         interactions
+               IEEE journal
+                                ment    learning
+                                    on robotics
+                                                 layered
+                                                  with
+                                                     with the control
+                                                             policy        system in
+                                                                    environment.
+                                                                      sketches”,       forICML,
+                                                                                             a mobile
+                                                                                                 NTP2017.robot”,
+                                                                                                               [22] K. Judah,
+                                                                                                                        [26]
+                                                                                                                                     A.Int’l
+                                                                                                                                A.with
+                                                                                                                                    Y. Ng
+                                                                                                                                                Fern,
+                                                                                                                                                and S. D.
+                                                                                                                                                          on Tadepalli,
+                                                                                                                                                          P.   Artificial
+                                                                                                                                                           J. Russell,        “Algorithms
+                                                                                                                                                                                                   and Statistics, 2011.
+                                                                                                                                                                                  and R. Goetschalckx,
+                                                                                                                                                                                                 andfor D.inverse
+                                                                                                                                                                                                                           “Imitation
+                                                                                                                                                                                                                         reinforcement
+                        [2] J. Andreas,          M. and       automation,
+                                                       Rohrbach,      T. Darrell, 1986.
+                                                                                      and D. Klein, “Neural module      learning[26]     T.demonstrations
+                                                                                                                                              Schaul,          Horgan,  andK.      Gregor, rewards”,
+                                                                                                                                                                                shaping                       Silver,    “Universal
+                                                                                                                                                                                                                   in AAAI,         2014. value
+  s strong       generalization
+        [7] Bullet       Physics      Library,
+                                networks”,     results
+                                                     CVPR, towards
+                                                inhttp://bulletphysics.org/.
+                                                                2016.              task length, [23] Ł. Kaiser                  learning.”,
+                                                                                                                                     andfunction in ICML,
+                                                                                                                                             I. Sutskever,       2000.
+                                                                                                                                                       approximators”,
+                                                                                                                                                                    “NeuralinGPUs     ICML, learn 2015. algorithms”, arXiv
+ y, and [8] semantics.
+               J. Cai,[3]R. B.   This
+                                  Shin,     work
+                                            and D.
+                                     D. Argall,     S. opens
+                                                           Song, up
+                                                        Chernova,      M.the
+                                                                     “Making Veloso,opportunity
+                                                                                     neural
+                                                                                        and B.programming
+                                                                                                   Browning, “A Survey  [27]    [27]ParrS.and Sen*,
+                                                                                                                                R.arXiv:1511.08228,S. A.J. Garg*,
+                                                                                                                                                            Russell,  D.“Reinforcement
+                                                                                                                                                                            Gealy, S. McKinley,               Y. Jen,
+                                                                                                                                                                                                       learning          andhierarchies
+                                                                                                                                                                                                                      with      K. Goldberg,
+                                                                                                                        preprint        “Autonomous                 2015.
+                                                                                                                                                               Multiple-Throw             Multilateral Surgical Suturing with a
+               architecturesofgeneralize
+                                    Robot Learning  via recursion”,         ICLR, 2017.
+                                                            from Demonstration”,             Robotics and Autonomous            of machines”,          in NIPS,       1998.
+ eneralizable         neural       programs                                                                    [24] S. Krishnan,Mechanical A. Garg, Needle   S. Patil,       C. andLea,      G. Hager,based       P. Abbeel,           and
+        [9] J. Devlin,        J.Systems,
+                                  Uesato,           57,forno. modeling
+                                              S. Bhupatiraju,
+                                             vol.              5, pp.R.     Singh,
+                                                                        469–483,    hierarchical
+                                                                                       A.-r.
+                                                                                       2009. Mohamed, and               [28] S. Reed and N. de                         Guide
+                                                                                                                                                                 Freitas,      “Neural   Optimization
+                                                                                                                                                                                               programmer-interpreters”,Needle Planning”,   in
+                                                                                                                        K. Goldberg,     in  “Transition
+                                                                                                                                              IEEE    Int.   Conf. state
+                                                                                                                                                                      Roboticsclustering:
+                                                                                                                                                                                      and           Unsupervised
+                                                                                                                                                                                              Automation         (ICRA),       surgical
+                                                                                                                                                                                                                              2016.
+We intendP. to         extend
+                  Kohli,[4]           this framework
+                            “RobustFill:
+                                P.  Bacon,      Neural Program
+                                               J.  Harb,    and   D.  to Learning
+                                                                             tackle aunder
+                                                                       Precup,      “The       richer
+                                                                                                    Noisy I/O”,
+                                                                                            option-critic   architecture”,      ICLR, 2016.
+                                                                                                                        trajectory
+                                                                                                                                [28] segmentation
+                                                                                                                                         J. Sung,            for robot         learning”,
+                                                                                                                                                                                        Saxena,IJRR,           2018.sequences
+               arXiv preprint   ArXiv     preprint arXiv:1609.05140,
+                                      arXiv:1703.07469,            2017.           2016.                                [29]    S. Ross,      G. J. B.      Selman,
+                                                                                                                                                        Gordon,       and andD.   A.Bagnell,        “A“Learning
+                                                                                                                                                                                                            reduction                   of con-
+                                                                                                                                                                                                                             of imitation
+  omplex       tasks      on A.
+                        [5]
+       [10] A. Dosovitskiy
+                                real      robotsCalinon,
+                                     Billard,
+                                       and V.S.Koltun,
+                                                         in future
+                                                                 R. Dillmann,
+                                                                “Learning
+                                                                             work.to and
+                                                                                     act S. bySchaal,   “Robot
+                                                                                                 predicting    [25]
+                                                                                                               the      T. D. learning
+                                                                                                                  program-               trollersK.
+                                                                                                                                 Kulkarni,    and for     complex manipulation
+                                                                                                                                                         Narasimhan,
+                                                                                                                                                     structured       prediction          to tasks”,
+                                                                                                                                                                                  A. Saeedi,  no-regret   in International
+                                                                                                                                                                                                          and      J. Tenenbaum,
+                                                                                                                                                                                                                online             Conference
+                                                                                                                                                                                                                           learning”,       in
+                                ming     by demonstration”, in Handbook of robotics, 2008.                              “Hierarchical    ondeepMachine       Learning, Citeseer,
+                                                                                                                                                       reinforcement                        2013. Integrating temporal
+                                                                                                                                                                                    learning:
+               future”, ICLR,         2017.                                                                                     Int’l Conf.
+                                                                                                                                [29] and
+                                                                                                                                                 on   Artificial
+                                                                                                                                         R. S.intrinsic
+                                                                                                                                                                      Intelligence
+                                                                                                                                                 Sutton, D.motivation”,
+                                                                                                                                                                 Precup, and S.in
+                                                                                                                                                                                            and
+                                                                                                                                                                                         Singh,
+                                                                                                                                                                                                    Statistics,
+                                                                                                                                                                                                   “Between
+                                                                                                                                                                                                                     2011.
+                        [6] R    EFERENCES
+                                R.   Brooks, “A robustB.layered               controlJ. system
+                                                                                           Ho, J.forSchneider,
+                                                                                                        a mobile robot”,abstraction
+                                                                                                                        [30]    T. Schaul,       D. Horgan,                                 NIPS,        2016. mdps         and semi-mdps:
+       [11] Y. Duan,          M.
+                                IEEE
+                                     Andrychowicz,
+                                         journal     on   robotics
+                                                                    C. Stadie,
+                                                                      and    automation,       1986.                                     A framework           for K.      Gregor,
+                                                                                                                                                                     temporal             and
+                                                                                                                                                                                      abstraction D. Silver,        “Universallearning”,
+                                                                                                                                                                                                         in reinforcement               value
+   Andreas, I. D. Sutskever,
+                   Klein,      and  P.S.Abbeel,
+                                           Levine,     and     W. Zaremba,
+                                                         “Modular         multitask   “One-Shot
+                                                                                           reinforce- Imitation[26]     K.  Kurach,
+                                                                                                                                functionM.      Andrychowicz,
+                                                                                                                                              approximators”,
+                                                                                                                                         Artificial     intelligence,       and
+                                                                                                                                                                         invol.
+                                                                                                                                                                              ICML,  I.
+                                                                                                                                                                                   112,   Sutskever,
+                                                                                                                                                                                           2015.
+                                                                                                                                                                                           no.    1-2,    pp.  “Neural
+                                                                                                                                                                                                                181–211,      random-
+                                                                                                                                                                                                                               1999.
+                        [7] J. Cai, R. Shin, and D. Song, “Making neural programming                                    access [30]
+                                                                                                                                 machines”,         arXiv      preprint
+  ent learning Learning”,
+                  with policy  arXivsketches”,
+                                         preprint arXiv:1703.07326,
+                                architectures generalize in ICML,        2017. 2017.
+                                                                   via recursion”,        ICLR, 2017.
+                                                                                                                        [31]    S. Sen*, R. A.     Garg*,
+                                                                                                                                               Vilalta    andD.      Drissi,arXiv:1511.06392,
+                                                                                                                                                                Y.Gealy,        S.
+                                                                                                                                                                                 “AMcKinley,
+                                                                                                                                                                                        perspectiveY.view    Jen,2015.
+                                                                                                                                                                                                                     and survey
+                                                                                                                                                                                                                    and     K. Goldberg,
+                                                                                                                                                                                                                                       of meta-
+       [12]    L.  Fei-Fei,
+   Andreas, M. Rohrbach,[8] R.  E. Fergus,
+                                      T. Darrell,
+                                     Coumans     and     P.Y.Perona,
+                                                    andand     D.        “One-shot
+                                                                Bai,Klein,
+                                                                       Pybullet,“Neural    learning
+                                                                                      a pythonmodule           [27] V. Mnih,
+                                                                                                       of object
+                                                                                                    module    for physics
+                                                                                                                                    K. learning”,
+                                                                                                                                          Kavukcuoglu,
+                                                                                                                                “Autonomous              ArtificialD.Intelligence
+                                                                                                                                                      Multiple-Throw      Silver,       A. Review,
+                                                                                                                                                                                  MultilateralA. Rusu, Surgical
+                                                                                                                                                                                                           2002.J. Veness,
+                                                                                                                                                                                                                       SuturingM.with    G. a
+               categories”,
+ etworks”, in CVPR, 2016.         IEEE      transactions         on   pattern       analysis
+                                simulation, games, robotics and machine learning, http : / /      and  machine                  Mechanical
+                                                                                                                        Bellemare,
+                                                                                                                                [31]  A. O.       Needle
+                                                                                                                                             Graves,
+                                                                                                                                               Vinyals,    M.
+                                                                                                                                                            C. Guide      and
+                                                                                                                                                                 Riedmiller,
+                                                                                                                                                                Blundell,       T.Optimization
+                                                                                                                                                                                       A.    K.
+                                                                                                                                                                                     Lillicrap,          based
+                                                                                                                                                                                                   Fidjeland,
+                                                                                                                                                                                                    D.    Wierstra, Needle
+                                                                                                                                                                                                                      G. et     Planning”,
+                                                                                                                                                                                                                           Ostrovski,
+                                                                                                                                                                                                                             al.,   “Matching
+               intelligence,pybullet.org/,
+M. Andrychowicz,                  vol. 28, no. 4, pp.2016–2017.
+                           M. Denil,        S. G. Colmenarejo, 594–611, 2006.
+                                                                               M. W. Hoffman,                           et al., in IEEE
+                                                                                                                                “Human-level  Int. Conf.
+                                                                                                                                         networks       for    Robotics
+                                                                                                                                                              one
+                                                                                                                                                         control    shot      and Automation
+                                                                                                                                                                            learning”,
+                                                                                                                                                                      through          deep                 (ICRA),
+                                                                                                                                                                                             in reinforcement
+                                                                                                                                                                                                  Advances       in Neural2016.   Information
+                                                                                                                                                                                                                            learning”,
+       [13] R. E. Fikes,[9]     J.P.Devlin,
+                                      E. Hart, J.  and N. S.
+                                                   Uesato,     J. Nilsson,
+                                                                   Bhupatiraju,  “Learning
+                                                                                      R.  Singh, and  executing
+                                                                                                    A.-r. Mohamed,      Nature,
+                                                                                                                       and        vol.   Processing
+                                                                                                                                         518,     no.      Systems,
+                                                                                                                                                         7540,      pp.  2016,
+                                                                                                                                                                           529–533, pp. 3630–3638.
+                                                                                                                                                                                               2015.
+  . Pfau, T. Schaul, and N. de Freitas, “Learning to learn by gradient                                                          [32] S.  Y. Wu
+               generalized P.
+ escent by gradient descent”,
+                                 robot
+                                    Kohli,plans”,     Artificial
+                                            in“RobustFill:
+                                                NIPS, 2016.
+                                                                    Intelligence,
+                                                                 Neural     Program 1972.Learning under Noisy  [28] I/O”,
+                                                                                                                        A. Murali,             Sen,andB.Y. Kehoe,
+                                                                                                                                                               Demiris, A.    “Towards
+                                                                                                                                                                                     Garg,one    S. shot      learning byS.imitation
+                                                                                                                                                                                                       McFarland,                    Patil, for
+                                ArXiv preprint arXiv:1703.07469, 2017.                                                                   humanoid robots”, in ICRA, 2010.
+ . D. Argall, S. Chernova,             M. Veloso,          and B. Browning,              “A Survey                      W.  D.   Boyd,       S.   Lim,      P.   Abbeel,          and     K.     Y.    Goldberg,
+                                                                                                                                [33] Y. Zhu, R. Mottaghi, E. Kolve, J. J. Lim, A. Gupta, L. Fei-Fei, and                  “Learning
+                      [10] Y. Duan,            M. Andrychowicz,               B. C. Stadie,        J. Ho, J. Schneider, by observation         for surgical         subtasks:          Multilateral
+    Robot Learning fromI. Demonstration”,
+                                    Sutskever, P. Abbeel,      Robotics
+                                                                      and W.   andZaremba,
+                                                                                      Autonomous   “One-Shot Imitation                   A. Farhadi,       “Target-driven          Visual     Navigationcutting in Indoor   of Scenes
+                                                                                                                                                                                                                                 3d vis-  using
+ ystems, vol. 57, no. 5,Learning”,pp. 469–483,  ArXiv 2009.preprint arXiv:1703.07326, 2017.
+                                                                                                                        coelastic andDeep  2d orthotropic
+                                                                                                                                                  Reinforcement     tissue      phantoms”,
+                                                                                                                                                                          Learning”,         in ICRA, in IEEE2017. International
+

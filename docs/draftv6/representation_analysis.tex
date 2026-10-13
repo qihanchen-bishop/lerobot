@@ -1,163 +1,123 @@
-% 核心观点：表示应保留区分动作任务后果所需的关系与因果执行上下文，
-% 而不只是使专家动作MSE的上界更小。
-% 叙述逻辑：信息保留/决策利用分解 -> 关系保留的条件性界 -> 语义与关系监督的对应。
-% 正文集中比较条件与适用域；标量实例和伪标签误差分解留附录，检验协议见实验。
-% 边界：语义是引导关系表示的手段，不另设动作预测风险或泛化收益命题；
-% 关系界约束可达决策能力，不证明特定架构优于RGB基线。
-% 任务后果代理仅为分析见证函数；几何辅助损失不等于价值监督或策略改进证明。
-\subsection{Semantic Inputs and Task-Supervised Representations}
+\subsection{Task-Relevant Information Preservation}
 \label{sec:representationanalysis}
-% 本节直接通过任务后果评价决策相关信息的保留，区分表示损失与保留信息未被充分利用所造成的差距。
-We now assess the preservation of decision-relevant information directly through task consequences, separating representation loss from imperfect use of the retained information.
-This perspective is related to information-state abstractions for partially observed control and
-behaviorally grounded representation learning~\cite{subramanian2022ais,zhang2021dbc}.
-Here, information preservation is measured directly by task-failure consequences under a common continuation policy.
+% 承接B3：表示既要改善覆盖，又要保留解释专家动作所需的信息。
+We seek conditions under which a representation can improve coverage while controlling the conditional imitation-error discrepancy.
+% 语义用于引导信息保留，专家动作重构将这一设计思路连接到误差迁移界。
+We examine semantic guidance as a way to retain task-relevant information, then connect the accuracy of that information to expert-action reconstruction and a bound on $D_\phi$.
 
-% \subsubsection{表示信息与决策能力}
-\subsubsection{Represented Information and Decision Capability}
-% 固定参考策略 $\pi_0$ 及一个时刻--历史评价分布 $\mu$。
-Fix a reference policy $\pi_0$ and a time--history evaluation distribution $\mu$.
-% 动作规则 $a$ 对应的平均失败概率定义为
-Define the mean failure probability associated with an action rule $a$ as
-$\mathcal L_\mu(a)=\E_{(t,h)\sim\mu}[Q_t^{\pi_0}(h,a(h))]$.
-% 它衡量替换当前动作后沿 $\pi_0$ 继续执行的平均失败概率。
-This quantity measures the mean failure probability after replacing the current action and following $\pi_0$ thereafter.
+% \subsubsection{语义引导的压缩与覆盖}
+\subsubsection{Semantic-Guided Compression and Coverage}
+% 压缩的目标是合并不影响动作选择的外观差异，而不是无条件追求分布对齐。
+Semantic guidance can encourage an encoder to merge appearance differences while retaining object-level structure relevant to action selection.
+% 这是表示设计动机，不是语义输入自动改善覆盖的结论。
+This motivates a representation design, not an automatic coverage guarantee.
+% 沿用B3，覆盖条件在表示空间的事件上成立，压缩后可能不再区分部分历史。
+As in Section~\ref{sec:representationcoverage}, compression can relax coverage requirements by making some history distinctions irrelevant to representation events.
+% 将确定性分割图附加在完整RGB上并不改变相对RGB的最优覆盖常数。
+Appending a deterministic semantic map while retaining the original RGB input does not itself change the best coverage constant relative to RGB, since projection recovers that input.
+% 因此分析对象是联合编码后的决策表示，而非输入通道数量。
+The relevant object is the learned decision representation $Z=\phi(t,\mathcal H_t)$, not the number of input modalities.
 
-% 含时间索引的完整因果历史生成信息 $\mathcal F_h=\sigma(\mathcal H_t)$。
-The complete causal history, including the time index, generates the information $\mathcal F_h=\sigma(\mathcal H_t)$.
-% 编码表示 $Z=\phi(\mathcal H_t)$ 生成的信息为
-% Z在此表示目标指令的完整决策输入：除学习特征外，还包含目标时刻/槽位、所需计划缓存及因果调度记录。
-The representation $Z=\phi(\mathcal H_t)$ denotes the complete input determining the target command: learned features together with the target time and slot, required cached plan information, and causal scheduling records.
-% 这些量均由含运行记录的因果历史确定；确定性读出包括槽位选择及所用后处理。
-These quantities are determined by the causal history including runtime records; the deterministic readout includes slot selection and any postprocessing used.
-% Z止于待评价决策读出之前；反馈可条件于已有基础计划，但不将其自身的最终修正动作作为输入。
-The representation is taken before the evaluated decision readout: feedback may condition on an existing base plan, but not on its own final corrected command.
-It generates
-$\mathcal U=\sigma(Z)\subseteq\mathcal F_h$.
-% 基础策略与反馈分支的不同编码分别作为 $Z$ 评价。
-The encodings of the base policy and the feedback branch are evaluated separately as $Z$.
-% 对任意信息集合 $\mathcal F$，以 $\mathfrak A(\mathcal F)$ 表示所有
-For any information set $\mathcal F$, let $\mathfrak A(\mathcal F)$ denote all
-% $\mathcal F$-可测且取值于 $\mathcal A$ 的动作规则，
-$\mathcal F$-measurable action rules taking values in $\mathcal A$.
-% 仅使用这些信息所能达到的平均失败概率下确界为
-The infimum of the mean failure probability attainable using only this information is
+% 分布合并若同时丢失专家动作选择依据，条件误差差异仍可能增大。
+Improved coverage alone does not ensure a tighter bound; the error associated with merging histories must also be accounted for.
+% 用共同专家读出重构动作是控制D的一个充分途径，不是必要条件。
+A sufficient route is to retain information from which a common rule can reconstruct expert actions under both demonstration and deployment distributions.
+% 这一行为相关的信息保留视角与既有表示抽象研究一致，但下文使用专家动作重构给出具体条件。
+This emphasis on decision-relevant information is consistent with information-state and behaviorally grounded representation analyses~\cite{subramanian2022ais,zhang2021dbc}.
+% 下文以对象属性和空间关系构造可检验的信息保留条件。
+We next formulate this requirement using object attributes and spatial relationships.
+
+% \subsubsection{任务信息与专家动作重构}
+\subsubsection{Task Information and Expert-Action Reconstruction}
+% 任务相关并不自动等于足以解释专家选择，需要明确近似条件。
+We examine when retained task information is sufficient to approximate expert choices.
+% 同时考虑信息本身的解释能力与从表示中估计这些信息的误差。
+The reconstruction error depends on both what the selected information fails to explain and how accurately it is estimated.
+
+% 固定被评价策略及两种分布，使用相同编码器和策略读出。
+Fix the evaluated policy $\pi$ and set $\mu=\bar\mu_\pi$, with $\nu$ the demonstration distribution.
+Write $\pi(h)=p(Z)$ for the same measurable policy readout under both distributions.
+% G向量描述对象属性与空间关系；语义掩码可以提供相应监督量。
+We define a task descriptor vector $G\in\R^{d_G}$ whose components describe task-relevant object attributes and spatial relationships.
+Semantic masks provide a way to construct such quantities, including visibility and relative position.
+% 上下文预先指定，而不是将完整历史不加限制地保留。
+Let $\chi$ denote task-specified proprioceptive and execution context, selected in advance rather than identified with the unrestricted history.
+% 读出估计和上下文均应来自策略实际使用的表示。
+Suppose $Z$ retains $\chi$ and supports an estimate $\widehat G\in\R^{d_G}$ of $G$.
+For $\rho\in\{\mu,\nu\}$, define $\delta_{G,\rho}=\E_\rho\norm{G-\widehat G}$.
+% 两分布上均须定义这些量，包括缺失信息的明确约定。
+These quantities must be defined under both distributions, with an explicit convention for unavailable components.
+
+% \begin{assumption}[描述量条件下的专家选择]
+\begin{assumption}[Descriptor-conditioned expert selection]
+\label{ass:expertselection}
+% 共同的专家近似规则在两种分布下使用同一组描述量和上下文。
+There exists a common measurable rule $g_{\mathrm E}$ mapping descriptors and context to $\mathcal A$ such that, for $\rho\in\{\mu,\nu\}$,
 \begin{equation}
- \mathcal L_\mu^*(\mathcal F)
- =\inf_{a\in\mathfrak A(\mathcal F)}\mathcal L_\mu(a).
- \label{eq:taskinformationrisk}
+ \E_\rho\norm{\pi_{\mathrm E}(h)-g_{\mathrm E}(G,\chi)}
+ \le\epsilon_{\mathrm{sel},\rho}.
+ \label{eq:expertselectionapprox}
 \end{equation}
-% 其中sigma表示记录可辨别的信息，F可测规则仅依赖该信息。
-Here, $\sigma(\cdot)$ denotes the information generated by the records, and an $\mathcal F$-measurable rule uses only that information.
-% 各类动作规则在相同动作集合下比较，当前动作之后均沿同一参考策略执行。
-The action-rule classes are compared over the same action set, with the same reference policy followed after the current action.
-
-% 基于表示的实际动作规则 $\pi_Z$ 同时受到编码信息与决策机制的限制。
-An implemented action rule $\pi_Z\in\mathfrak A(\mathcal U)$ is constrained both by the encoded information and by its decision mechanism.
-% 将编码丢失信息所造成的最优平均失败概率差记为表示损失
-Define the gap in optimal mean failure probability due to information lost in encoding as the representation loss
-$\Delta_{\mathrm{rep}}(\mathcal U)
-=\mathcal L_\mu^*(\mathcal U)-\mathcal L_\mu^*(\mathcal F_h)$,
-% 将实际决策相对同一表示下最优规则的差距记为决策实现误差
-and the gap between the implemented rule and the optimum under the same representation as the decision-realization error
-$\epsilon_{\mathrm{dec}}(\pi_Z)
-% =\mathcal L_\mu(\pi_Z)-\mathcal L_\mu^*(\mathcal U)$，有
-=\mathcal L_\mu(\pi_Z)-\mathcal L_\mu^*(\mathcal U)$. Then
+% 描述量估计误差对动作重构的影响由共同有限敏感性控制。
+For a finite constant $K_{\mathrm E}\ge0$,
 \begin{equation}
- \mathcal L_\mu(\pi_Z)-\mathcal L_\mu^*(\mathcal F_h)
- =\Delta_{\mathrm{rep}}(\mathcal U)+\epsilon_{\mathrm{dec}}(\pi_Z).
- \label{eq:taskrepresentationdecomposition}
+ \norm{g_{\mathrm E}(G,\chi)-g_{\mathrm E}(\widehat G,\chi)}
+ \le K_{\mathrm E}\norm{G-\widehat G}
+ \label{eq:expertselectionsensitivity}
 \end{equation}
-% 该分解区分\emph{信息是否被保留}与\emph{保留的信息是否被有效利用}。
-This decomposition distinguishes \emph{whether information is preserved} from \emph{whether the preserved information is effectively used}.
-% 两项均以沿参考策略继续执行的平均失败概率计量且非负；$\epsilon_{\mathrm{dec}}$ 包含模型容量、残差限幅、
-Both terms are nonnegative and measured in mean failure probability under reference-policy continuation. The term $\epsilon_{\mathrm{dec}}$ includes limitations due to model capacity, residual bounds,
-% 有限数据与优化，以及动作监督和任务目标之间的差异。
-finite data and optimization, and the mismatch between action supervision and the task objective.
-
-% \subsubsection{关系误差何时影响任务决策}
-\subsubsection{When Relation Errors Affect Task Decisions}
-% 关系估计的准确性需要通过动作后果与任务决策联系起来。
-The accuracy of relation estimates must be connected to task decisions through action outcomes.
-% B1中的历史条件失败概率已经平均未观测状态，以下直接用它评价关系信息。
-We use the history-conditioned failure probability $Q_t^{\pi_0}(h,a)$ defined in~\eqref{eq:historyactionvalue},
-which already averages over unobserved physical states.
-
-% 关系变量 $G\in\R^{d_G}$ 描述相关对象的几何或语义关系，
-The relation variable $G\in\R^{d_G}$ describes geometric or semantic relations among relevant objects,
-% 因果上下文 $\chi$ 保留决策所需的本体信息与执行证据。
-and the causal context $\chi$ retains proprioceptive information and execution evidence needed for decisions.
-% chi的组成须在任务实例中预先限定，不能通过把完整历史放入chi使假设恒成立；未解释因素由epsilon_rel承担。
-The contents of $\chi$ must be specified for the task instance, rather than set to the entire history to make the assumption automatic; unexplained effects remain in $\epsilon_{\mathrm{rel}}$.
-% 表示 $Z$ 可读出关系估计 $\widehat G\in\R^{d_G}$ 与上下文 $\chi$，
-The representation $Z$ admits readouts of a relation estimate $\widehat G\in\R^{d_G}$ and context $\chi$,
-% 关系误差为 $\delta_G=\E_\mu\norm{G-\widehat G}$。
-with relation error $\delta_G=\E_\mu\norm{G-\widehat G}$.
-% 以下用分析函数 $f(G,\chi,a)$ 近似上述条件平均失败概率，
-We use an analytical function $f(G,\chi,a)$ to approximate the conditional mean failure probability above.
-% 其中d_G为关系维数。
-Here, $d_G$ is the relation dimension.
-
-% \begin{assumption}[关系条件下的任务后果近似]
-\begin{assumption}[Relation-based approximation of action outcomes]
-\label{ass:taskrelations}
-% 在固定分布 $\mu$ 下，存在可测函数 $f$ 及常数 $\epsilon_{\mathrm{rel}},K_G\ge0$，使
-Under a fixed distribution $\mu$, there exist a measurable function $f$ and constants $\epsilon_{\mathrm{rel}},K_G\ge0$ such that
-\begin{align}
- \E_\mu\sup_{a\in\mathcal A}
- |Q_t^{\pi_0}(\mathcal H_t,a)-f(G,\chi,a)|
- &\le\epsilon_{\mathrm{rel}},\nonumber\\
- |f(G,\chi,a)-f(\widehat G,\chi,a)|
- &\le K_G\norm{G-\widehat G},\quad a\in\mathcal A .
- \label{eq:taskrelationsassumption}
-\end{align}
-% 第二个条件在真实与估计关系的联合支持上几乎处处成立，
-The second condition holds almost everywhere on the joint support of the true and estimated relations,
-% 且 $\delta_G<\infty$；条件期望、上确界和动作选择满足附录~\ref{app:representationregularity}的正则条件。
-and $\delta_G<\infty$. The conditional expectations, suprema, and action selections satisfy the regularity conditions in Appendix~\ref{app:representationregularity}.
+% 近似误差及估计误差有限，两种分布下几乎处处成立。
+holds almost surely under both distributions, with finite $\epsilon_{\mathrm{sel},\rho}$ and $\delta_{G,\rho}$.
 \end{assumption}
-% 其中，$\epsilon_{\mathrm{rel}}$ 为关系和上下文不足以解释任务后果的近似误差，
-Here, $\epsilon_{\mathrm{rel}}$ is the approximation error due to task effects not captured by the relations and context,
-% $K_G$ 为该后果对关系误差的敏感性常数，$\delta_G$ 为关系估计误差。
-$K_G$ is the sensitivity constant with respect to relation errors, and $\delta_G$ is the relation-estimation error.
-% 例如，相同几何下的接触或滑脱差异须由上下文保留，否则计入近似误差。
-For example, contact and slip at the same geometry must be distinguished by the context or accounted for in the approximation error.
+% 解释信息选择与信息估计各自承担的误差。
+Here, $\epsilon_{\mathrm{sel},\rho}$ measures expert choices unexplained by $(G,\chi)$, while $K_{\mathrm E}$ controls sensitivity to estimation error.
+% 任务有用性不自动保证专家选择一致性。
+Task relevance alone does not imply this condition: equally successful actions may reflect different expert choices.
 
-% \begin{proposition}[任务后果意义下的表示损失]
-\begin{proposition}[Representation loss in task outcomes]
-\label{prop:taskrepresentation}
-% 在假设~\ref{ass:taskrelations}下，
-Under Assumption~\ref{ass:taskrelations},
-\begin{align}
- \Delta_{\mathrm{rep}}(\mathcal U)
- &\le 2(\epsilon_{\mathrm{rel}}+K_G\delta_G),\nonumber\\
- \mathcal L_\mu(\pi_Z)-\mathcal L_\mu^*(\mathcal F_h)
- &\le 2(\epsilon_{\mathrm{rel}}+K_G\delta_G)
-       +\epsilon_{\mathrm{dec}}(\pi_Z).
- \label{eq:taskrelationbound}
-\end{align}
+% 由表示读出的共同专家近似把描述量误差转为动作重构误差。
+Define $\widehat a_{\mathrm E}(Z)=g_{\mathrm E}(\widehat G,\chi)$.
+The triangle inequality yields
+\begin{equation}
+ \E_\rho\norm{\pi_{\mathrm E}(h)-\widehat a_{\mathrm E}(Z)}
+ \le b_\rho
+ :=\epsilon_{\mathrm{sel},\rho}+K_{\mathrm E}\delta_{G,\rho}.
+ \label{eq:expertreconstruction}
+\end{equation}
+% 证明见附录；读出监督直接针对其中的描述量估计项。
+Appendix~\ref{app:expertreconstruction} gives the derivation.
+Supervising descriptor readouts targets the estimation term, while the choice of descriptors and context determines how well expert actions can be explained.
+
+% \subsubsection{条件模仿误差差异的约束}
+\subsubsection{Bounds on Conditional Imitation-Error Discrepancy}
+\label{sec:relationtransfer}
+% 共同的专家重构规则将信息保留直接连接到B3的D项。
+Expert-action reconstruction connects information preservation to the discrepancy in Section~\ref{sec:representationcoverage}.
+% 策略与专家近似都只依赖Z，两者的平方距离因而是跨分布相同的函数。
+Because both $\pi(h)=p(Z)$ and $\widehat a_{\mathrm E}(Z)$ depend on the same representation, their squared difference is a common function under $\mu$ and $\nu$.
+% 实际条件模仿误差偏离这一共同函数的程度由专家重构误差控制。
+Expert reconstruction error bounds how far the actual conditional imitation errors depart from this function.
+
+% 固定动作尺度，假设动作集合直径有限。
+Assume a finite action-set diameter $B_{\mathcal A}=\sup_{a,a'\in\mathcal A}\norm{a-a'}$ under a fixed action scale.
+% \begin{proposition}[通过专家动作重构约束条件误差迁移]
+\begin{proposition}[Conditional-error transfer through expert reconstruction]
+\label{prop:relationtransfer}
+% 沿用专家选择与表示覆盖条件，重构误差上界由前式定义。
+Under Assumption~\ref{ass:expertselection} and the representation-level coverage condition in Section~\ref{sec:representationcoverage}, with $b_\rho$ defined in~\eqref{eq:expertreconstruction},
+\begin{equation}
+ D_\phi\le 2B_{\mathcal A}(b_\mu+C_\phi b_\nu).
+ \label{eq:relationdiscrepancybound}
+\end{equation}
+% 再以动作敏感性将模仿误差迁移转换为任务失败概率界。
+If Assumption~\ref{ass:actionsensitivity} also holds,
+\begin{equation}
+ F(\pi)\le F(\pi_{\mathrm E})
+ +TL\sqrt{C_\phi R_\nu(\pi)+2B_{\mathcal A}(b_\mu+C_\phi b_\nu)}.
+ \label{eq:relationtransferfailure}
+\end{equation}
 \end{proposition}
-% 证明见附录~\ref{app:representationproofs}。
-The proof is given in Appendix~\ref{app:representationproofs}.
-% RGB和增强编码器比较必须固定mu、pi0、动作集合与尺度、G定义与尺度、上下文及执行输入。
-Comparisons between RGB and enhanced encoders use the same $\mu$, reference continuation $\pi_0$, action set and scale, relation definition and normalization, and context and execution inputs.
-% 分别训练的表示并不必然信息嵌套，须分别检验假设与误差；仅当共享近似误差和敏感性上界时才能把更小delta解释为更紧上界。
-Separately trained representations need not have nested information sets: the assumption and errors are evaluated for each, and smaller $\delta_G$ gives a tighter common bound only with shared bounds on $\epsilon_{\mathrm{rel}}$ and $K_G$.
-% 该比较不从关系误差大小直接推出实际策略排序。
-Relation-readout accuracy alone does not rank their implemented policies.
-% 附录的理想化末步纠偏例子展示非零、有限关系敏感性下的信息价值，并非实际接触动力学模型。
-An idealized final-step correction in Appendix~\ref{app:relationexample} illustrates the value of relations under nonzero, finite sensitivity; it is not a model of the actual contact dynamics.
-% 关系因遮挡而未定义时，关系界仅适用于有效条件分布，无效情形仍计入总体任务结果。
-When occlusion leaves relations undefined, the relation bound applies only to the valid conditional distribution, while invalid cases remain part of the overall task results.
-
-% 关系读出与伪标签误差均需独立核查，不能以训练拟合代替理论中的评价误差。
-Relation-readout and pseudo-label errors require independent assessment (Appendix~\ref{app:pseudolabel}); training fit cannot substitute for the evaluation errors used in the analysis.
-
-% 上述结果表明，在相应条件下，准确保留任务相关关系与上下文可以约束表示损失；实际决策表现还取决于策略对这些信息的利用。
-Under the stated conditions, accurately preserving task-relevant relations and context in $Z$ bounds representation loss; actual decision performance also depends on how the policy uses this information.
-% 准确关系估计本身未必消除运动或接触历史相关的歧义，相关证据也须保留在因果上下文中。
-Accurate relation estimates alone may not resolve ambiguities associated with motion or contact history; relevant evidence must also be retained in the causal context.
-Prior analyses of causal confusion and copycat behavior likewise show that observation history can contain
-useful information while also enabling temporally correlated shortcuts~\cite{dehaan2019,wen2020copycat,chuang2022rap}.
-% 下一节考察新观测与执行记录何时提供额外决策价值，以及该价值如何由及时修正实现。
-The next section examines when new observations and execution records provide additional decision value and how that value is realized through timely corrections.
+% 证明对应附录，不再另行展开理想例子。
+The proof is in Appendix~\ref{app:relationtransfer}.
+% 回到B3的设计目标，同时限制覆盖加权误差和专家重构误差。
+The design objective is therefore to improve coverage while preserving information needed to reconstruct expert actions.
+% 比较任务界时固定外部条件，综合项下降才收紧上界。
+For a fixed expert baseline, horizon, and action sensitivity, reducing the combined imitation and reconstruction terms tightens the task-failure bound.

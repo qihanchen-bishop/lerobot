@@ -1,0 +1,499 @@
+  C-LEARN: Learning Geometric Constraints from Demonstrations for
+           Multi-Step Manipulation in Shared Autonomy
+                                               Claudia Pérez-D’Arpino1 and Julie A. Shah2
+
+
+   Abstract— Learning from demonstrations has been shown to                        The shared autonomy framework has been explored pre-
+be a successful method for non-experts to teach manipulation                    viously in the robotics community as a potential solution
+tasks to robots. These methods typically build generative models                for exploiting the symbiosis between human skills (such as
+from demonstrations and then use regression to reproduce
+skills. However, this approach has limitations to capture hard                  high-level cognitive understanding for planning) and robot
+geometric constraints imposed by the task. On the other hand,                   skills (such as rapid computation) for motion planning and
+while sampling and optimization-based motion planners exist                     perception [2][3]. Results from prior work involving the
+that reason about geometric constraints, these are typically                    deployment of remote robots operating under this framework
+carefully hand-crafted by an expert. To address this technical                  have indicated the potential of this technique for assisting
+gap, we contribute with C-LEARN, a method that learns multi-
+step manipulation tasks from demonstrations as a sequence of                    in the execution of functional manipulation tasks [4][5].
+keyframes and a set of geometric constraints. The system builds                 However, the proposed solutions require a highly skilled
+a knowledge base for reaching and grasping objects, which is                    programmer with robotics experience to encode the sequence
+then leveraged to learn multi-step tasks from a single demon-                   of motions that the robot should execute for a given task
+stration. C-LEARN supports multi-step tasks with multiple end                   [6][7].
+effectors; reasons about SE(3) volumetric and CAD constraints,
+such as the need for two axes to be parallel; and offers a                         Techniques involving learning from demonstrations [8]
+principled way to transfer skills between robots with different                 have proven to be a successful way for non-experts to
+kinematics. We embed the execution of the learned tasks within                  teach manipulation tasks to robots. However, this approach
+a shared autonomy framework, and evaluate our approach                          has limitations with regard to learning tasks that require
+by analyzing the success rate when performing physical tasks
+                                                                                the use of hard geometric constraints typically found in
+with a dual-arm Optimus robot, comparing the contribution of
+different constraints models, and demonstrating the ability of                  functional tasks, such as extracting a cylinder from a larger
+C-LEARN to transfer learned tasks by performing them with                       coaxial cylinder. In these approaches, robots typically learn
+a legged dual-arm Atlas robot in simulation.                                    from variance within the demonstrations and then apply
+                                                                                regression over a generative model to compute new motion.
+                          I. I NTRODUCTION                                      One limitation inherent to this approach, however, is its
+   Planning and executing multi-step dexterous manipulation                     inability to represent and guarantee satisfaction of explicit
+tasks remains challenging in the field of robotics, particularly                geometric constraints.
+with regard to robots with a high number of degrees of                             On the other hand, sophisticated motion planning tech-
+freedom (DoF). We are interested in planning for functional                     niques based on optimization exist [4][9] that make use of
+tasks, or manipulation tasks requiring multiple end effectors                   geometric constraints for planning. Given a set of carefully
+to manipulate objects within an environment through a series
+of defined steps that accomplish a goal within a specific
+domain, such as the tasks illustrated in Fig.1. We are driven
+by real-world applications in which dexterous manipulation
+can play a key role in improving safety and efficiency during
+time-critical operations, such as render-safe procedures in
+explosive ordnance disposal (EOD); and disaster response
+situations [1], such as the tasks designed for the DARPA
+Robotics Challenge (DRC). There is a need within these set-                                     (a) Task 1                 (b) Task 2
+tings for better assisted planning and interaction techniques
+to enable operators to efficiently and remotely control high-
+DoF robots – offering rich situational awareness and capable
+planning assistance while ensuring the manageability of the
+mental and physical demands placed on the operator.
+   1 Claudia Pérez-D’Arpino is with Department of Electrical Engineering
+and Computer Science, Computer Science and Artificial Intelligence Labo-                        (c) Task 3                 (d) Task 4
+ratory, Massachusetts Institute of Technology cdarpino@mit.edu
+   2 Julie Shah with the Department of Aeronautics and Astronautics, Com-       Fig. 1: Optimus robot executing the test tasks: (a) Pick and transport
+puter Science and Artificial Intelligence Laboratory, Massachusetts Institute
+                                                                                a cylinder. (b) Secure a box and extract a cylinder. (c) Open a door
+of Technology julie a shah@csail.mit.edu                                        and push a button in a confined space. (d) Transport a tray.
+crafted set of constraints, these methods are capable of                                II. R ELATED W ORK
+whole-body planning for functional tasks involving multiple
+manipulators with complex kinematics. There is currently a             Some techniques for learning manipulation tasks involve
+technical gap between the benefits of learning from demon-         learning trajectory segments in which constraints are likely
+strations for non-experts to teach robots and the capabilities     to exist by identifying low variance across demonstrations
+of motion planners able to reason about explicit geometric         [10][11][12]. One common approach is to model demonstra-
+constraints. We are interested in augmenting learning from         tions using Gaussian mixture model (GMM) and then gener-
+demonstrations with support for use of hard geometric con-         ate new motion using Gaussian mixture regression (GMR).
+straints.                                                          This technique results in motion that is expected to remain
+                                                                   within the boundaries of the variance with some confidence,
+   In this paper, we present C-LEARN: a Constraints
+                                                                   but cannot guarantee satisfaction of a specific behavior, such
+LEARNing from demonstrations method for multi-step ma-
+                                                                   as strictly remaining parallel to an axis or moving within a
+nipulation tasks with n effectors. It builds a knowledge base
+                                                                   plane. Under this method, generalization to variants of tasks
+(KB) of geometric constraints from multiple demonstrations
+                                                                   with different initial or final positions of relevant objects typ-
+provided through teleoperation in a 3D interactive user
+                                                                   ically employs some geometric transformation or similarity
+interface. Multi-step manipulation tasks are described as a
+                                                                   metric; however, it is unclear what guarantees of satisfaction
+sequence of steps, or keyframes, and a set of constraints per
+                                                                   of constraints exist under such transformations. Recognition
+keyframe, which are inferred from a single demonstration by
+                                                                   of these segments with low variance often depends upon the
+matching it with entries in the knowledge base. In addition to
+                                                                   performance of preprocessing steps, such as dynamic time
+learning constraints as volumes in SE(3), we also introduce
+                                                                   warping (DTW), to align the time series associated with the
+the use of constraints that define the relations between objects
+                                                                   demonstrations [13][14], and the selection of a number k of
+and end effectors in terms of perpendicular, parallel and
+                                                                   components for the GMM, which can yield either under- or
+coincident axes, together with motion along an axis or within
+                                                                   over-constrained results. Task-parameterized variants of the
+a plane. We refer to these models as CAD constraints, due to
+                                                                   GMM (e.g. TP-GMM [15]) have been applied to encode ma-
+their similarity with the geometric and distance constraints
+                                                                   nipulator position and orientation requirements for bimanual
+common to computer-aided design (CAD) software. Finally,
+                                                                   tasks [16]. Other methods encode task constraints on a cost
+we embed the execution of the learned tasks into a two-step
+                                                                   metric to be minimized [12]; in this case, the model is based
+workflow of planning and execution in which the system
+                                                                   on a Hidden Markov Model (HMM) and the planner is able
+suggests motion plans through visualization to the operator,
+                                                                   to avoid new obstacles by implementing an asymptotically
+who can decide to execute the plans or perform modifications
+                                                                   optimal, sampling-based motion planner. Here, we use the
+using end effector teleoperation.
+                                                                   variance in features across demonstrations to select from a
+   We argue that ordered sets of explicit geometric con-           number of parametrized constraints models.
+straints are a canonical form for representing the information         The use of hard geometric constraints has been explored
+necessary to reproduce a manipulation task in quasi-static         previously using optimization-based [4][9] and sampling-
+settings – we do not consider dynamic manipulation. This           based motion planners [17]. For sampling-based techniques,
+paper contributes a method that (1) learns this representation     Berenson et al. introduced a representation of geometric
+from demonstrations; (2) supports multi-step manipulation          constraints, named “task space regions” (TSR), along with a
+tasks with n end effectors, and reasons about models of            planning algorithm (CBiRRT2) with sampling strategies to
+volumetric and CAD constraints, and (3) offers a principled        satisfy the TSR constraints [17]. In their work, TSRs are
+way to transfer skills learned by one robot to other robot         defined as a volume in SE(3) with a target frame (target
+with different kinematics.                                         homogeneous transformation) and a tolerance in SE(3), using
+   Section II contains a summary of related work, and              the roll, pitch, yaw representation for orientation. More
+Section III describes the learning and planning framework          recently, Li and Berenson presented a method for learning
+in C-LEARN. In Sections IV and V, we elaborate upon the            TSRs in object space in order to plan in narrow passages
+algorithmic details of the learning components: building a         using a single human demonstration [18]. The authors used
+knowledge base of reaching and grasping affordances (IV),          sampling to analyze the space surrounding the demonstrated
+and learning multi-step manipulation tasks from a single           trajectory of an object and reject samples where the object
+demonstration by retrieving information from the knowledge         would have been in collision. Since TSRs are a sufficiently
+base (V). We embed our core technical contribution for learn-      general representation for geometric constraints in SE(3),
+ing constraints into an end-to-end system for planning and         we use this model to represent volumetric constraints in
+execution using a shared autonomy approach, evaluate our           SE(3) such that the end effector should live in this volume
+system by comparing planning performance across different          for a given keyframe. TSRs can be handled not only by a
+functional tasks using varied sets of constraints models, and      sampling-based planner [17], but also by optimization-based
+show the ability to transfer knowledge between robots with         planners, such as the one used in our work [4]. However,
+different kinematics and balancing constraints. Our results        unlike the work by Li and Berenson, in which TSRs were
+are presented in Section VI. Section VII presents a summary        filled with collision-free samples from the vicinity of the
+and discussion.                                                    continuous trajectory of the object during a single demon-
+stration [18], our method to build TSRs is based on clustering     planning through an “experience graph” – a collection of pre-
+samples from multiple demonstrated keyframes.                      viously planned paths [27]. In our work, previous experience
+   The concept of keyframes was introduced by Akgun et al.         is encoded in a knowledge base that specifies affordances,
+as a sparse set of poses that accomplishes a learned task if ex-   keyframes, and geometric constraints, whereas Phillips et al.
+ecuted in sequence [19]. In that work, keyframes are learned       encoded experience as previously planned paths. Articulated
+as the points in C-Space needed to recover the trajectory in       constraints were also explored by Pillai et al. [28]; in their
+the demonstrations when using a spline method to generate          work, a model of the articulated motion is learned from
+the new trajectory. Under this definition, keyframes provide a     visual demonstrations.
+convenient geometric feature for task reproduction but do not         In a manufacturing context, parts assembly requires hard,
+necessarily encode regions where task constraints are present.     tight constraints, such as aligning objects or matching sur-
+In more recent work, Kurenkov et al. extended the concept          faces. With this problem in mind, Somani et al. developed
+to introduce constrained-keyframes as a sequence of position       a method for planning robot motion given a set of specified
+and orientation constraints [20]. In that work, keyframes          (not learned) constraints using CAD semantics, such as how
+are clustered using k-means from kinesthetic demonstrations,       to assemble two parts given a specification of the CAD
+or explicitly specified by the operator on a GUI. In our           relation between the two objects [29]. In our work, we
+work, we similarly incorporated the concept of keyframes           incorporate a parametric model of common CAD constraints
+by defining manipulation tasks as a sequence of ordered            with an algorithm to decide when these constraints are
+keyframes, wherein each keyframe has a set of simultaneous         active in a given keyframe that has been identified in an
+geometric constraints that should be satisfied by the planner.     unsupervised manner. We demonstrate here how the use of
+The sequence of keyframes and the set of constraints for           CAD constraints enables the planner to handle real-world
+each keyframe are stored in a knowledge base for known             functional tasks with skills required in domains such as
+affordances [21] for reaching and grasping.                        manufacturing and EOD.
+   The method of learning from a single-shot demonstration
+                                                                                    III. M ETHOD OVERVIEW
+or single sample has been studied previously in the context
+of robotics [18][22][23][24], as well as in machine learning       A. Learning Framework
+research [25]. Alexandrova et al. proposed learning multi-            The learning component consists of two phases. The first
+step manipulation tasks from a single demonstration by             phase incorporates a number of demonstrations to learning
+learning target frames (target position and orientation in         constraints for approaching and grasping objects in different
+Cartesian space) with respect to relevant objects in the           modes. Modes are defined as different approach angles and
+demonstration, called “landmarks” [24]. Using this approach,       grasping positions that the operator might make use of for
+the operator has the opportunity to modify learned target          various purposes, such as grasping a cylinder from the side
+frames and landmarks a posteriori via an interactive GUI.          or from the top. These grasping and approaching constraints
+Motion during new scenarios of the same task is generated          are used to build a knowledge base (KB), which is indexed
+by accordingly transforming the learned target frames and          by object type and mode. This KB is kept in memory as
+planning by interpolating between poses with a velocity            the knowledge of the robot. For each (ob ject, mode) pair,
+profile using a PR2 robot. If the new transformed frames           motion is described as a ordered sequence of keyframes and
+are infeasible, the task is declared unexecutable.                 a set of geometric constraints for each keyframe. The data
+   In a similar spirit, our method of learning a multi-step        collected from the demonstration in Cartesian space is used
+task also incorporates a single demonstration, but keyframes       to select constraints from a catalog of constraints models,
+for reaching and grasping motions leverage information from        including a volume in SE(3) to stay within, motion parallel
+a pre-learned knowledge base that incorporates information         or perpendicular to an axis, and motion within a plane. We
+about geometric constraints. The rest of the manipulation          present this learning phase in detail in Section IV.
+steps are learned in a similar fashion, by learning target            The second phase has the goal of learning a multi-step
+frames with respect to landmarks, but with the added feature       manipulation task using a single demonstration. This demon-
+of identifying constraints that remain active so that motions      stration is matched with entries in the KB via a distance
+such as “move in a line” are possible.                             metric, which enables retrieval of the appropriate set of
+   Multi-step manipulation has also been learned in prior          keyframes and constraints learned from prior demonstrations
+work from a set of kinesthetic demonstrations on a PR2 robot       of approaching and grasping motions. The remaining manip-
+using beta process autoregressive hidden Markov models and         ulation steps involved in a task – transportation, location, or
+dynamic movement primitives [26]. This approach does not           release, for example – are learned from the single multi-
+handle constraints, but focuses instead on the segmentation        step demonstration while attempting to identify constraints
+of the demonstrations in time, which is a challenge that our       that might remain active during these steps. We present
+method avoids by collecting keyframe demonstrations, which         this learning phase in detail in Section V. Once a multi-
+are discrete in nature.                                            step manipulation task has been learned, the sequence of
+   Learning constraints is an active research topic. In work by    keyframes and set of constraints is used to reproduce the
+Phillips et al., articulated constraints (such as a door-opening   task by invoking an optimization-based motion planner for
+task), are learned and re-used as previous experiences during      each keyframe in sequence.
+B. Demonstrations Method
+   Previous work in learning from demonstrations has ex-
+plored different methods of providing demonstrations [8].
+Kinesthetic demonstrations, for example, are intuitive for a                         (a) KF1           (b) KF2          (c) KF3          (d) KF4
+novel user but generally require a robot with gravity com-
+                                                                                  Fig. 2: User providing keyframe (KF) demonstrations for a multi-
+pensation that can be freely manipulated while the sensing
+                                                                                  step manipulation task. The tasks consists of extracting a cylinder
+system is on. This capability is often unavailable in robots                      (dark blue) from a concentric external cylinder (light blue).
+designed for use in specialized domains and applications that
+do not traditionally consider learning from demonstrations in                        Throughout this work, we use a nominal configuration
+the design process, or in scenarios where a high number of                        and a seed configuration for the optimization equal to the
+DoF and the use of multiple end effectors would complicate                        initial position of each segment of the demonstration (the
+the teaching process.                                                             last configuration of the previous keyframe). The set of
+   Another possible demonstration source is human motion,                         constraints includes the joint limits, center of mass position
+which requires a motion capture system for tracking the hu-                       and quasi-static constraints (in the case of legged robots),
+man body and objects in the environment. A third method is                        and position and orientation constraints for any link of the
+based on graphical user interfaces (GUI) for either providing                     robot with a user-specified tolerance.
+keyframes [20] or making modifications over the learned                              A solution for this problem returns a trajectory from the
+model from kinesthetic demonstrations [20] [24].                                  initial configuration keyframe to the desired final configura-
+   Unlike previous works, we explored the idea of providing                       tion keyframe that satisfies the constraints. We refer to this
+demonstration through a GUI via end effector teleoperation.                       solution as a motion plan, which can either be feasible and
+In this method, the operator guides the end effector of the                       satisfy all constraints or return the best solution identified by
+robot while immersed in a 3D environment that represents                          the solver while violating a subset of constraints (which are
+the task, either in simulation with virtual objects or while                      explicitly listed by the solver).
+operating the real robot with live sensing data. On one hand,                        In this paper, we generate a motion plan for each pair of
+this method enables the operator to provide demonstrations                        sequential keyframes learned through the demonstration. The
+using any potentially relevant robot, without need for a back-                    learned geometric constraints associated with each keyframe
+drivable robot. On the other, the controls for the interface                      are incorporated into the constraint set of Eq. 1 and used by
+used to guide the end effector and manipulate the 3D view                         the Drake planner to compute robot motion.
+while providing demonstrations causes the data to be very
+noisy and non-uniform compared with data collected through                        D. Execution
+human motion or kinesthetic demonstrations. For this reason,                         The final learned task can be executed in shared autonomy
+the application of time-based techniques intended to align                        mode by suggesting a sequence of motion plans to the
+demonstrations in time to later identify constraints in space                     operator, who can decide to either execute the plans or
+proves to be unviable in this setting. Fig. 2 shows the process                   make adjustments using teleoperation. The process begins
+for providing keyframe demonstrations on the interface.                           with a preview of a motion plan between two consecutive
+   In this work, we implement our system for providing                            keyframes. Similarly to [6], the operator is able to review
+demonstrations, visualizing the results and operating the                         this plan and approve it for execution. The process repeats
+robot in order to execute the learned tasks in Director, a                        for each step in the learned sequence of keyframes.
+3D user interface designed for operation of remote robots                            For the execution of the test tasks, we use the Optimus
+in shared autonomy, originally developed at MIT for the                           robot, a 16-DOF dual-arm highly dexterous mobile ma-
+DARPA Robotics Challenge [6]. Inverse kinematics (IK) is                          nipulator that integrates a Highly Dexterous Manipulation
+computed using Drake [30].                                                        System (HDMS) by RE2, a Husky UGV by Clearpath, 3-
+C. Trajectory Motion Planning                                                     finger grippers by Robotiq and a Multisense SL by Carnegie
+                                                                                  Robotics. We also experiment in simulation with an Atlas
+   We use an optimization-based motion planner available                          robot, a 28-DoF humanoid robot by Boston Dynamics.
+in Drake [30] that uses an efficient SQP solver available in
+SNOPT [31]. The motion planning problem is posed as a                              IV. L EARNING A K NOWLEDGE BASE OF C ONSTRAINTS
+trajectory optimization problem defined as follows [4] :                                        FROM D EMONSTRATIONS
+               k
+                                                                                     C-LEARN starts by learning a knowledge base (KB)
+arg min ∑ (qnom, j − q j )T W (qnom, j − q j ) + q̇Tj Wv q̇ j + q̈Tj Wa q̈ j
+q1 ,...,qk                                                                        containing information for reaching and grasping objects.
+               j=1
+                                                                                  Fig.3 depicts an illustration of the content of a KB. For each
+             sub ject to   fi (q1 , . . . , qk ) ≤ bi , i = 1, . . . , m,   (1)   object, a set of demonstrations is provided for reaching and
+   The cost function drives the set of joint angles q ∈ Rn                        grasping the object in different modes. The KB stores the
+to deviate as little as possible from a nominal configuration                     list of modes, as defined in Sec.III.
+qnom ∈ Rn . Some costs can be added optionally over velocity                         The operator provides a number of demonstrations for
+and acceleration in order to promote smooth trajectories [4].                     each pair (ob jecti , mode j ), sometimes referred to as an
+affordance. The position and orientation of the target object       A. Posture Constraints
+are randomized across demonstrations to elicit variability in          Our approach enables a user to implicitly specify through
+features that are not constrained by the task. Each demon-          demonstration the following constraints to characterize a
+stration Dd for reaching and grasping requires the operator to      learned keyframe:
+teleoperate the robot though a set of demonstrated keyframes           Task space regions (TSR)[17]: TSRs are defined as a
+{dKF} to collect the following set:                                 volume in SE(3), which is equivalent to a target frame
+                                                                    (target position and orientation of the end effector) and a
+                     Dd = {dKFk }k=1:Kd                      (2)    tolerance of position and orientation around that target frame.
+where d is the demonstration index and k is the demonstrated        TSRs are convenient for representing keyframes for which
+keyframe index. During the demonstration, poses are marked          demonstrations indicate the existence of a variance larger
+as keyframes by the user. Each demonstration Dd might               than a predefined threshold. (We refer to this constraint also
+have a different number of total demonstrated keyframes             as “volumetric constraint.”) The criteria for characterizing
+Kd . The demonstrations collector records the data associated       a keyframe as a TSR constraint take into consideration the
+with each demonstrated keyframe. In this work, we use the           variance in Cartesian space of the data points associated with
+positions of the n end effectors with respect to the object as      the learned keyframe. The learned keyframe is labeled as a
+features. The set of all demonstrations provided for a mode         TSR constraint if the variance is greater than a user-specified
+is expressed as {Dd }d=1:Ndem .                                     threshold TT SR in any of the dimensions.
+   An entry in the knowledge base KBi, j for (ob jecti , mode j )      CAD Posture Constraints: We introduce the use of hard
+consists of a set of learned keyframes {lKF} for that mode,         geometric orientation constraints that consider the cases in
+obtained by using k-means clustering over {Dd } in the space        which an axis of the end effector should be parallel (or
+of selected features, as summarized in Eq. 3. The number            perpendicular) to an axis of an object within the environ-
+of clusters used by the k-means algorithm, Nclusters , is the       ment. The criteria for characterizing a keyframe as a CAD
+rounded average number of keyframes per demonstration in            constraint takes the variance in SO(3) into consideration.
+{Dd }.                                                              The three rotational DoF of the end effector are compared
+                                                                    with those of the object, and an orientation constraint is
+                                                                    created if the variation of one with respect to the other is
+  KBi, j = {lKFl }l=1:Nclusters = {clusters({Dd }d=1:Ndem )} (3)    smaller than a predefined threshold TCAD . Intuitively, this can
+                                                                    be referred to as “locking” the rotation of the end effector
+   Each learned keyframe consists of the set of demonstrated
+                                                                    into alignment with an axis of the object if the variance of
+keyframes grouped into the same cluster by k-means. For
+                                                                    the relative rotation between them is smaller than a given
+each learned keyframe, the algorithm identifies the geometric
+                                                                    threshold – similarly to user-assistance behavior common to
+constraints that describe it in a manner such that the task is
+                                                                    CAD software.
+reproducible by planning motions that meet these constraints.
+For this purpose, C-LEARN relies on a catalog of paramet-           B. CAD Trajectory Constraints
+ric constraint models to compare against the data in each              The following constraints can be used to describe the
+cluster and select them based on predefined criteria, such as       motion between keyframes:
+detecting that the variance in orientation of the end effector         Move-in-line Constraint: A move-in-line trajectory con-
+with respect to a principal axis of the manipulated object          straint is included in the motion plan between two consecu-
+is smaller than a given threshold. The selected constraints         tive keyframes (dKFi , dKFi+1 ) if a posture CAD constraint
+are then listed in the KB under the corresponding learned           is active in both. This constraint connects the target frame of
+keyframe, as illustrated in Fig.3. Note that this method            dKFi with the target frame of dKFi+1 using a straight line
+could produce representations that are either over or under-        in Cartesian space along which the end effector orientation
+constrained.                                                        should remain constant.
+   The described clustering approach is similar to that em-
+ployed by Kurenkov et al. [20], but with the added capability
+to cluster keyframes involving multiple end effectors by clus-
+tering in a higher dimensional space that includes the features
+of all end effectors. This supports constraints learning for
+quasi-static manipulation with multiple end effectors that
+move in sequence or simultaneously, as showcased by Task 4,
+described in Sec.VI. The list of learned keyframes is ordered
+to obtain the sequence of execution. For each cluster, the
+system extracts the sequence number of each demonstrated
+keyframe included in the cluster, and assigns a position in
+the sequence according to the mode of that set.
+   The following is the catalog of parametric constraint
+models we use in C-LEARN.                                           Fig. 3: Illustration of the content of the knowledge base for reaching
+                                                                    and grasping motions.
+Fig. 4: Optimus robot performing the four test tasks autonomously. Motion plans for each keyframe are shown using still images of the
+trajectory, with color ranging from gray (initial position) to light blue (end position). Tasks 1 to 4 are presented in row 1 to 4, respectively.
+
+   V. L EARNING A M ULTI - STEP M ANIPULATION TASK                        grasping – which can be quickly demonstrated more than
+           FROM A S INGLE D EMONSTRATION                                  once. We hypothesize that, while all possible objects in
+                                                                          the world cannot be individually considered in the KB, the
+   In the second phase of our learning framework, C-LEARN                 majority of the objects can be manipulated in practice with
+leverages the KB to learn multi-step manipulation tasks                   a small variant of the basic forms known to the KB. This
+from a single demonstration. The form of the demonstration                topic is outside the scope of this paper, but offers an empiric
+consists of a single sequence of keyframes that accomplish                motivation for our selection of the KB representation.
+a given task. For example, Fig.2 illustrates a series of
+demonstrated keyframes for extracting a cylinder from a                                            VI. E VALUATION
+concentric external cylinder.                                                We assess the benefits of C-LEARN by learning and
+   For keyframes associated with reaching and grasping                    performing four functional tasks that incorporate geometric
+motions, the algorithm matches the keyframes with one of                  constraints on motion, similar to those present in EOD
+the (ob jecti , mode j ) entries in the KB, by selecting the entry        procedures or manufacturing. In this section, we present the
+that minimizes a distance metric. In our work, we use a                   success rate when performing the tasks using the dual-arm
+simple Cartesian distance metric between ordered pairs (as                Optimus robot (VI-A); demonstrate in simulation the transfer
+indicated by the sequence) of keyframes. The final keyframes              of learned tasks from the Optimus robot to the legged dual-
+are retrieved from the KB.                                                arm Atlas robot (VI-B); and analyze the relative contributions
+   For subsequent keyframes after grasping the object, we                 of CAD posture constraints, CAD trajectory constraints and
+rely only on the single demonstration to learn the rest of the            TSRs towards task success (VI-C).
+task. The algorithm includes each demonstrated keyframe in                   Manipulation Tasks: The four tasks are illustrated in
+the learned task sequence in coordinates relative to the last             Fig.1. Tasks 1 is a single-arm pick and place task where
+previous keyframe (so that the entire sequence is susceptible             the goal is to pick up the cylinder and drop it inside the
+to displacements and rotations in a new environment with                  container. Tasks 2 is a dual-arm task that requires grasping
+different objects positions). This is essentially equivalent to           the handle of the box with the right hand to secure the
+remember the keyframes after grasping the object in relative              box, and then extracting the cylinder with the left hand.
+coordinates, but with the additional benefit of analyzing what            The goal of Tasks 3 is to open the door using the left hand
+constraints remain active between each pair of consecutive                and then push a button in the interior of the box with the
+keyframes (dKFi , dKFi+1 ). If a constraint is identified to              right hand. Tasks 4 consists of grasping and lifting up a
+remain active according to the catalog criteria, the corre-               tray with two hands while keeping the tray horizontal. Task
+sponding trajectory constraint is added to the planner. For               4 is distinguished from the other tasks in that it requires
+example, in the case of the task illustrated in Fig.2, the                simultaneous constrained motion of both end effectors.
+extraction trajectory should satisfy that the cylinders remain
+concentric, which is expressed in our framework as a CAD                  A. Performance
+trajectory constraint (for example: “move in line between                    Fig. 4 illustrates the Optimus robot performing the four
+two target frames with the same orientation”).                            test tasks. Objects were tracked using April Tags and an on-
+   It is impractical to build a knowledge base containing                 board camera (Multisense SL), and were rendered on the
+all tasks for all steps; instead, we restrict the KB to the               interface as virtual objects. The knowledge base was learned
+segment of the manipulation concerned with reaching and                   using seven (7) demonstrations of reaching and grasping
+TABLE I: Number of successful trials of planning and execution
+in 10 trials of each task using the Optimus Robot
+           Task ID   Autonomous    Shared Autonomy
+                      Behavior    # successful trials
+                                   (# of interventions)
+              1           9               10 (1)
+              2           8               10 (3)
+              3           8               10 (2)                          (a) Task 2        (b)            (c)           (d)
+              4          10               10 (0)
+
+motions per object per mode with a catalog of constraints that
+included TSRs, CAD posture constraints and CAD trajectory
+constraints. Each multi-step task was learned from a single
+demonstration of the task. Table I presents the number of
+successful executions of the four tasks for two cases: one                (e) Task 4         (f)           (g)           (h)
+where the tasks were performed autonomously by executing
+                                                                  Fig. 5: Atlas planning in simulation for trasfered tasks. (a-d) Task 2;
+the sequence of learned keyframes, and a second where
+                                                                  (e-h) Task 4.
+the tasks were executed using the shared autonomy method
+as described in Sec.III-D. For each trial, the objects were
+located in a different initial position such that the task is
+feasible for the kinematics of the robot. Otherwise the task
+would require mobility, which is out of the scope of this
+paper. Images of autonomous task execution are shown in
+Fig. 4, including the motion plan for each keyframe and
+                                                                              (a)           (b)            (c)           (d)
+selected images of the real robot executing the task.
+   Autonomous execution produced a success rate of 87.5%
+on average across ten trials of each of the four tasks,
+while the shared autonomy method resulted in an overall
+success rate of 100%. C-LEARN produced the correct set
+of queries (keyframe information) for the planner in each
+trial. The success of the execution depends on the ability                    (e)            (f)           (g)           (h)
+of the particular robot’s controller to follow the motion plan.
+                                                                  Fig. 6: Planning with different constraint types. (a,b,c,d) Planning
+Optimus’ position control accuracy varies in different regions    without CAD posture constraints; (e,f) Planning without CAD
+of the workspace, causing the execution to fail in a number       trajectory constraints; (g,h) Planning using only TSR keyframes.
+of trials. These cases can be handled using shared autonomy,
+where small adjustment using teleoperation can compensate         C. Contribution of Different Constraint Types
+for this limitation. The results are summarized in Table I.          This section analyzes the utility of different constraint
+                                                                  types (CAD posture constraint, CAD trajectory constraint,
+B. Demonstration of Transfer Across Robots                        TSR) in the scenario where the Atlas robot performs a task
+   Next we demonstrate the ability of C-LEARN to transfer         using the knowledge base and task learned for Optimus.
+tasks learned using one robot to another robot with different        The results for planning when all constraint types were
+kinematics. This is achieved by invoking the planner in Eq.1      available to the learner are presented in Fig.5. When perform-
+using the kinematics information of the target robot and using    ing the same test, but removing the CAD posture constraints
+the task representation (i.e sequence of keyframes and set        from the knowledge base, we obtain the plans shown in Fig.
+of constraints) learned for the source robot. Note that Eq.1      6 (a,b,c,d). Note that the orientation of the hands with respect
+naturally allows one to incorporate the set of constraints        to the objects in the reaching and grasping phases exhibits
+previously learned with any new set of constraints required       larger angular deviation with respect to the perpendicular to
+for motion planning with the target robot. For example, a         the cylinder principal axis when compared to Fig. 5. This
+legged robot requires additional constraints to specify that      variance is permitted by the TSR constraints, but results
+the center of mass must remain within the support polygon.        in the production of keyframes that do not lock into strict
+We test this procedure by transferring the tasks learned using    perpendicularity with respect to the objects.
+the stable Optimus robot to a balancing Atlas robot and              The reaching phase and cylinder extraction show the utility
+performing the tasks in kinematic simulation.                     of the CAD trajectory constraint for in-line motion. When
+   Motion plans shown for Atlas are guaranteed to be stable       CAD posture constraints are available to the learner but
+and executable on the real hardware [6]. In simulation,           CAD trajectory constraints are not, the planner produces
+objects were located in different initial positions and Atlas     trajectories that fail to accomplish the task, as illustrated in
+was able to perform the four test tasks in each trial out of      Fig. 6 (e,f). Similarly, if only TSR keyframes are available,
+10 scenarios for each task. Fig. 5 shows snapshots of Atlas       the planner fails to accomplish the task, as illustrated in Fig.
+planning for Tasks 2 and 4.                                       6 (g,h).
+                       VII. C ONCLUSIONS                                      [8] B. D. Argall, S. Chernova, M. Veloso, and B. Browning, “A survey
+                                                                                  of robot learning from demonstration,” Robotics and Autonomous
+   This paper presents C-LEARN, a method of learning                              Systems, vol. 57, no. 5, pp. 469 – 483, 2009.
+from demonstrations that supports the use of hard geometric                   [9] J. Schulman, J. Ho, A. X. Lee, I. Awwal, H. Bradlow, and P. Abbeel,
+constraints for planning multi-step functional manipulation                       “Finding locally optimal, collision-free trajectories with sequential
+                                                                                  convex optimization.,” in RSS 2013, 2013.
+tasks with multiple end effectors in quasi-static settings.                  [10] S. Calinon and A. Billard, “A probabilistic programming by demon-
+By combining machine learning and motion planning tech-                           stration framework handling constraints in joint space and task space,”
+niques, this approach allows non-experts to teach robots a                        in Intelligent Robots and Systems, 2008. IROS 2008. IEEE/RSJ Inter-
+                                                                                  national Conference on, pp. 367–372, IEEE, 2008.
+new class of manipulation tasks not covered by previous                      [11] L. Pais, K. Umezawa, Y. Nakamura, and A. Billard, “Learning robot
+approaches. Specifically, this paper explores how to learn                        skills through motion segmentation and constraints extraction,” in HRI
+explicit geometric constraints that can be listed as the set of                   Workshop on Collaborative Manipulation, 2013.
+                                                                             [12] C. Bowen, G. Ye, and R. Alterovitz, “Asymptotically optimal mo-
+constraints in an optimization-based motion planning prob-                        tion planning for learned tasks using time-dependent cost maps,”
+lem. In addition to SE(3) volumetric constraints (TSRs), we                       IEEE Transactions on Automation Science and Engineering, vol. 12,
+introduce the use of parametric models of CAD constraints,                        pp. 171–182, Jan 2015.
+                                                                             [13] C. Perez-D’Arpino and J. A. Shah, “Fast target prediction of human
+which enables the descriptions of parallel or perpendicular                       reaching motion for cooperative human-robot manipulation tasks using
+axes and moving in a line. We evaluated this method through                       time series classification,” in IEEE ICRA 2015, pp. 6175–6182, 2015.
+execution of four multi-step tasks with multiple end-effectors               [14] A. Vakanski, I. Mantegh, A. Irish, and F. Janabi-Sharifi, “Trajec-
+                                                                                  tory learning for robot programming by demonstration using hidden
+using a shared autonomy framework using the Optimus robot.                        markov model and dynamic time warping,” IEEE Transactions on
+We demonstrated the capability of transferring the learned                        Systems, Man, and Cybernetics, Part B (Cybernetics), vol. 42, no. 4,
+task to an Atlas robot with different kinematics without                          pp. 1039–1052, 2012.
+                                                                             [15] S. Calinon, D. Bruno, and D. G. Caldwell, “A task-parameterized
+providing new demonstrations. Accompanying this paper, we                         probabilistic model with minimal intervention control,” in 2014 IEEE
+present a video of the execution of the tasks, available online                   ICRA, pp. 3339–3344, 2014.
+at https://goo.gl/fAVm3z.                                                    [16] J. Silvrio, L. Rozo, S. Calinon, and D. G. Caldwell, “Learning biman-
+                                                                                  ual end-effector poses from demonstrations using task-parameterized
+   Our work is limited in certain aspects, which represent                        dynamical systems,” in IEEE IROS 2015, pp. 464–470, 2015.
+potential avenues for future research. Functional tasks often                [17] D. Berenson, S. S. Srinivasa, and J. Kuffner, “Task Space Regions: A
+involve articulated constraints, such as opening a door, but                      framework for pose-constrained manipulation planning,” The Interna-
+                                                                                  tional Journal of Robotics Research, p. 14351460, 2011.
+our method does not explicitly reason about articulation.                    [18] C. Li and D. Berenson, “Learning object orientation constraints and
+The motion planner we used in this implementation does                            guiding constraints for narrow passages from one demonstration,”
+not handle collision avoidance. Exploring other optimization-                     ISER 2016, 2016.
+                                                                             [19] B. Akgun, M. Cakmak, K. Jiang, and A. L. Thomaz, “Keyframe-
+and sampling-based planners is the next step in this line of                      based learning from demonstration,” International Journal of Social
+research. Finally, we will conduct a user study to further                        Robotics, vol. 4, no. 4, pp. 343–355, 2012.
+evaluate the performance of C-LEARN with end users in                        [20] A. Kurenkov, B. Akgun, and A. L. Thomaz, “An evaluation of GUI
+                                                                                  and kinesthetic teaching methods for constrained-keyframe skills,” in
+shared autonomy mode.                                                             IEEE IROS 2015, pp. 3608–3613, 2015.
+                                                                             [21] J. J. Gibson, “The theory of affordances,” in Perceiving, Acting, and
+                            R EFERENCES                                           Knowing (R. Shaw and J. Bransford, eds.), John Wiley and Sons, 1977.
+                                                                             [22] Y. Wu and Y. Demiris, “Towards one shot learning by imitation for
+ [1] R. R. Murphy, “Human-robot interaction in rescue robotics,” IEEE             humanoid robots,” in IEEE ICRA 2010, pp. 2889–2894, IEEE, 2010.
+     Transactions on Systems, Man, and Cybernetics, Part C (Applications     [23] C. Groth and D. Henrich, “One-shot robot programming by demonstra-
+     and Reviews), vol. 34, no. 2, pp. 138–153, 2004.                             tion by adapting motion segments,” in IEEE ROBIO 2014, pp. 1068–
+ [2] L. Conway, R. A. Volz, and M. W. Walker, “Teleautonomous systems:            1075, Dec 2014.
+     Projecting and coordinating intelligent action at a distance,”          [24] S. Alexandrova, M. Cakmak, K. Hsiao, and L. Takayama, “Robot
+ [3] T. B. Sheridan, Telerobotics, Automation, and Human Supervisory              programming by demonstration with interactive action visualizations,”
+     Control. Cambridge, MA, USA: MIT Press, 1992.                                RSS 2014, 2014.
+ [4] M. Fallon, S. Kuindersma, S. Karumanchi, M. Antone, T. Schneider,       [25] L. Fei-Fei, R. Fergus, and P. Perona, “One-shot learning of object
+     H. Dai, C. P. D’Arpino, R. Deits, M. DiCicco, D. Fourie, T. Koolen,          categories,” IEEE Transactions on Pattern Analysis and Machine
+     P. Marion, M. Posa, A. Valenzuela, K.-T. Yu, J. Shah, K. Iagnemma,           Intelligence, vol. 28, pp. 594–611, April 2006.
+     R. Tedrake, and S. Teller, “An architecture for online affordance-      [26] S. Niekum, S. Osentoski, G. Konidaris, and A. G. Barto, “Learning and
+     based perception and whole-body planning,” Journal of Field Robotics,        generalization of complex tasks from unstructured demonstrations,” in
+     vol. 32, no. 2.                                                              IEEE IROS 2012, pp. 5239–5246, Oct 2012.
+ [5] M. DeDonato, V. Dimitrov, R. Du, R. Giovacchini, K. Knoedler,           [27] M. Phillips, V. Hwang, S. Chitta, and M. Likhachev, “Learning to
+     X. Long, F. Polido, M. A. Gennert, T. Padr, S. Feng, H. Moriguchi,           plan for constrained manipulation from demonstrations,” Autonomous
+     E. Whitman, X. Xinjilefu, and C. G. Atkeson, “Human-in-the-loop              Robots, vol. 40, no. 1, pp. 109–124, 2016.
+     control of a humanoid robot for disaster response: A report from the    [28] S. Pillai, M. R. Walter, and S. Teller, “Learning articulated motions
+     darpa robotics challenge trials,” Journal of Field Robotics, vol. 32,        from visual demonstrations,” in RSS 2014, 2014.
+     no. 2, pp. 275–292, 2015.                                               [29] N. Somani, A. Gaschler, M. Rickert, A. Perzylo, and A. Knoll,
+ [6] P. Marion, M. Fallon, R. Deits, A. Valenzuela, C. Pérez D’Arpino,           “Constraint-based task programming with CAD semantics: From intu-
+     G. Izatt, L. Manuelli, M. Antone, H. Dai, T. Koolen, J. Carter,              itive specification to real-time control,” in IEEE IROS 2015, pp. 2854–
+     S. Kuindersma, and R. Tedrake, “Director: A user interface designed          2859, 2015.
+     for robot operation with shared autonomy,” Journal of Field Robotics,   [30] R. Tedrake, “Drake: A planning, control, and analysis toolbox for
+     vol. 34, no. 2, pp. 262–280, 2017.                                           nonlinear dynamical systems,” 2014. http://drake.mit.edu.
+ [7] M. Johnson, B. Shrewsbury, S. Bertrand, T. Wu, D. Duran, M. Floyd,      [31] P. E. Gill, W. Murray, and M. A. Saunders, “SNOPT: An SQP
+     P. Abeles, D. Stephen, N. Mertins, A. Lesman, J. Carff, W. Rifen-            algorithm for large-scale constrained optimization,” SIAM journal on
+     burgh, P. Kaveti, W. Straatman, J. Smith, M. Griffioen, B. Layton,           optimization, vol. 12, no. 4, pp. 979–1006, 2002.
+     T. de Boer, T. Koolen, P. Neuhaus, and J. Pratt, “Team IHMC’s Lessons
+     Learned from the DARPA Robotics Challenge Trials,” Journal of Field
+     Robotics, vol. 32, no. 2, pp. 192–208, 2015.
+

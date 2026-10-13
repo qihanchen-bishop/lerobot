@@ -1,10 +1,7 @@
 \begin{figure*}[t]
   \centering
   \includegraphics[width=\textwidth]{myfigure/image2.png}
-  % 方法总览。
-  % 离线流程生成语义分割器、累积伪标签和质量信息。
-  % 基础策略联合编码RGB、软语义和受监督的任务关系查询以生成动作块。
-  % 反馈分支利用最新观测和历史信息生成残差，并修正尚未执行的动作。
-  \caption{Method overview. Quality-aware iterative segmentation constructs the frozen semantic model, cumulative pseudo-labels, and quality information used for weighted task-relation supervision. The base policy jointly encodes RGB observations, soft semantics, proprioception, and learnable relation queries to generate an action sequence. The history-conditioned feedback branch fuses the latest observation with the encoded policy context and predicts residual corrections for the action sequence.}
+  % 离线标注提供分割器与质量感知的描述量监督，基础策略生成动作块，历史反馈修正未来动作。
+  \caption{Method overview. Quality-aware iterative annotation provides a frozen segmenter and quality-weighted descriptor labels. RGB, soft semantics, proprioception, and supervised queries jointly support action-chunk prediction. History-conditioned feedback uses updated observations and the current plan to correct unexecuted actions.}
   \label{fig:architecture}
 \end{figure*}

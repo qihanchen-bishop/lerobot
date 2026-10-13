@@ -49,21 +49,19 @@ with $u_t\sim\pi(\cdot\mid\mathcal H_t)$.
 The command history is empty at $t=0$.
 
 \subsubsection{Learning and Task Objectives}
-% 后续分析考虑基于可用历史的确定性策略，以pi_E表示专家策略。
 For the following analysis, we consider deterministic policies acting on the available history,
 with $\pi_{\mathrm E}$ denoting the expert policy.
-% nu是示范来源的总体分布，样本由控制时刻及其可用历史组成。
 Let $\nu$ denote the population distribution underlying the demonstrations,
 where $(t,h)\sim\nu$ specifies a control step and its available history.
-% 为后续分析，以相对于专家动作的期望平方欧氏偏差刻画模仿目标。
-We quantify the imitation objective by the expected squared Euclidean deviation from the expert's action:
+We define the population imitation risk as the expected squared
+Euclidean deviation from the expert's action:
 \begin{equation}
  R_\nu(\pi)
  :=\E_{(t,h)\sim\nu}\norm{\pi(h)-\pi_{\mathrm E}(h)}^2.
  \label{eq:populationimitationrisk}
 \end{equation}
 % 训练通过有限示范上的经验模仿损失来追求降低总体风险，具体损失在方法部分定义。
-Training seeks to reduce this population risk through an empirical imitation loss
+Training seeks to reduce this risk through an empirical imitation loss
 on the finite demonstrations; the specific training losses are defined in Section~\ref{sec:method}.
 
 The deployment objective is to complete the task within the finite horizon.

@@ -4,7 +4,7 @@
 visuomotor imitation learning
 
 
-% 本章服务于同一研究问题：有限示范下，任务关系表示与历史条件反馈如何支持任务完成表现的改善。
+% 本章服务于同一研究问题：有限示范下，任务描述量表示与历史条件反馈如何支持任务完成表现的改善。
 % 分析不将每个模块作为独立研究目标，而是解释两条互补路径。
 
 % 首先简述动作误差与任务完成之间的条件性联系，说明不能仅以训练损失评判方法；
@@ -17,7 +17,7 @@ visuomotor imitation learning
 % 本章先限定离线视觉动作学习的对象与任务评价条件，
 % 再分析动作拟合与实际任务表现之间的差距。
 % 后续以动作的任务后果为共同尺度，
-% 讨论任务关系与执行上下文应保留什么信息，以及历史条件反馈如何将其用于实际控制。
+% 讨论任务描述量与执行上下文应保留什么信息，以及历史条件反馈如何将其用于实际控制。
 % 本章研究有限示范下的任务表现改善，先建立动作误差与任务后果的条件性联系，再分析两条互补机制。
 
 This section studies conditions for improving task performance from limited demonstrations. 
@@ -27,11 +27,15 @@ and using new observations and execution history to produce effective correction
 
 We first establish conditions under which action error bounds task-failure probability 
 and explain why improved coverage in representation space alone does not guarantee better task performance. 
-We then bound representation loss in terms of task-relation estimation error, 
-providing a conditional basis for semantic guidance and relation supervision. 
-Finally, we characterize the potential decision value of new observations and history, 
-deriving a sufficient condition for feedback to improve task completion.
+% 随后分析语义引导如何保留专家选择依据，并由动作重构误差约束模仿误差迁移。
+We then examine how semantic guidance can preserve task-relevant information
+and, under consistent expert selection, control imitation-error transfer through expert-action reconstruction.
+% 最后刻画额外信息的预测价值，给出残差降低总体动作误差并收紧任务界的条件。
+Finally, we characterize the predictive value of updated observations and history,
+and identify when learned residual corrections reduce imitation error and tighten the task-performance bound.
 \input{formulation}
 \input{action_analysis}
 \input{representation_analysis}
+% 提前提交双栏方法图，使其显示在方法正文附近的前一页。
+\input{method_figures}
 \input{feedback_analysis}

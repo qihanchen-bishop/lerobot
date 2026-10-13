@@ -1,0 +1,1304 @@
+{
+  "liang": {
+    "indexed": {
+      "date-parts": [
+        [
+          2026,
+          3,
+          13
+        ]
+      ],
+      "date-time": "2026-03-13T14:57:15Z",
+      "timestamp": 1773413835352,
+      "version": "3.50.1"
+    },
+    "reference-count": 32,
+    "publisher": "IEEE",
+    "license": [
+      {
+        "start": {
+          "date-parts": [
+            [
+              2022,
+              5,
+              23
+            ]
+          ],
+          "date-time": "2022-05-23T00:00:00Z",
+          "timestamp": 1653264000000
+        },
+        "content-version": "stm-asf",
+        "delay-in-days": 0,
+        "URL": "https://doi.org/10.15223/policy-029"
+      },
+      {
+        "start": {
+          "date-parts": [
+            [
+              2022,
+              5,
+              23
+            ]
+          ],
+          "date-time": "2022-05-23T00:00:00Z",
+          "timestamp": 1653264000000
+        },
+        "content-version": "stm-asf",
+        "delay-in-days": 0,
+        "URL": "https://doi.org/10.15223/policy-037"
+      }
+    ],
+    "funder": [
+      {
+        "DOI": "10.13039/100000001",
+        "name": "NSF",
+        "doi-asserted-by": "publisher",
+        "award": [
+          "IIS 1734492,IIS 1846043"
+        ],
+        "award-info": [
+          {
+            "award-number": [
+              "IIS 1734492,IIS 1846043"
+            ]
+          }
+        ],
+        "id": [
+          {
+            "id": "10.13039/100000001",
+            "id-type": "DOI",
+            "asserted-by": "publisher"
+          }
+        ]
+      }
+    ],
+    "content-domain": {
+      "domain": [],
+      "crossmark-restriction": false
+    },
+    "short-container-title": [],
+    "published-print": {
+      "date-parts": [
+        [
+          2022,
+          5,
+          23
+        ]
+      ]
+    },
+    "DOI": "10.1109/icra46639.2022.9811703",
+    "type": "proceedings-article",
+    "created": {
+      "date-parts": [
+        [
+          2022,
+          7,
+          12
+        ]
+      ],
+      "date-time": "2022-07-12T19:36:40Z",
+      "timestamp": 1657654600000
+    },
+    "page": "8591-8597",
+    "source": "Crossref",
+    "is-referenced-by-count": 11,
+    "title": [
+      "Learning Sensorimotor Primitives of Sequential Manipulation Tasks from Visual Demonstrations"
+    ],
+    "prefix": "10.1109",
+    "author": [
+      {
+        "given": "Junchi",
+        "family": "Liang",
+        "sequence": "first",
+        "affiliation": [
+          {
+            "name": "Rutgers University,Department of Computer Science,NJ,USA"
+          }
+        ],
+        "role": [
+          {
+            "role": "author",
+            "vocabulary": "crossref"
+          }
+        ]
+      },
+      {
+        "given": "Bowen",
+        "family": "Wen",
+        "sequence": "additional",
+        "affiliation": [
+          {
+            "name": "Rutgers University,Department of Computer Science,NJ,USA"
+          }
+        ],
+        "role": [
+          {
+            "role": "author",
+            "vocabulary": "crossref"
+          }
+        ]
+      },
+      {
+        "given": "Kostas",
+        "family": "Bekris",
+        "sequence": "additional",
+        "affiliation": [
+          {
+            "name": "Rutgers University,Department of Computer Science,NJ,USA"
+          }
+        ],
+        "role": [
+          {
+            "role": "author",
+            "vocabulary": "crossref"
+          }
+        ]
+      },
+      {
+        "given": "Abdeslam",
+        "family": "Boularias",
+        "sequence": "additional",
+        "affiliation": [
+          {
+            "name": "Rutgers University,Department of Computer Science,NJ,USA"
+          }
+        ],
+        "role": [
+          {
+            "role": "author",
+            "vocabulary": "crossref"
+          }
+        ]
+      }
+    ],
+    "member": "263",
+    "reference": [
+      {
+        "key": "ref32",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/IROS51168.2021.9635991"
+      },
+      {
+        "key": "ref31",
+        "author": "pomerleau",
+        "year": "1989",
+        "journal-title": "ALVINN An Autonomous Land Vehicle in a Neural Network"
+      },
+      {
+        "key": "ref30",
+        "first-page": "4565",
+        "article-title": "Generative adversarial imitation learning",
+        "volume": "29",
+        "author": "ho",
+        "year": "2016",
+        "journal-title": "Advances in neural information processing systems"
+      },
+      {
+        "key": "ref10",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.15607/RSS.2018.XIV.044"
+      },
+      {
+        "key": "ref11",
+        "first-page": "1094",
+        "article-title": "Learning to achieve goals",
+        "author": "kaelbling",
+        "year": "0",
+        "journal-title": "IN PROC OF IICAI-93"
+      },
+      {
+        "key": "ref12",
+        "first-page": "33a42",
+        "article-title": "Hierarchical task and motion planning in the now",
+        "author": "kaelbling",
+        "year": "2010",
+        "journal-title": "Proceedings of the 1st AAAI Conference on Bridging the Gap Between Task and Motion Planning ser AAAIWS&#x2019;10&#x2013;01"
+      },
+      {
+        "key": "ref13",
+        "author": "garrett",
+        "year": "2020",
+        "journal-title": "Integrated task and motion planning"
+      },
+      {
+        "key": "ref14",
+        "first-page": "2107",
+        "article-title": "Using reward machines for high-level task specification and decomposition in reinforcement learning,&#x201D; ser",
+        "volume": "80",
+        "author": "icarte",
+        "year": "2018",
+        "journal-title": "Machine Learning Research"
+      },
+      {
+        "key": "ref15",
+        "first-page": "15523",
+        "article-title": "Learning reward machines for partially observable reinforcement learning",
+        "volume": "32",
+        "author": "icarte",
+        "year": "2019",
+        "journal-title": "Advances in neural information processing systems"
+      },
+      {
+        "key": "ref16",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.24963/ijcai.2019/840"
+      },
+      {
+        "key": "ref17",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/IROS45743.2020.9341314"
+      },
+      {
+        "key": "ref18",
+        "first-page": "651",
+        "volume": "87",
+        "author": "kalashnikov",
+        "year": "2018",
+        "journal-title": "Scalable deep reinforcement learning for vision-based robotic manip-ulation &#x201D; ser Proceedings of Machine Learning Research"
+      },
+      {
+        "key": "ref19",
+        "article-title": "Parametrized hierarchical procedures for neural programming",
+        "author": "fox",
+        "year": "0",
+        "journal-title": "International Conference on Learning Representations"
+      },
+      {
+        "key": "ref28",
+        "first-page": "1133",
+        "article-title": "Scene-level pose estimation for multiple instances of densely packed objects",
+        "author": "mitash",
+        "year": "2020",
+        "journal-title": "Con-ference on Robot Learning"
+      },
+      {
+        "key": "ref4",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/ICRA.2019.8793623"
+      },
+      {
+        "key": "ref27",
+        "article-title": "Diversity is all you need: Learning skills without a reward function",
+        "author": "eysenbach",
+        "year": "0",
+        "journal-title": "International Conference on Learning Representations"
+      },
+      {
+        "key": "ref3",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/HUMANOIDS.2016.7803347"
+      },
+      {
+        "key": "ref6",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1007/978-3-319-43488-9_16"
+      },
+      {
+        "key": "ref29",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.15607/RSS.2021.XVII.070"
+      },
+      {
+        "key": "ref5",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1177/02783649211004615"
+      },
+      {
+        "key": "ref8",
+        "first-page": "4654",
+        "article-title": "Taco: Learning task decomposition via temporal alignment for control",
+        "author": "shiarlis",
+        "year": "2018",
+        "journal-title": "International Conference on Machine Learning"
+      },
+      {
+        "key": "ref7",
+        "first-page": "2917",
+        "article-title": "Hierarchical imitation and reinforcement learning",
+        "author": "le",
+        "year": "2018",
+        "journal-title": "International Conference on Machine Learning"
+      },
+      {
+        "key": "ref2",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1561/9781680834116"
+      },
+      {
+        "key": "ref9",
+        "article-title": "Skill discovery in continuous rein-forcement learning domains using skill chaining",
+        "volume": "22",
+        "author": "konidaris",
+        "year": "2009",
+        "journal-title": "Advances in neural information processing systems"
+      },
+      {
+        "key": "ref1",
+        "author": "calinon",
+        "year": "2009",
+        "journal-title": "Robot Programming by Demonstration"
+      },
+      {
+        "key": "ref20",
+        "article-title": "Neural task programming: Learning to generalize across hierarchical tasks",
+        "volume": "abs 1710 1813",
+        "author": "xu",
+        "year": "2017",
+        "journal-title": "CoRR"
+      },
+      {
+        "key": "ref22",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/ICRA40945.2020.9196862"
+      },
+      {
+        "key": "ref21",
+        "article-title": "Neural task graphs: Generalizing to unseen tasks from a single video demonstration",
+        "volume": "abs 1807 3480",
+        "author": "huang",
+        "year": "2018",
+        "journal-title": "CoRR"
+      },
+      {
+        "key": "ref24",
+        "article-title": "Hierarchical foresight: Self-supervised learning of long-horizon tasks via visual subgoal generation",
+        "volume": "abs 1909 5829",
+        "author": "nair",
+        "year": "2019",
+        "journal-title": "CoRR"
+      },
+      {
+        "key": "ref23",
+        "first-page": "5055a5065",
+        "article-title": "Hindsight ex-perience replay",
+        "author": "andrychowicz",
+        "year": "0",
+        "journal-title": "Proceedings of the 31st International Conference on Neural Information Processing Systems ser NIPS'17 Curran Associates Inc"
+      },
+      {
+        "key": "ref26",
+        "first-page": "3307a3317",
+        "article-title": "Data-efficient hierarchical reinforcement learning",
+        "author": "nachum",
+        "year": "0",
+        "journal-title": "Proceedings of the 32nd International Conference on Neural Information Processing Systems ser NIPS'18"
+      },
+      {
+        "key": "ref25",
+        "first-page": "1726a1734",
+        "article-title": "The option-critic architecture,&#x201D; ser",
+        "author": "bacon",
+        "year": "2017",
+        "journal-title": "AAAI&#x2019; 17 AAAI Press"
+      }
+    ],
+    "event": {
+      "name": "2022 IEEE International Conference on Robotics and Automation (ICRA)",
+      "location": "Philadelphia, PA, USA",
+      "start": {
+        "date-parts": [
+          [
+            2022,
+            5,
+            23
+          ]
+        ]
+      },
+      "end": {
+        "date-parts": [
+          [
+            2022,
+            5,
+            27
+          ]
+        ]
+      }
+    },
+    "container-title": [
+      "2022 International Conference on Robotics and Automation (ICRA)"
+    ],
+    "original-title": [],
+    "link": [
+      {
+        "URL": "http://xplorestaging.ieee.org/ielx7/9811522/9811357/09811703.pdf?arnumber=9811703",
+        "content-type": "unspecified",
+        "content-version": "vor",
+        "intended-application": "similarity-checking"
+      }
+    ],
+    "deposited": {
+      "date-parts": [
+        [
+          2022,
+          11,
+          3
+        ]
+      ],
+      "date-time": "2022-11-03T23:08:45Z",
+      "timestamp": 1667516925000
+    },
+    "score": 1,
+    "resource": {
+      "primary": {
+        "URL": "https://ieeexplore.ieee.org/document/9811703/"
+      }
+    },
+    "subtitle": [],
+    "short-title": [],
+    "issued": {
+      "date-parts": [
+        [
+          2022,
+          5,
+          23
+        ]
+      ]
+    },
+    "references-count": 32,
+    "URL": "https://doi.org/10.1109/icra46639.2022.9811703",
+    "relation": {},
+    "subject": [],
+    "published": {
+      "date-parts": [
+        [
+          2022,
+          5,
+          23
+        ]
+      ]
+    }
+  },
+  "wan": {
+    "indexed": {
+      "date-parts": [
+        [
+          2026,
+          9,
+          26
+        ]
+      ],
+      "date-time": "2026-09-26T00:02:07Z",
+      "timestamp": 1790380927755,
+      "version": "4.1.0"
+    },
+    "reference-count": 32,
+    "publisher": "Institute of Electrical and Electronics Engineers (IEEE)",
+    "issue": "1",
+    "license": [
+      {
+        "start": {
+          "date-parts": [
+            [
+              2020,
+              1,
+              1
+            ]
+          ],
+          "date-time": "2020-01-01T00:00:00Z",
+          "timestamp": 1577836800000
+        },
+        "content-version": "vor",
+        "delay-in-days": 0,
+        "URL": "https://ieeexplore.ieee.org/Xplorehelp/downloads/license-information/IEEE.html"
+      },
+      {
+        "start": {
+          "date-parts": [
+            [
+              2020,
+              1,
+              1
+            ]
+          ],
+          "date-time": "2020-01-01T00:00:00Z",
+          "timestamp": 1577836800000
+        },
+        "content-version": "stm-asf",
+        "delay-in-days": 0,
+        "URL": "https://doi.org/10.15223/policy-029"
+      },
+      {
+        "start": {
+          "date-parts": [
+            [
+              2020,
+              1,
+              1
+            ]
+          ],
+          "date-time": "2020-01-01T00:00:00Z",
+          "timestamp": 1577836800000
+        },
+        "content-version": "stm-asf",
+        "delay-in-days": 0,
+        "URL": "https://doi.org/10.15223/policy-037"
+      }
+    ],
+    "content-domain": {
+      "domain": [],
+      "crossmark-restriction": false
+    },
+    "short-container-title": [
+      "IEEE Trans. Ind. Inf."
+    ],
+    "published-print": {
+      "date-parts": [
+        [
+          2020,
+          1
+        ]
+      ]
+    },
+    "DOI": "10.1109/tii.2019.2892772",
+    "type": "journal-article",
+    "created": {
+      "date-parts": [
+        [
+          2019,
+          1,
+          14
+        ]
+      ],
+      "date-time": "2019-01-14T19:55:59Z",
+      "timestamp": 1547495759000
+    },
+    "page": "442-453",
+    "source": "Crossref",
+    "is-referenced-by-count": 42,
+    "title": [
+      "Preparatory Manipulation Planning Using Automatically Determined Single and Dual Arm"
+    ],
+    "prefix": "10.1109",
+    "volume": "16",
+    "author": [
+      {
+        "ORCID": "https://orcid.org/0000-0002-0058-2819",
+        "authenticated-orcid": false,
+        "given": "Weiwei",
+        "family": "Wan",
+        "sequence": "first",
+        "affiliation": [],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "ORCID": "https://orcid.org/0000-0002-7576-756X",
+        "authenticated-orcid": false,
+        "given": "Kensuke",
+        "family": "Harada",
+        "sequence": "additional",
+        "affiliation": [],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "ORCID": "https://orcid.org/0000-0002-0277-3467",
+        "authenticated-orcid": false,
+        "given": "Fumio",
+        "family": "Kanehiro",
+        "sequence": "additional",
+        "affiliation": [],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      }
+    ],
+    "member": "263",
+    "reference": [
+      {
+        "key": "ref32",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/TSSC.1968.300136"
+      },
+      {
+        "key": "ref31",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/LRA.2016.2517147"
+      },
+      {
+        "key": "ref30",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/ARSO.2015.7428206"
+      },
+      {
+        "key": "ref10",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.15607/RSS.2015.XI.045"
+      },
+      {
+        "key": "ref11",
+        "first-page": "1930",
+        "article-title": "Logic-geometric programming: An optimization-based approach to combined task and motion planning",
+        "author": "toussaint",
+        "year": "0",
+        "journal-title": "Proc Int Joint Conf Artif Intell"
+      },
+      {
+        "key": "ref12",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.15607/RSS.2016.XII.002"
+      },
+      {
+        "key": "ref13",
+        "article-title": "Manipulation planning: Building paths on constrained manifolds",
+        "author": "mirabel",
+        "year": "2017"
+      },
+      {
+        "key": "ref14",
+        "first-page": "264",
+        "article-title": "Hierarchical planning for multi-contact non-prehensile manipulation",
+        "author": "lee",
+        "year": "0",
+        "journal-title": "Proc Int Conf on Intell Robots and Systems"
+      },
+      {
+        "key": "ref15",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/ICRA.2017.7989467"
+      },
+      {
+        "key": "ref16",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1145/192161.192266"
+      },
+      {
+        "key": "ref17",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1023/A:1023690101296"
+      },
+      {
+        "key": "ref18",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/IROS.2010.5649021"
+      },
+      {
+        "key": "ref19",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/ICRA.2014.6906965"
+      },
+      {
+        "key": "ref28",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1146/annurev-control-060117-105226"
+      },
+      {
+        "key": "ref4",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1177/0278364904045471"
+      },
+      {
+        "key": "ref27",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/IROS.2017.8206011"
+      },
+      {
+        "key": "ref3",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/70.681241"
+      },
+      {
+        "key": "ref6",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.3182/20120905-3-HR-2030.00174"
+      },
+      {
+        "key": "ref29",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/ROBOT.2005.1570709"
+      },
+      {
+        "key": "ref5",
+        "first-page": "778",
+        "article-title": "Planning regrasp operations for a multifingered robotic hand",
+        "author": "xue",
+        "year": "0",
+        "journal-title": "Proc IEEE Int Conf Autom Sci Eng"
+      },
+      {
+        "key": "ref8",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/IROS.2014.6943079"
+      },
+      {
+        "key": "ref7",
+        "article-title": "Regrasp manipulation as trajectory optimization",
+        "author": "king",
+        "year": "0",
+        "journal-title": "Proc Robot Sci Syst"
+      },
+      {
+        "key": "ref2",
+        "first-page": "1924",
+        "article-title": "Regrasping",
+        "author": "tournassound",
+        "year": "0",
+        "journal-title": "Proc Int Conf Robot Automat"
+      },
+      {
+        "key": "ref9",
+        "first-page": "639",
+        "article-title": "Combined task and motion planning through an extensible planner-independent interface layer",
+        "author": "fang",
+        "year": "0",
+        "journal-title": "Proc IEEE Int Conf Robot Automat"
+      },
+      {
+        "key": "ref1",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/IROS.2016.7759156"
+      },
+      {
+        "key": "ref20",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/SII.2014.7028104"
+      },
+      {
+        "key": "ref22",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/ICRA.2017.7989151"
+      },
+      {
+        "key": "ref21",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1177/0278364909352098"
+      },
+      {
+        "key": "ref24",
+        "doi-asserted-by": "crossref",
+        "first-page": "1832",
+        "DOI": "10.1109/LRA.2017.2708134",
+        "article-title": "Closed-chain manipulation of large objects by multi-arm robotic systems",
+        "volume": "2",
+        "author": "zhou",
+        "year": "2017",
+        "journal-title": "IEEE Robot Autom Lett"
+      },
+      {
+        "key": "ref23",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/TASE.2018.2791478"
+      },
+      {
+        "key": "ref26",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1080/01691864.2017.1380535"
+      },
+      {
+        "key": "ref25",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1126/scirobotics.aat6385"
+      }
+    ],
+    "container-title": [
+      "IEEE Transactions on Industrial Informatics"
+    ],
+    "original-title": [],
+    "link": [
+      {
+        "URL": "http://xplorestaging.ieee.org/ielx7/9424/8952812/08611208.pdf?arnumber=8611208",
+        "content-type": "unspecified",
+        "content-version": "vor",
+        "intended-application": "similarity-checking"
+      }
+    ],
+    "deposited": {
+      "date-parts": [
+        [
+          2022,
+          4,
+          27
+        ]
+      ],
+      "date-time": "2022-04-27T16:55:25Z",
+      "timestamp": 1651078525000
+    },
+    "score": 1,
+    "resource": {
+      "primary": {
+        "URL": "https://ieeexplore.ieee.org/document/8611208/"
+      }
+    },
+    "subtitle": [],
+    "short-title": [],
+    "issued": {
+      "date-parts": [
+        [
+          2020,
+          1
+        ]
+      ]
+    },
+    "references-count": 32,
+    "journal-issue": {
+      "issue": "1"
+    },
+    "URL": "https://doi.org/10.1109/tii.2019.2892772",
+    "relation": {},
+    "ISSN": [
+      "1551-3203",
+      "1941-0050"
+    ],
+    "issn-type": [
+      {
+        "value": "1551-3203",
+        "type": "print"
+      },
+      {
+        "value": "1941-0050",
+        "type": "electronic"
+      }
+    ],
+    "subject": [],
+    "published": {
+      "date-parts": [
+        [
+          2020,
+          1
+        ]
+      ]
+    }
+  },
+  "ntp": {
+    "indexed": {
+      "date-parts": [
+        [
+          2026,
+          9,
+          30
+        ]
+      ],
+      "date-time": "2026-09-30T14:56:00Z",
+      "timestamp": 1790780160123,
+      "version": "4.1.0"
+    },
+    "reference-count": 33,
+    "publisher": "IEEE",
+    "content-domain": {
+      "domain": [],
+      "crossmark-restriction": false
+    },
+    "short-container-title": [],
+    "published-print": {
+      "date-parts": [
+        [
+          2018,
+          5
+        ]
+      ]
+    },
+    "DOI": "10.1109/icra.2018.8460689",
+    "type": "proceedings-article",
+    "created": {
+      "date-parts": [
+        [
+          2018,
+          9,
+          21
+        ]
+      ],
+      "date-time": "2018-09-21T18:28:03Z",
+      "timestamp": 1537554483000
+    },
+    "page": "3795-3802",
+    "source": "Crossref",
+    "is-referenced-by-count": 92,
+    "title": [
+      "Neural Task Programming: Learning to Generalize Across Hierarchical Tasks"
+    ],
+    "prefix": "10.1109",
+    "author": [
+      {
+        "given": "Danfei",
+        "family": "Xu",
+        "sequence": "first",
+        "affiliation": [],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "given": "Suraj",
+        "family": "Nair",
+        "sequence": "additional",
+        "affiliation": [],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "given": "Yuke",
+        "family": "Zhu",
+        "sequence": "additional",
+        "affiliation": [],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "given": "Julian",
+        "family": "Gao",
+        "sequence": "additional",
+        "affiliation": [],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "given": "Animesh",
+        "family": "Garg",
+        "sequence": "additional",
+        "affiliation": [],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "given": "Li",
+        "family": "Fei-Fei",
+        "sequence": "additional",
+        "affiliation": [],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      },
+      {
+        "given": "Silvio",
+        "family": "Savarese",
+        "sequence": "additional",
+        "affiliation": [],
+        "role": [
+          {
+            "vocabulary": "crossref",
+            "role": "author"
+          }
+        ]
+      }
+    ],
+    "member": "263",
+    "reference": [
+      {
+        "key": "ref33",
+        "article-title": "Target-driven Visual Navigation in Indoor Scenes using Deep Reinforcement Learning",
+        "author": "zhu",
+        "year": "2017",
+        "journal-title": "ICRA"
+      },
+      {
+        "key": "ref32",
+        "article-title": "Towards one shot learning by imitation for humanoid robots",
+        "author": "wu",
+        "year": "2010",
+        "journal-title": "ICRA"
+      },
+      {
+        "key": "ref31",
+        "first-page": "3630",
+        "article-title": "Matching networks for one shot learning",
+        "author": "vinyals",
+        "year": "2016",
+        "journal-title": "Advances in neural information processing systems"
+      },
+      {
+        "key": "ref30",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1023/A:1019956318069"
+      },
+      {
+        "key": "ref10",
+        "author": "duan",
+        "year": "2017",
+        "journal-title": "One-shot imitation learning"
+      },
+      {
+        "key": "ref11",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/TPAMI.2006.79"
+      },
+      {
+        "key": "ref12",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1016/0004-3702(72)90051-3"
+      },
+      {
+        "key": "ref13",
+        "article-title": "Multi-Level Discovery of Deep Options",
+        "author": "fox",
+        "year": "2017",
+        "journal-title": "preprint arXiv 1703 08294"
+      },
+      {
+        "key": "ref14",
+        "article-title": "Learning and extracting finite state automata with second-order recurrent neural networks",
+        "volume": "4",
+        "author": "giles",
+        "year": "2008",
+        "journal-title": "Learning"
+      },
+      {
+        "key": "ref15",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1162/neco.1997.9.8.1735"
+      },
+      {
+        "key": "ref16",
+        "first-page": "15",
+        "article-title": "Maniac: A next generation neurally based autonomous road follower",
+        "author": "jochem",
+        "year": "1993",
+        "journal-title": "Int Conf Intelligent Autonomous Systems"
+      },
+      {
+        "key": "ref17",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1177/0278364913495721"
+      },
+      {
+        "key": "ref18",
+        "article-title": "Transition state clustering: Unsupervised surgical trajectory segmentation for robot learning",
+        "author": "krishnan",
+        "year": "2018",
+        "journal-title": "IJRR"
+      },
+      {
+        "key": "ref19",
+        "article-title": "Hierarchical deep reinforcement learning: Integrating temporal abstraction and intrinsic motivation",
+        "author": "kulkarni",
+        "year": "2016",
+        "journal-title": "NIPS"
+      },
+      {
+        "key": "ref28",
+        "article-title": "Learning sequences of controllers for complex manipulation tasks",
+        "author": "sung",
+        "year": "2013",
+        "journal-title": "International Conference on Machine Learning"
+      },
+      {
+        "key": "ref4",
+        "author": "bacon",
+        "year": "2016",
+        "journal-title": "The option-critic architecture"
+      },
+      {
+        "key": "ref27",
+        "article-title": "Autonomous Multiple-Throw Multilateral Surgical Suturing with a Mechanical Needle Guide and Optimization based Needle Planning",
+        "author": "sen",
+        "year": "2016",
+        "journal-title": "IEEE Int Conf Robotics and Automation (ICRA)"
+      },
+      {
+        "key": "ref3",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1016/j.robot.2008.10.024"
+      },
+      {
+        "key": "ref6",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1109/JRA.1986.1087032"
+      },
+      {
+        "key": "ref29",
+        "doi-asserted-by": "publisher",
+        "DOI": "10.1016/S0004-3702(99)00052-1"
+      },
+      {
+        "key": "ref5",
+        "article-title": "Robot programming by demonstration",
+        "author": "billard",
+        "year": "0",
+        "journal-title": "Handbook of robotics 2008"
+      },
+      {
+        "key": "ref8",
+        "author": "coumans",
+        "year": "2016",
+        "journal-title": "pybullet a python module for physics simulation games robotics and machine learning"
+      },
+      {
+        "key": "ref7",
+        "article-title": "Making neural programming architectures generalize via recursion",
+        "author": "cai",
+        "year": "2017",
+        "journal-title": "ICLRE"
+      },
+      {
+        "key": "ref2",
+        "article-title": "Neural module networks",
+        "author": "andreas",
+        "year": "2016",
+        "journal-title": "CVPR"
+      },
+      {
+        "key": "ref9",
+        "author": "devlin",
+        "year": "2017",
+        "journal-title": "RobustFill Neural Program Learning under Noisy I/O"
+      },
+      {
+        "key": "ref1",
+        "article-title": "Modular multitask reinforcement learning with policy sketches",
+        "author": "andreas",
+        "year": "2017",
+        "journal-title": "ICML"
+      },
+      {
+        "key": "ref20",
+        "doi-asserted-by": "crossref",
+        "first-page": "529",
+        "DOI": "10.1038/nature14236",
+        "article-title": "Human-level control through deep reinforcement learning",
+        "volume": "518",
+        "author": "mnih",
+        "year": "2015",
+        "journal-title": "Nature"
+      },
+      {
+        "key": "ref22",
+        "article-title": "Algorithms for inverse reinforcement learning",
+        "author": "ng",
+        "year": "2000",
+        "journal-title": "ICML"
+      },
+      {
+        "key": "ref21",
+        "first-page": "278",
+        "article-title": "Policy invariance under reward transformations: Theory and application to reward shaping",
+        "author": "ng",
+        "year": "1999",
+        "journal-title": "ICML"
+      },
+      {
+        "key": "ref24",
+        "article-title": "Neural programmer-interpreters",
+        "author": "reed",
+        "year": "2016",
+        "journal-title": "ICLRE"
+      },
+      {
+        "key": "ref23",
+        "article-title": "Reinforcement learning with hierarchies of machines",
+        "author": "parr",
+        "year": "1998",
+        "journal-title": "NIPS"
+      },
+      {
+        "key": "ref26",
+        "article-title": "Universal value function approximators",
+        "author": "schaul",
+        "year": "2015",
+        "journal-title": "ICML"
+      },
+      {
+        "key": "ref25",
+        "article-title": "A reduction of imitation learning and structured prediction to no-regret online learning",
+        "author": "ross",
+        "year": "2011",
+        "journal-title": "Int Conf on Artificial Intelligence and Statistics"
+      }
+    ],
+    "event": {
+      "name": "2018 IEEE International Conference on Robotics and Automation (ICRA)",
+      "location": "Brisbane, QLD",
+      "start": {
+        "date-parts": [
+          [
+            2018,
+            5,
+            21
+          ]
+        ]
+      },
+      "end": {
+        "date-parts": [
+          [
+            2018,
+            5,
+            25
+          ]
+        ]
+      }
+    },
+    "container-title": [
+      "2018 IEEE International Conference on Robotics and Automation (ICRA)"
+    ],
+    "original-title": [],
+    "link": [
+      {
+        "URL": "http://xplorestaging.ieee.org/ielx7/8449910/8460178/08460689.pdf?arnumber=8460689",
+        "content-type": "unspecified",
+        "content-version": "vor",
+        "intended-application": "similarity-checking"
+      }
+    ],
+    "deposited": {
+      "date-parts": [
+        [
+          2020,
+          8,
+          23
+        ]
+      ],
+      "date-time": "2020-08-23T22:57:25Z",
+      "timestamp": 1598223445000
+    },
+    "score": 1,
+    "resource": {
+      "primary": {
+        "URL": "https://ieeexplore.ieee.org/document/8460689/"
+      }
+    },
+    "subtitle": [],
+    "short-title": [],
+    "issued": {
+      "date-parts": [
+        [
+          2018,
+          5
+        ]
+      ]
+    },
+    "references-count": 33,
+    "URL": "https://doi.org/10.1109/icra.2018.8460689",
+    "relation": {},
+    "subject": [],
+    "published": {
+      "date-parts": [
+        [
+          2018,
+          5
+        ]
+      ]
+    }
+  }
+}

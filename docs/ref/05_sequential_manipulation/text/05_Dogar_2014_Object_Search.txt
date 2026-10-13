@@ -1,0 +1,1000 @@
+Autonomous Robots manuscript No.
+(will be inserted by the editor)
+
+
+
+
+Object Search by Manipulation
+Mehmet R. Dogar · Michael C. Koval · Abhijeet Tallavajhula ·
+Siddhartha S. Srinivasa
+
+
+
+
+Received: date / Accepted: date
+
+
+Abstract We investigate the problem of a robot search-      others to the counter until, eventually, you reveal your
+ing for an object. This requires reasoning about both       target.
+perception and manipulation: some objects are moved             Humans frequently manipulate their environment
+because the target may be hidden behind them, while         when searching for objects. If robotic manipulators are
+others are moved because they block the manipulator’s       to be successful in human environments, they require a
+access to other objects. We contribute a formulation of     similar capability of searching for objects by removing
+the object search by manipulation problem using vis-        the clutter that is in the way. In this context, clutter
+ibility and accessibility relations between objects. We     removal serves two purposes. First, removing clutter is
+also propose a greedy algorithm and show that it is         necessary to gain visibility of the target. Second, it is
+optimal under certain conditions. We propose a sec-         necessary to gain access to objects that would be oth-
+ond algorithm which takes advantage of the structure        erwise inaccessible.
+of the visibility and accessibility relations between ob-       Prior work has addressed the issues of interacting
+jects to quickly generate plans. Our empirical evalu-       with objects to gain visibility and accessibility as sepa-
+ation strongly suggests that our algorithm is optimal       rate problems. Work on the sensor placement (Espinoza
+under all conditions. We support this claim with a par-     et al 2011) and search by navigation (Ye and Tsotsos
+tial proof. Finally, we demonstrate an implementation       1995, 1999; Shubina and Tsotsos 2010; Sjo et al 2009;
+of both algorithms on a real robot using a real object      Ma et al 2011; Anand et al 2013) problems focuses
+detection system.                                           on moving the sensor to gain visibility. One canoni-
+                                                            cal example of the sensor placement problem is the Art
+                                                            Gallery problem (de Berg et al 2008), which would be
+1 Introduction                                              equivalent to instrumenting the cabinet with enough
+                                                            sensors to guarantee that the salt shaker is visible. Sim-
+Imagine looking for the salt shaker in a kitchen cabinet.   ilarly, the search by navigation problem would involve
+Upon opening the cabinet, you are greeted with a clut-      moving a mobile sensor through the cabinet to search
+tered view of jars, cans, and boxes—but no salt shaker.     for the target.
+It must be hidden near the back of the cabinet, com-            Conversely, the reconfiguration planning (Ben-Shahar
+pletely obscured by the clutter. You start searching for    and Rivlin 1998; Dogar and Srinivasa 2012; Ota 2009)
+it by pushing some objects out of the way and moving        and manipulation planning among movable obstacles
+Mehmet R. Dogar · Michael C. Koval · Siddhartha S. Srini-
+                                                            (Stilman et al 2007; van den Berg et al 2008; Chen
+vasa                                                        and Hwang 1991; Overmars et al 2006) problems fo-
+The Robotics Institute, Carnegie Mellon University          cus on moving objects to grant the manipulator ac-
+5000 Forbes Avenue, Pittsburgh, PA, USA                     cess to previously-inaccessible configurations. These ap-
+Tel.: +1-412-973-9615
+E-mail: {mdogar,mkoval,siddh}@cs.cmu.edu
+                                                            proaches would be effective at gaining access to the salt
+Abhijeet Tallavajhula                                       shaker once its pose is known, but are incapable of plan-
+Indian Institute of Technology Kharagpur                    ning before the target is visually revealed. Recent work
+E-mail: 09me1028@iitkgp.ac.in                               discusses the object search by manipulation problem
+2                                                                                                   Mehmet R. Dogar et al.
+
+
+                                                                 Left. With no additional knowledge about the location
+                                                                 of the target, HERB must sequentially remove objects
+                                                                 from the scene subject to the physical limitations of its
+                                                                 manipulator until the target is revealed. For example,
+      Camera View                                                Fig. 1-Right shows that HERB is unable to grasp the
+                                                                 large white box without first moving the brown juice-
+                                                                 box out of the way.
+                                                                     In this paper, we formally describe the object search
+                                                                 by manipulation problem by defining the expected time
+                                                                 to find the target as a relevant optimization criterion
+                                                                 and the concept of accessibility and visibility relations
+                                                                 (§2). Armed with these definitions, we are able to pro-
+                                                                 pose and analyze algorithms for object search by ma-
+                                                                 nipulation. We make the following theoretical contribu-
+                                                                 tions:
+                                                                 Greedy is sometimes optimal: We prove that, under
+                                                                 an appropriate definition of utility, the greedy approach
+                                                                 to removing objects is optimal under a set of conditions,
+                                                                 and provide insight into when it is suboptimal (§3).
+Fig. 1 An example of the object search problem on a real         The connected components algorithm: We intro-
+robot. The robot is searching for a target object (highlighted   duce an alternative algorithm, called the connected com-
+by the bounding box) on the table, but its view is occluded
+(drawn as gray regions) by other objects. The robot must
+                                                                 ponents algorithm, which takes advantage of the struc-
+remove these objects to search for the target. Objects may       ture of the scene to approach polynomial time com-
+block the robot’s access to other objects.                       plexity on some scenes (§5). Our extensive experiments
+                                                                 show that this algorithm produces optimal plans under
+                                                                 all situations, and we present a partial proof of opti-
+(Gupta and Sukhatme 2012; Kaelbling and Lozano-                  mality.
+Perez 2012) without reference to optimality. One of                  Finally, we demonstrate both algorithms on our robot
+these works uses a generative model of object-object             HERB (§6.1 and §6.2) and provide extensive experi-
+co-occurrence and spatial constraints (Wong et al 2013)          ments that confirm the algorithms’ theoretical proper-
+to guide the robot’s search, which is similar to the             ties (§6).
+prior distribution we introduce in §8. Other related                 The interplay between visibility and accessibility has
+work includes exploring the environment with the goal            revealed deep structure in the object search problem,
+of building three-dimensional models of novel objects            structure that we were able to identify and exploit to
+using maximally informative actions (van Hoof et al              derive the connected components algorithm. We discuss
+2012).                                                           several extensions in §7, §8, and §9. We discuss limita-
+   One of our key insights is that the object search             tions and future work in §10. We believe that our algo-
+by manipulation problem requires simultaneously rea-             rithms are a step towards enabling robots to perform
+soning about both perception and manipulation. Some              complex manipulation tasks under high clutter and oc-
+objects are moved because they are likely to hide the            clusions.
+target, while others are moved only because they pre-
+vent the manipulator from accessing other objects in
+the scene.                                                       2 Object Search by Manipulation
+    Fig. 1 shows a scene in which both situations oc-
+cur. In this figure, HERB (Srinivasa et al 2012)—a               We start with a scene that is comprised of a known,
+robotic platform designed by the Personal Robotics Lab           static world populated with the set of movable objects
+at Carnegie Mellon University—is searching for the white         O, each of which has known geometry and pose.
+battery pack hidden on a cluttered table. HERB uses                  A robot perceives the scene with its sensors and has
+its camera to detect and localize objects. As Fig. 1-Top         partial knowledge of the objects that the scene contains.
+shows, HERB is initially unable to detect the battery            To the robot, the scene is comprised of the set of visible
+pack because it is occluded by the blue Pop-Tart box.            objects Oseen ⊂ O and the volume of space V that is
+From HERB’s perspective, the battery pack could be               occluded to its sensors. In the object search problem,
+hiding in any of the occluded regions shown in Fig. 1-           the occluded volume hides a target object target ∈ O
+Object Search by Manipulation                                                                                                  3
+
+
+with known geometry, but unknown pose. For the re-
+mainder of this paper, we study a specific variant of the
+problem in which the target is the only hidden object,                   Vjoint              VC       VB                VC
+i.e. O = Oseen ∪ {target}. We discuss the presence of               VB
+                                                                           B                C              B           C
+other hidden objects in §9.                                                           VA
+     The robot searches for the target by removing ob-                            A
+jects from Oseen until the target is revealed to its sen-
+sors. As objects are removed, fewer objects remain in
+                                                                           (a) Initial Scene               (b) A Removed
+the scene, which we denote by s ⊆ Oseen . Oseen refers
+to the initial set of visible objects and does not change         Fig. 2 (a) An example of a scene containing a joint occlu-
+                                                                  sion. Occlusions are drawn as dark gray and the joint occlu-
+as objects are removed. We define the order in which              sions as light gray. (b) The scene after A is removed.
+objects are removed as an arrangement.
+
+Definition 1 (Arrangement) An arrangement of the
+set of objects o is a bijection Ao : {1, . . . , |o|} → o where   where P0 (x) is a prior distribution over the pose of the
+Ao (i) is the ith object removed.                                 target object.
+    Additionally, we define Ao (i, j) as the sequence of              We assume that P0 (x) is uniform for the remainder
+the ith through the j th objects removed by arrangement           of this discussion to simplify our examples. We discuss
+Ao .                                                              the general case of using a non-uniform P0 (x) to encode
+    Given an arrangement Ao that reveals the target,              semantic knowledge about the scene in §8.
+the expected time to find the target is                               Additionally, we will drop the scene s from this no-
+                                                                  tation whenever it is obvious from the context. For ex-
+           |o|
+           X                                                      ample in Fig. 2a we write VA instead of the more verbose
+E(Ao ) =         PAo (i) · TAo (1,i)                       (1)
+                                                                  V{A}|{A,B,C} . Similarly, instead of using VAo (i,j)|Ao (i,|o|)
+           i=1
+                                                                  to refer to the volume revealed between the ith and j th
+where PAo (i) is the probability that the target will be          steps of an arrangement, we will simply use VAo (i,j) .
+revealed after removing object Ao (i) and TAo (1,i) is the            In Fig. 2a we show the revealed volumes of objects in
+time to move all objects up to and including Ao (i).              an example scene1 . Vjoint is jointly occluded by object
+   Our goal is to find the arrangement A∗Oseen that               A and B, and is not included in either VA or VB . This is
+minimizes E(A∗Oseen ); i.e. reveals the target as quickly         because Vjoint will not be revealed if only A or only B
+as possible.                                                      is removed from the scene.
+                                                                      In Fig. 2b we show VB after A is removed from the
+                                                                  scene in Fig. 2a. Since A is no longer in the scene, VB now
+2.1 Visibility
+                                                                  includes Vjoint . Similarly, VA would expand to include
+                                                                  Vjoint if B was the first object removed from the scene.
+When the robot removes a set of objects from the scene
+                                                                  Regardless of the order in which A and B are removed,
+it reveals a set of candidate poses of the target object
+                                                                  the revealed volume of {A, B} is V{A,B} = VA +VB +Vjoint .
+that were previously occluded. These revealed configu-
+                                                                  In the most general case, an arbitrary number of objects
+rations are defined in target’s configuration space C.
+                                                                  can jointly occlude a volume. In that case, the volume
+Definition 2 (Revealed Configurations) The set                    would be revealed only after all of the occluding objects
+of candidate target poses Co|s ⊆ C revealed by re-                are removed from the scene.
+moving objects o ⊆ s from a scene containing objects                  Given an arrangement AOseen we compute the prob-
+s ⊆ Oseen .                                                       ability that the target will be revealed at the ith step
+    The probability of revealing the target after remov-          using the revealed volume
+ing o from s is determined by the volume of Co|s . We
+call this the revealed volume of those objects.
+                                                                                      VAOseen (i)
+Definition 3 (Revealed Volume) The volume Vo|s                    PAOseen (i) =                                              (3)
+                                                                                       VOseen
+revealed by removing objects o ⊆ s from a scene con-
+taining objects s ⊆ Oseen is
+                                                                   1
+                                                                      We use two-dimensional examples, e.g. Fig. 2, throughout
+                                                                  the paper for clarity of illustration. Our actual formulation
+       Z
+Vo|s =        P0 (x) dx                          (2)              and implementation uses complete three-dimensional models
+         x∈Co|s                                                   of the scene, objects, and volumes.
+4                                                                                                   Mehmet R. Dogar et al.
+
+
+
+                         VC                     VC
+         VB                       VB                                 VB          VC            VB              VC
+                          kC                     kC                              C                             C
+                B                       B                         A
+    VA                                                                    B                            B
+          A                                                     VA
+                                            k
+              (a) Initial Scene        (b) A Removed                  (a) Initial Scene              (b) A Removed
+
+Fig. 3 A scene where the greedy algorithm performs sub-       Fig. 4 A scene where the greedy algorithm performs sub-
+optimally due to an accessibility constraint.                 optimally due to a visibility constraint.
+
+
+2.2 Accessibility                                             find the target. Using this intuition, we define the util-
+                                                              ity of an object similar to the utility measures defined
+The manipulator uses a motion planner to grasp an ob-         for sensor placement (Ye and Tsotsos 1995; Espinoza
+ject and remove it from the scene. To achieve this, the       et al 2011).
+object must be accessible to the manipulator. Accessi-
+bility is blocked by other visible objects, and also by the   Definition 5 (Utility) The utility of an object A is
+occluded volume, which the manipulator is forbidden to        given by
+enter.                                                                                    VA
+                                                                                  U (A) =
+                                                                                          TA
+Definition 4 (Accessibility Constraint) There is
+an accessibility constraint from an object A to object B
+                                                                  This measure naturally lends itself to greedy search.
+if A must be removed for the manipulator to access B.
+                                                              A greedy algorithm for our problem ranks the accessi-
+    Any arrangement of objects in a scene must respect
+                                                              ble objects in the scene based on their utility and the
+the objects’ accessibility constraints. For example, in
+                                                              removes highest utility object. This results in a new
+Fig. 1-Right, the access to the big box is blocked by
+                                                              scene, whereby the algorithm repeats until the target
+the smaller box in front of it.
+                                                              is revealed. In the worst case, this continues until all
+    We identify the accessibility constraints using a mo-
+                                                              objects are removed.
+tion planner, which returns a manipulator trajectory
+                                                                  Unsurprisingly, it is easy to create situations where
+for each object in the scene. The manipulator trajec-
+                                                              greedy search is suboptimal. Consider the scene in Fig. 3.
+tory for an object sweeps a certain volume in the space
+                                                              In this scene, VB  VC > VA . For the sake of simplicity
+(illustrated as light blue regions in Fig. 1). Objects that
+                                                              we assume that the time to move each object is similar,
+penetrate the swept volume result in accessibility con-
+                                                              hence U (C) > U (A). As B is not accessible, the greedy al-
+straints. Additionally, objects for which the occluded
+                                                              gorithm compares U (A) and U (C) and chooses to move
+volume penetrates the swept volume also result in ac-
+                                                              C first, producing the final arrangement C → A → B.
+cessibility constraints.
+                                                              However, moving the lower utility A first is the opti-
+    We also use the manipulator trajectory for an object
+                                                              mal choice because it reveals VB faster (Fig. 3b), and
+A to compute TA by estimating the time necessary to
+                                                              gives the optimal arrangement A → B → C. It is easy to
+execute the trajectory on the robot. Since there is only
+                                                              see that greedy can be made arbitrarily suboptimal by
+a single action for each object, TA is constant for a given
+                                                              adding more and more objects with utility U (C) to the
+scene and does not depend on the sequence in which
+                                                              scene.
+objects are removed.
+                                                                  We present a second example of greedy’s subopti-
+                                                              mality in Fig. 4. In this scene, all objects are accessible,
+3 Utility and Greedy Search                                   VC > VA , and VC > VB . The greedy algorithm inspects
+                                                              the utilities and moves C first. However, there is a large
+In this section, we discuss a greedy approach to solving      volume jointly occluded by A and B, such that when
+the object search by manipulation problem.                    either A or B is removed, the volume revealed by the
+    While the overall goal is to minimize the amount of       second object significantly increases. We illustrate this
+time it takes to find the target, a greedy approach re-       in Fig. 4b with A is removed. Hence, the optimal ar-
+quires a utility function to maximize at every step. The      rangement is A → B → C because it quickly reveals the
+faster the robot reveals large volumes, the sooner it will    large volume jointly occluded by A and B.
+Object Search by Manipulation                                                                                          5
+
+
+    The examples in Fig. 3 and Fig. 4 may suggest a            do occur surprisingly regularly even with randomly gen-
+k-step lookahead planner for optimality. However, the          erated object poses. However, as we have shown above,
+problem is fundamental: one can create scenes where            the greedy algorithm can also produce arbitrarily sub-
+arbitrarily many objects jointly occlude large volumes,        optimal results.
+or where arbitrarily many objects block the accessibility         In the next section we present an algorithm based
+to an object that hides a large volume behind it.              on A-Star search, which is always optimal but has ex-
+    Surprisingly, however, it is possible to create non-       ponential computational complexity. Then, in §5 we
+trivial scenes where greedy search is optimal. We define       present a new algorithm which approaches the polyno-
+the requirements of such scenes in the following theo-         mial complexity of the greedy algorithm, yet maintains
+rem.                                                           optimality in the general case as shown by our empirical
+                                                               evaluations in §6.
+Theorem 1 In a scene where all objects are accessi-
+ble and no volume is jointly occluded, a planner that is
+greedy over utility minimizes the expected time to find        4 A-Star Search Algorithm
+the target.
+                                                               In this section we present an optimal algorithm for solv-
+Proof Suppose that A∗ is a minimum expected time               ing the object search by manipulation problem. We first
+(i.e. optimal) arrangement. For any i, 1 ≤ i < |Oseen |,       formulate the problem as a deterministic single-source
+we can create a new arrangement, A, such that the ith          shortest path problem. We then find the optimal solu-
+and (i + 1)th objects are swapped; i.e. A(i) = A∗ (i + 1)      tion by executing an A-Star search with an admissible
+and A(i + 1) = A∗ (i). A must be a valid arrangement           heuristic.
+because all objects are accessible.                                Formulating this problem as a deterministic single-
+    No volume is jointly occluded, so the revealed vol-        source shortest path problem is possible only because
+ume of all objects will stay the same after the swap; i.e.     of special structure in the problem. The optimal policy
+VA∗ (i) = VA(i+1) and VA∗ (i+1) = VA(i) . Since the rest of    always removes objects from the scene in a determinis-
+the two arrangements are also identical, using Eq. 1 and       tic order (i.e. an arrangement) until the target is found.
+Eq. 3, we can compute the difference between E (A) and         See §A for a derivation of this fact from a formulation
+E (A∗ ) to be:                                                 of the problem as a Markov decision process.
+E (A)−E (A∗ ) = VA∗ (i) ·TA∗ (i+1) −VA∗ (i+1) ·TA∗ (i) . (4)
+
+   E (A∗ ) is optimal, therefore E (A) − E (A∗ ) ≥ 0           4.1 Single-Source Shortest Path Problem
+and
+                  VA∗ (i)   VA∗ (i+1)                          Define a directed acyclic graph G = (N, E, c) with
+                          ≥           ,                        nodes N ⊆ 2Oseen , edges E ⊆ Oseen × Oseen , and cost
+                  TA∗ (i)   TA∗ (i+1)
+                                                               function c : E → R+ . A node s ∈ N is the set visi-
+which is simply U (A∗ (i)) ≥ U (A∗ (i+1)). Hence, the op-      ble objects remaining in the scene. The directed edge
+timal arrangement consists of objects sorted in weakly-        (s, s \ {a}) ∈ E removes object a from scene s.
+descending order by their utilities.                               Consider the single-source shortest path problem in
+    There can be more than one weakly-descending or-           G with Oseen as the start node and ∅ as the goal node.
+dering of the objects if multiple objects have the same        Let edges exist between nodes s and s0 if they differ by
+utility. To see that all weakly-descending orderings are       a single object and if that object is accessible in s. Ev-
+optimal, the same reasoning can be used to show that           ery path from the start to the goal removes all objects
+swapping two objects of the same utility does not change       from the scene in a different order and corresponds to
+the expected time of an arrangement.                   t
+                                                       u       a different arrangement.
+                                                                   Furthermore, each edge (s, s \ {a}) ∈ E has cost
+    This result is rather startling. The greedy algorithm
+is incredibly efficient in terms of computational com-                     
+                                                                              Va|s
+                                                                                    
+plexity. At each step, the algorithm finds the accessi-        c(s, s0 ) =            TOseen \s0
+                                                                             VOseen
+ble object with maximum utility in linear time. In a
+scene of n objects, this results in a total computational      where TOseen \s0 is the total time required to reach s0 =
+complexity of O(n2 ). We show in §5 that the worst-            s\{a} from the initial scene Oseen . For every path going
+case complexity of the optimal search is O(n2 2n ). The        through an edge, the cost indicates the probability that
+theorem, however, shows that there are scenes in which         the target will be revealed at that edge multiplied with
+greedy is optimal. We shall show in §6 that these scenes       the time required to reach and execute the edge.
+6                                                                                                       Mehmet R. Dogar et al.
+
+
+    The sum of the edge costs along any path from the
+start to the goal is exactly Eq. 1. In other words, the
+cost of a path in this graph is equal to the expected                                  D        E
+time to find the target while following corresponding                 A
+arrangement. Therefore, the minimum-cost in G corre-                         Bj
+sponds the optimal arrangement A∗Oseen that minimizes                                            F
+                                                                                  C
+E(A∗Oseen ).
+                                                                    Fig. 5 Left: An example scene. Volumes occluded by a single
+                                                                    object are shown in dark gray, joint occlusions are shown in
+4.2 Admissible Heuristic                                            light gray, and swept volumes are shown in light blue. Right:
+                                                                    The corresponding graph with three connected components.
+The single-source shortest path problem can be solved
+using several well-known algorithms. We use the A-Star
+                                                                     Algorithm 1: Object Search With Connected
+search algorithm (Hart et al 1968) with an admissible
+                                                                     Components
+heuristic to efficiently find the optimal solution. A-Star
+                                                                     1 {c1 , c2 , ..., cm } ← FindConnectedComponents
+is optimal if its heuristic is admissible, i.e. does not             2 foreach connected component ci do
+overestimate the cost from a state to the goal.                      3      A∗ci
+                                                                                   ← AStar(ci )
+    Suppose we start at the arbitrary node                               ∗
+                                                                     4 AO         ←    []
+                                                                           seen
+s = {a1 , a2 , . . . , an } and the minimum-cost path to the         5 repeat
+
+goal is given by the sequence of actions [a1 , a2 , . . . , an ].    6      bag ← ∅
+                                                                     7      foreach component arrangement A∗  ci
+                                                                                                                 do
+Then, the optimal cost-to-go is                                      8            for j ← 1 to |ci | do
+                                                                                        bag.Add( Aci (1, j) )
+h∗ (s) = c(s, s \ a1 ) + c(s \ a1 , s \ {a1 , a2 }) + · · ·          9
+                                                                    10      seq ← arg max U (A)
+         +c(s \ {a1 , a2 , ..., an−1 }, ∅)                                            A∈bag
+                                                                    11     Add seq to the end of A∗  Oseen
+            Va1 |s
+       =              (TOseen \s + Ta1 )                              12     Remove seq from the A∗   ci
+                                                                                                         it belongs
+           VOseen                                                     13 until all objects are in the plan
+                                                                                   ∗
+                       
+             Va2 |s\a1                                                14 return AO
+                                                                                     seen
+         +                 (TOseen \s + Ta1 + Ta2 )
+              VOseen
+         +···
+                                   
+             Van |s\{a1 ,...,an−1 }                                  Unfortunately, the graph constructed for a scene of size
+         +                            (TOseen \s + Ta1 + · · · + Tan ).
+                     VOseen                                          n = |Oseen | has up to 2n nodes and no more than n2n
+    Now we present our heuristic,                                    edges, resulting in a worst-case complexity of O(n2 2n ).
+                                                                   Our experimental results (§6) confirm that A-Star ap-
+           Va1 |s                                                    proaches this worst-case bound in practice and it is in-
+h(s) =               (TOseen \s + min Ta )
+          VOseen                     a∈s                             tractable to run this algorithm on large scenes.
+                      
+            Va2 |s\a1
+        +                 (TOseen \s + min Ta )
+             VOseen                      a∈s
+        +···                                                         5 Connected Components Algorithm
+                                  
+            Van |s\{a1 ,...,an−1 }
+        +                            (TOseen \s + min Ta )
+                   VO                             a∈s                The structure of the object search problem becomes
+                     seen
+                                                                     more clear once we represent the visibility and accessi-
+                                            
+            Vs
+      =               TOseen \s + min Ta .                           bility constraints of a scene as a graph. Each node of
+          VOseen                     a∈s
+                                                                     this graph corresponds to an object in the scene. There
+Since h(s) ≤ h∗ (s), h(s) is admissible. Intuitively, h(s)           is an edge between the nodes A and B if:
+optimistically reasons that: (1) we execute the minimum-
+time action and (2) it reveals all of the remaining vol-               – A is blocking the access to B, or vice versa; or
+ume. Since h(s) is admissible, A-Star is optimal and                   – A and B are jointly occluding a non-zero volume.
+will return the minimum-cost path.
+                                                                     An example scene and the corresponding graph is in
+                                                                     Fig. 5.
+4.3 Computational Complexity                                             We can divide the constraint graph into connected
+                                                                     components. A connected component of the graph is
+Running an A-Star search on a graph with n nodes and                 a subgraph such that there exists a path between any
+m edges has a worst-case complexity of O((m+n) log n).               two nodes in the subgraph (Hopcroft and Tarjan 1973).
+Object Search by Manipulation                                                                                             7
+
+
+For example, there are three connected components in            5.1 Complexity of the Connected Components
+Fig. 5: {A, B, C}, {D}, and {E, F}.                             Algorithm
+    A key insight is that the objects in a connected
+component do not affect the utility of the objects in           The connected components algorithm divides the set
+another connected component. Hence, we can perform              of objects into smaller sets, runs A-Star on each con-
+an optimal search, e.g. using A-Star, to solve the ar-          nected component, and then merges the plans for each
+rangement problem for a connected component inde-               component. If the scene has no constraints, then there is
+pendently and then merge the solutions to produce a             one object per connected component and this algorithm
+complete arrangement of the scene.                              reduces to the greedy algorithm. Conversely, if the con-
+    It is non-trivial to merge arrangements of multiple         straint graph is connected, this algorithm is equivalent
+connected components. The complete plan may switch              to running A-Star on the full scene. Therefore, the per-
+from one connected component to the other and then              formance of this algorithm ranges from O(n2 ), the per-
+switch back to a previous component. Our algorithm              formance of the greedy algorithm, to O(n2 2n ), the per-
+provides an efficient greedy way to perform this merge.         formance of A-Star, depending upon the size of the con-
+    The examples in Fig. 3 and Fig. 4 show that the             nected components. Geometric limitations put an upper
+utility of a single object is not informative enough to         bound on the number of accessibility and joint occlu-
+achieve general optimality with a greedy algorithm. In-         sion constraints that are possible in a given scene, so it
+stead, we consider the utility of removing multiple ob-         is unlikely that any scene will exercise the worst case
+jects from the scene.                                           performance. These performance gains will be most sig-
+                                                                nificant on large scenes in which objects are spatially
+Definition 6 (Collective Utility) The collective util-          partitioned, e.g. on different shelves in a fridge, but will
+ity of a set of objects o is given by                           be modest on small, densely packed scenes.
+
+                                  Vo
+                        U (o) =                                 6 Experiments and Results
+                                  To
+
+                                                                We investigated the performance of the different algo-
+    A general greedy approach which considers the col-          rithms through extensive experiments in simulation and
+lective utility of all possible sequences of all sizes in the   on a real robot. We implemented the greedy, A-Star,
+scene would quickly become infeasible as the number             and connected components algorithms in OpenRAVE
+of such sequences is O(|o|!). In our case, we take ad-          (Diankov and Kuffner 2008). We also implemented a
+vantage of the fact that we have optimal plans for each         baseline algorithm which randomly picks an accessi-
+connected component in which the objects are already            ble object and removes it from the scene. We evalu-
+sorted. We then need to compute collective utilities of         ated these algorithms on randomly generated scenes.
+only the prefixes (i.e. the first k objects where k ranges      Each scene contained n objects—half juice bottles and
+from 1 to the size of the connected component) of these         half large boxes—that were uniformly distributed over
+optimal sequences.                                              a wide 1.4 × 0.8 m workspace. None of the generated
+    We present our algorithm in Algorithm 1 that uses           scenes contained hidden objects and the planner used
+the collective utility of sequences from connected com-         a motion planner based on the capabilities of a sim-
+ponents to generate an arrangement of the complete              ple manipulator. The manipulator was only capable of
+scene. It first identifies the connected components in          moving straight, parallel to the table and at a constant
+the scene (Line 1). Then it finds the optimal arrange-          speed of 0.1 m/s.
+ment internal to a connected component using A-Star                 In our implementation, we assume that the target
+search (Line 3). It then merges these arrangements iter-        rests stably on the workspace and C = SE(2). We
+atively by finding the maximum utility2 prefixes of the         approximate C with a discrete set of configurations
+optimal arrangements of the connected components.               C̃ ⊂ C. Next, we compute a discrete approximation
+    In §6 we show that Algorithm 1 generates the op-            of each set of revealed configurations C̃o|s = {x ∈ C̃ :
+timal result in all scenes we tried it on and it uses a         Ω(x|s\o)∧¬Ω(x|s)} using the visibility criterion Ω(x|s)
+fraction of the time A-Star requires on the complete            that returns whether x ∈ C is visible in the scene s.
+scene. We present a partial proof of our algorithm’s op-        Finally, we compute Vo|s by approximating the integral
+timality in the appendix.                                       over Co|s in Eq. 2 with a summation over C̃o|s . In princi-
+ 2                                                              ple, our framework supports any deterministic visibility
+    In the rare event that that multiple sequences share the
+maximum utility, the algorithm breaks the tie by choosing       criterion Ω : C ×2Oseen → {0, 1}. However partial views
+the sequence with the maximum utility prefix recursively.       of objects are difficult to detect in practice. Therefore,
+8                                                                                                                                                                                         Mehmet R. Dogar et al.
+
+
+
+                               45                                                                              103                                                                                                     225
+                                                                                                                                                                                     12
+                                               A*
+                               40                                                                                                                                                    11                                200
+                                               Components
+
+
+
+
+                                                                                                                                                         Size of Largest Component
+                               35              Greedy                                                          102                                                                   10                                175
+      Expected Duration (s)
+
+
+
+
+                                               Random                                                                                                                                 9
+
+
+
+
+                                                                                          Planning Time (s)
+                               30                                                                                                                                                                                      150
+                                                                                                                                                                                      8
+                                                                                                               101
+                               25                                                                                                                                                     7                                125
+
+                               20                                                                                                                                                     6                                100
+                                                                                                               100                                                                    5
+                               15                                                                                                                                                                                      75
+                                                                                                                                                                                      4
+                               10                                                                                                                                                     3                                50
+                                                                                                              10−1
+                                   5                                                                                                                                                  2                                25
+                                                                                                                                                                                      1
+                                   0                                                                          10−2                                                                                                     0
+                                           4            6          8          10   12                                4   6          8          10   12                                    4    6     8     10     12
+                                                            Number of Objects                                                Number of Objects                                                Number of Objects
+
+Fig. 6 Performance of the random, greedy, A-Star, and connected component planners as a function of number of objects. All
+results are averaged over approximately 400 random scenes and are plotted with their 95% confidence interval. The planning
+times are presented in log-scale, where the confidence intervals are also plotted as log-scale relative errors (Baird 1995). The
+relationship between scene size and the size of the largest connected component is also plotted as a two-dimensional histogram.
+
+
+
+                              60
+                                                                                                                         nential in the size of the largest connected component,
+                                           A*
+                              50           Components
+                                                                                                                         k, instead of the size of the entire scene. Fig. 6c shows
+                                           Greedy                                                                        that k ≈ n/2 for n ≤ 8 and increases when n = 10,
+    Expected Duration (s)
+
+
+
+
+                              40           Random
+                                                                                                                         causing the large increase in planning time between
+                              30
+                                                                                                                         n = 8 and n = 10 in Fig. 6b. With fixed computa-
+                              20
+                                                                                                                         tional resources, these results show that the connected
+                              10                                                                                         components algorithm is capable of solving most scenes
+                               0
+                                       4         6          8          10     12
+                                                                                                                         of size 2n in the amount of time it would take A-Star
+                                                     Number of Objects
+                                                                                                                         to solve a scene of size n. For sparse scenes, the con-
+                              (a) Expected Search Duration                         (b) Example Scenes                    nected components algorithm achieves optimality with
+                                                 th                                                                      planning times that are comparable those of the greedy
+Fig. 7 (a) 95 percentile of expected time to find the target
+(b) Two example scenes where greedy performed poorly. The                                                                algorithm.
+black lines denote the workspace boundary.                                                                                   One surprising results of our experiments is that,
+                                                                                                                         while greedy is not optimal in the general case, it does
+our implementation considers the target at a certain                                                                     remarkably well on average. We found that in 50% of
+pose visible if and only if it is entirely visible. This is                                                              the 2000 different scenes, the greedy algorithm pro-
+implemented by sampling points on the surface of the                                                                     duced the optimal sequence. Our explanation for greedy’s
+target, raytracing from the sensor to each point, and                                                                    performance is that the geometry of our workspace en-
+verifying that no rays are occluded.                                                                                     forces a tradeoff between the volume occluded by an
+                                                                                                                         object and the number of objects that block its accessi-
+    We present results from scenes with 4, 6, 8, 10, and
+                                                                                                                         bility: For an object to occlude a large volume it must
+12 objects in Fig. 6 along with the 95% confidence in-
+                                                                                                                         be near the front of the workspace, which makes it un-
+tervals. We conducted approximately 400 simulations
+                                                                                                                         likely that multiple objects can be placed in front of
+for each different number of objects, resulting a in to-
+                                                                                                                         it.
+tal of 2000 different scenes. The data in Fig. 6a shows
+that the greedy algorithm becomes increasingly sub-                                                                          To see the greedy’s worst-case behavior, we plotted
+optimal as the number of objects increases. All three                                                                    the expected time to find the target for the 5% of scenes
+algorithms significantly outperform the random algo-                                                                     where greedy performed worst in Fig. 7a. Across all
+rithm, which serves as a rough upper bound for the ex-                                                                   the scenes, the worst performance was 2.04 times the
+pected search duration. Unfortunately, the optimality                                                                    expected duration of the optimal sequence. We show
+of A-Star comes with the cost of exponential complex-                                                                    two example scenes where greedy performs poorly in
+ity in the number of objects. This complexity causes the                                                                 Fig. 7b. Both scenes include small bottles blocking ac-
+planning time of A-Star to dominate the other planning                                                                   cess to large boxes. There is very little volume hidden
+times shown in Fig. 6b (note the logarithmic scale).                                                                     behind the bottles, so the boxes are—suboptimally—
+    While still optimal in all 2000 scenes, the connected                                                                removed late in the plan.
+components algorithm achieves much lower planning                                                                           If the goal is to minimize the total time to plan
+times than A-Star. By running A-Star on smaller sub-                                                                     and also execute the search, then we must trade-off the
+problems, the connected components algorithm is expo-                                                                    gains in planning time achieved by the greedy algorithm
+Object Search by Manipulation                                                                                         9
+
+
+with the extra actions the robot needs to execute due          Table 1 Planning and Execution Times
+to the greedy algorithm’s suboptimality. In a setting
+                                                                               Total Time    Planning   Execution
+where action executions are fast and greedy is nearly
+optimal, one should use the greedy algorithm. If action                Shelf        132.7s      16.1s      116.6s
+                                                                     Cabinet         94.6s      26.1s       68.5s
+executions are slow and greedy plans are increasingly                 Fridge        242.0s      16.7s       225.3
+suboptimal (e.g. in environments with a large number
+of objects), one should use the connected-components
+algorithm.
+                                                               ronments in our lab. We display these images as the
+                                                               leftmost column in Fig. 10.
+6.1 Real Robot Implementation                                      Limitations of our robot’s perception system and
+                                                               the difference between the sizes of a human arm/hand
+We implemented the greedy and connected components             and our robot’s manipulator prevented us from run-
+algorithms on our robot HERB. We used HERB’s cam-              ning our planner directly on these scenes. Therefore,
+era and the MOPED (Martinez et al 2010) system to              we constructed new scenes that are scaled up to the
+detect and locate objects in the scene. We present an          dimensions of HERB’s manipulator and consist of ob-
+example scene where HERB successfully found the tar-           jects that our perception system can reliably detect.
+get object using the greedy algorithm in Fig. 8. In this       We attempted to faithfully mimic the relative size and
+scene the target object, a battery pack, is hidden be-         configuration of objects in the original scenes as much
+hind the large box, which also occludes the largest vol-       as possible. We hid the target object randomly in the
+ume. Since the large box is inaccessible, the greedy           occluded portion of the table.
+planner compares the utilities of the other three ob-              We present snapshots from our robot’s search for
+jects, and removes the largest utility object at each step.    the target as the rows of Fig. 10. All plans were auto-
+Even though the large box is hiding a large volume, the        matically generated by the connected components al-
+greedy planner removes it last, resulting in a long task       gorithm and HERB successfully found the target in all
+completion time.                                               three scenes. Tab. 1 shows the planning time, execu-
+    In Fig. 9 the scene is the same but HERB uses the          tion time, and the total time it took the robot to find
+connected components algorithm. There are three con-           the object. Note that execution time is the dominating
+nected components in this scene {BlueBox}, {Bottle},           factor, emphasizing the importance of generating short
+and {LargeBox, SmallBox}. The connected components             plans when searching for objects with a real robot.
+algorithm considers the collective utilities of multiple
+objects from each connected component, including both
+U (SmallBox) and U (SmallBox, LargeBox). The utility           7 Planning to Place Objects
+of SmallBox is very small compared with the other im-
+mediately accessible objects, but combined with the            The robot must place an object down before picking
+LargeBox, their utility is large enough that the algo-         up another one. If the robot is allowed to place the
+rithm removes SmallBox as the first object. It then re-        object at a new pose where it creates new visibility or
+moves the large box and finds the target object. We            accessibility relations, then the object search problem
+present the actual footage of these experiments at             becomes a version of reconfiguration planning which is
+http://youtu.be/i06GBj1iDOo.                                   known to be NP-Hard (Wilfong 1988). We avoid this
+                                                               complexity by placing objects only at poses that do
+                                                               not create new accessibility or visibility relations.
+6.2 Performance in Human Environments                              Our formulation requires us to compute the time
+                                                               it takes to manipulate an object before we decide the
+Objects are not distributed randomly in real human en-         arrangement. We use fixed placement poses on a nearby
+vironments: they display a structure specific to human         empty surface to satisfy this constraint. We found this
+clutter. We conducted a simple evaluation of our plan-         to be a reasonable strategy in practice: Even when the
+ner by creating scenes which are similar in structure to       robot is working in a densely crowded cabinet shelf,
+human clutter.                                                 there is usually a nearby counter or another shelf to
+    For this evaluation we identified three different places   place objects on.
+where a robot might need to search for an object by                However, one can also re-use the explored space to
+manipulation: a bookshelf, a cabinet, and a fridge. We         place objects: after an object is picked up and the robot
+captured images of the natural clutter in these envi-          sees the volume behind that object, the planner can
+10                                                                                                  Mehmet R. Dogar et al.
+
+
+
+
+Robot's View
+
+
+
+
+U(   ) = 49                    U(   ) = 19                     U(   )=6                      U(   ) = 90
+U(   ) = 19                    U(   )=6
+U(   )=6
+
+Fig. 8 Greedy planner. We present the utility of all accessible objects at each step. The pose of the target (unknown to the
+robot) is marked with dashed lines in the illustration.
+
+
+                                                                to be found anywhere in the workspace. However, hu-
+                                                                man environments are not random: semantic knowl-
+Robot's View                                                    edge about the environment provides useful information
+                                                                about where a hidden object may be found. For exam-
+                                                                ple, a can of soda is more likely to be in the refrigerator
+                                                                than in the dish washer.
+                                                                    There are several existing techniques for learning co-
+U(    ) = 52 U( ) = 19                                          occurrence probabilities objects (Kollar and Roy 2009;
+                                                                Wong et al 2013) in real environments. We can natu-
+U(   ) = 49 U(   )=6
+                                                                rally incorporate this type of semantic knowledge into
+                                                                the prior distribution P0 (x). The prior distribution changes
+Fig. 9 Connected-components planner. The utilities of all       the volume revealed by each target and can be directly
+prefixes from each connected component are presented at each
+step.
+                                                                exploited by same the greedy, A-Star, and connected
+                                                                components algorithms described above.
+                                                                    For example, suppose that the robot is searching for
+safely use this volume. In particular, for an arrangement       a bottle of mustard in the refrigerator. Fig. 12a shows
+AOseen , object AOseen (i) can be placed where:                 an example of this scenario where the refrigerator con-
+ – it avoids penetrating VAOseen (i+1,|Oseen |) ,               tains a small bottle of ketchup K and two large food
+ – it avoids occluding VAOseen (i+1,|Oseen |) ,                 containers A and B. The mustard M is hidden behind the
+ – it avoids blocking access to the objects                     bottle of ketchup. Assuming that the robot has no prior
+   AOseen (i + 1, |Oseen |),                                    over the location of the mustard, VA , VB  VK . Assuming
+ – it avoids colliding the placement poses of the objects       TA = TB = TK , the optimal arrangement with no prior
+   AOseen (1, i − 1).                                           distribution is A → B → K because U ({A, B}) > U(K)
+                                                                and U (B) > U (K).
+In Fig. 11 we illustrate each of these constraints and
+the remaining feasible placement poses for an object.               However, this plan ignores important semantic knowl-
+    Surprisingly, certain scene structures lead to very         edge about the scene: mustard is more likely to be found
+simple and fixed placement strategies. For example, in          near ketchup than the containers of food. This knowl-
+a scene where there are no accessibility relations and          edge causes P0 (x), shown in Fig. 12b, to be peaked
+no joint occlusions (where the greedy algorithm is op-          around K. This prior influences the revealed volumes
+timal), an object can be placed where it was picked up:         such that VK  VA , VB , the opposite relationship as
+the robot lifts an object, looks behind it, and places          above. This prior knowledge changes the optimal ar-
+it back. This strategy respects the constraints listed          rangement to K → A → B because U (K) > U({A, B}) and
+above.                                                          reveals the mustard more quickly.
+
+
+8 Encoding Semantic Knowledge                                   9 Replanning for Hidden Objects
+
+All of our examples of the object search by manipula-           All of the algorithms described above can be easily gen-
+tion problem assume that the target is equally likely           eralized to handle environments that contain hidden ob-
+Object Search by Manipulation                                                                                                   11
+
+
+
+
+Fig. 10 Example executions on scenes inspired by real human environments. Scenes are inspired from a cluttered human
+shelf (top), a cabinet (center), and a fridge (bottom).
+
+
+
+
+Fig. 11 An example illustrating placement contraints. (a) In this scene the small box is moved to the left and then the large
+box is picked up. Now the planner must place the large box. The large box cannot be placed where (b) it will penetrate the
+volume which is not explored yet; (c) it will occlude the volume which is not explored yet; (d) it will block access to the objects
+which are not moved yet; (e) it will collide with the new poses of the objects which are already moved. (f) The combined
+placement constraints for the large box.
+
+
+
+
+                 VB
+                   B       VA
+  VK K                                                             Fig. 13 Example of replanning on a scene with two hidden
+                       A                                           objects. Each replanning stage is shown as a separate frame
+                                                                   along with the corresponding plan. Hidden objects are shown
+                                                                   as semi-transparent and the workspace bounds are indicated
+                                                                   by a black line.
+
+    (a) Refrigerator Scene        (b) Prior Distribution P0 (x)
+
+Fig. 12 Example scene where semantic knowledge influences
+the optimal order of removing objects. The robot is search-
+ing for the mustard (dotted circle) and has a strong prior
+                                                                   optimal given the available information if there is no
+distribution that it is near the ketchup (K).                      a priori information about the type, number, or loca-
+                                                                   tion of the hidden objects and the plans are generated
+                                                                   using an optimal algorithm in each updated scene. If
+jects in addition to the target. However, objects must             there are k hidden objects, then this replanning strat-
+be smaller than the target object to avoid the danger of           egy multiplies the total planning time of an optimal
+the arm colliding with an hidden object while search-              algorithm by a factor of O(k). In the case of the greedy
+ing for the target. If this condition holds, then one can          or random algorithm, the replanning adds O(k) over-
+simply re-execute the planner on the remaining objects             head from reevaluating visibility after each object is
+whenever an hidden object is revealed. This strategy is            revealed.
+12                                                                                                   Mehmet R. Dogar et al.
+
+
+    Fig. 13 shows an example of replanning on a scene                                A         {B,C} ...              ...
+containing six objects. Two objects, shown as semi-                                                          A
+transparent in the figure, are initially hidden and are              {A,B,C}                   {A,C}
+                                                                                     B
+revealed once the occluding objects are removed. The
+                                                                                                                      ...
+robot begins by executing the connected components                                                           C
+                                                                                     C         {A,B} ...
+planner on a scene containing the four visible objects.
+After executing the first two actions in that plan, the
+robot detects that a new object has been revealed and                                             found
+replans for the remaining objects. In this case, the opti-
+                                                             Fig. 14 Transition graph of the of the object search MDP.
+mal ordering is unchanged and the newly-revealed ob-         States (rounded rectangles) are sets of visible objects and
+ject is simply appended to the existing plan. After ex-      actions (squares) correspond to removing an object from the
+ecuting another action, the second hidden object is re-      scene. Each action has a probability of revealing target and
+                                                             transitioning into found.
+vealed and the robot must replan a second time. This
+time, order of the optimal sequence is changed by the
+addition of the hidden object and it would be subopti-       A Formulation as a Markov Decision Process
+mal to continue executing the previous plan.
+                                                             In this section, we formulate the object search problem as
+                                                             a Markov decision process (MDP) and show that the opti-
+10 Future Work                                               mal policy minimizes the expected time to find the target.
+                                                             Next, we show that the MDP is deterministic and that each
+                                                             policy corresponds to an arrangement. This provides insight
+We are excited about exploring this problem deeper and       into how the A-Star search algorithm can be used to find the
+relaxing some of the simplifying assumptions in future       optimal policy for a stochastic problem.
+work.                                                            A MDP is the four-tuple (S, A, Γ, R) where S is the state
+Integrated Motion Planning We use a motion plan-             space, A is the action space, Γ (s0 |s, a) is the transition model,
+                                                             and R(s, a) is the reward function (Kaelbling et al 1996).
+ner for the manipulator that is conceptually decoupled           For the object search problem, the state s ∈ 2Oseen ∪
+from finding the optimal arrangement. However, there         {found} is the set of visible objects remaining in the scene
+are aspects of the object search problem that can be         and an absorbing goal state found that corresponds to the
+integrated into the motion planning process. For exam-       target being visible. The scene starts with all objects present
+                                                             s0 = Oseen and the robot sequentially chooses an object a ∈
+ple, there may be multiple trajectories for grasping an      s to remove. After removing a, we transition to the successor
+object that require differing numbers of objects to be       state s0 according to
+moved out of the way. In this respect, we are excited                     (      V
+about studying how a more complex motion planner,                0
+                                                                            1 − a|s : s0 = s \ {a}
+                                                             Γ (s |s, a) = Va|s Vs
+e.g. one returning a minimum-constraint violation tra-                       V
+                                                                                       : s0 = found
+                                                                               s
+
+jectory (Hauser 2012), can be integrated into our sys-
+                                                             and receive reward R(s, a) = −Ta . This process continues
+tem. The object search formulation can also take into        until there is a transition into found and the MDP terminates
+account the motion of moving from one object to the          with zero reward. Fig. 14 shows a graphical depiction of the
+next one, trying to minimize the time spent in between.      state transition graph for a scene with three objects {A, B, C}
+                                                             and no accessibility relations.
+This can make the object search problem similar to the
+                                                                  A policy π : S → A specifies which action π(s) to take
+traveling agent problem (Moizumi and Cybenko 2001)           when in state s. In the case of the object search problem, π
+where the latencies between nodes produced are pro-          dictates which object to remove from the scene at each step.
+duced by a motion planner.                                   We wish to find the optimal policy π ∗ that maximizes the
+                                                                                                  P|Oseen |
+Improved Perception Model. Our framework allows              sum of expected future reward E[ t=1            R(st , at )].
+                                                                  Any policy π induces the value function Λπ : S → R,
+for any sensor model. We will explore relaxing the con-      where Λπ (s) is the sum of expected future reward from start-
+servative requirement of the entire target being visible     ing in state s and following π to termination.3 The value
+to other perceptual models that address partial visibil-     function of the optimal policy π ∗ satisfies the Bellman equa-
+ity.                                                         tion
+                                                                                              h                  i
+Integrated Sensor Planning. Aside from reaching                 ∗                                           ∗
+                                                                              X
+                                                             Λπ (s) = max         Γ (s0 |s, a) R(s, a) + Λπ (s0 ) ,        (5)
+                                                                       a∈A
+to objects, the robot does not move its base in our cur-                     s0 ∈S
+
+rent implementation. Through combining the ability of        which recursively relates the value of state s with that of its
+search by manipulation with sensor planning, the robot       successors (Kaelbling et al 1996).
+can find targets faster. Sensor planning would include           We can take advantage of the structure of the object
+working with multiple camera poses and planning for          search problem to reduce the Bellman equation to a simpler
+the base when searching for a target in a larger envi-        3
+                                                                 We use Λπ in place of V π to denote the value function to
+ronment.                                                     avoid confusion with revealed volume Vs .
+Object Search by Manipulation                                                                                                                          13
+
+
+form. First, the object search problem has a sparse transi-           Proof The proof proceeds similar to the proof of Theorem 1.
+tion model: Γ (s0 |s, a) = 0 for all s0 6∈ {s \ a, found}. Second,    We create a new arrangement A that is identical to A∗ ex-
+Λπ (found) = 0 for the absorbing goal state. Using these ob-          cept that the two adjacent sequences are swapped:
+servations, we can simplify Eq. 5 to                                  A(i, i + k − j) = A∗ (j + 1, k) and
+                                                                      A(i + k − j + 1, k) = A∗ (i, j). A must be a valid arrangement
+                                                                      since we are given that no object in A∗ (i, j) is blocking ac-
+  ∗
+             h                           ∗
+Λπ (s) = max R(s, a) + Γ (s \ {a}|s, a)Λπ (s \ {a})
+         a∈s                                                          cess to A∗ (j + 1, k). Then we can compute the difference
+                                                                      E (A) − E (A∗ ) to be:
+                             ∗
+                                       i
+          + Γ (found|s, a)Λπ (found)
+                                                                         j                                         k
+                                            
+                           Va|s       ∗                                      VA∗ (l)
+                                                                                                                     
+                                                                                                                        VA∗ (l)
+                                                                                                                                                   
+       = max −Ta + 1 −            Λπ (s \ {a}) ,
+                                                                         X                                          X
+         a∈s                Vs                                                           · TA∗ (j+1,k)         −                     · TA∗ (i,j)
+                                                                         l=i
+                                                                               VOseen                              l=j+1
+                                                                                                                           VOseen
+which, surprisingly, has the same form as the value function
+                                                                          Since A∗ is optimal, E(A) − E(A∗ ) ≥ 0. After canceling
+of a deterministic MDP. This agrees with our earlier intuition:
+                                                                      out the common terms and rearranging, we are left with
+while the outcome the object search problem is stochastic, the
+optimal order of removing objects is completely deterministic.                              j                      k
+                                                                                                                   P
+                                                                                                                        VA∗ (l)
+                                                                                            P
+    In fact, π is equivalent to an arrangement Aπ   Oseen that
+                                                                                                 VA∗ (l)
+                                                                                           l=i                 l=j+1
+specifies an open-loop order in which to remove objects. Dur-                                              ≥
+ing execution objects are removed according to Aπ                                            TA∗ (i,j)             TA∗ (j+1,k)
+                                                    Oseen until
+the target is revealed and the robot halts (i.e. transitions to
+                                                                      Simply, U (A∗ (i, j)) ≥ U (A∗ (j + 1, k)).                                       u
+                                                                                                                                                       t
+found). This equivalence is what enables us to formulate the
+object search problem as a deterministic search in §4.
+                                                                          We state a lemma and leave its proof to future work.
+                                                                      Lemma 2 The relative ordering of objects in the optimal
+                                                                      arrangement of a connected component will be preserved in
+B Optimality of Connected Components                                  the optimal ordering for the complete scene. Formally, if A∗
+                                                                                                                                 c
+                                                                      is the optimal arrangement for a connected component c, and
+We present a partial proof of optimality for Algorithm 1.             A∗o is the optimal arrangement of o, such that c ⊆ o, then
+   We state a property of the collective utility as a lemma.
+                                                                                  i < j =⇒ A∗−1
+                                                                                            o   (A∗         ∗−1
+                                                                                                  c (i)) < Ao   (A∗
+                                                                                                                  c (j))
+Lemma 1 Given an arrangement Ao ,
+                                                                      where 1 ≤ i, j ≤ |c|, and A∗−1
+                                                                                                 o   returns the index of an object
+                                                                      in the arrangement A∗  o.
+          U (Ao (1, |o|)) ≥ U (Ao (1, k))
+=⇒ U (Ao (k + 1, |o|)) ≥ U (Ao (1, |o|))                                  Finally we can prove that the connected components al-
+                                                                      gorithm is optimal.
+In other words, if the utility of the complete arrangement is
+larger than the utility of the first k objects, then the utility of   Theorem 3 Let’s say we are given m connected components
+the last |o| − k objects must be larger than the utility of the       of a set of objects, o, and we are also given an optimal ar-
+complete arrangement.                                                 rangement for each connected component Aci for i = 1, . . . , m.
+                                                                      Let’s say we computed the utility of all sequences of objects
+                                                                      in the form Aci (1, j) for all i = 1, . . . , m and j = 1, . . . , |ci |,
+Proof We are given that
+                                                                      and found Ac∗ (1, j ∗ ) to have the maximum utility. Then an
+             VAo (1,k) + VAo (k+1,|o|)        VAo (1,k)               optimal arrangement for o starts with Ac∗ (1, j ∗ ).
+                                          ≥
+             TAo (1,k) + TAo (k+1,|o|)        TAo (1,k)               Proof Assume that the optimal arrangement A∗          o does not
+                                                                      start with Ac∗ (1, j ∗ ). We will prove that this is not possible.
+Rearranging yields                                                        Given an arrangement of o, we can view it as a series
+                                                                      of partitions, where each partition consists of a contiguous
+      VAo (k+1,|o|) · TAo (1,k) ≥ VAo (1,k) · TAo (k+1,|o|)           sequence of objects from the same connected component. Due
+                                                                      to Lemma 2, each such partition in A∗      o can be represented
+Adding VAo (k+1,|o|) · TAo (k+1,|o|) to both sides and rear-          as subsequences of the connected component arrangements
+ranging, we get                                                       Aci . In particular, we are interested in two partitions of the
+                                                                      optimal arrangement of o:
+           VAo (k+1,|o|)       VAo (1,k) + VAo (k+1,|o|)
+                           ≥                                                            A∗             0
+           TAo (k+1,|o|)       TAo (1,k) + TAo (k+1,|o|)                                 o = [Ac0 (1, j ) . . . Ac∗ (k, l) . . . ]
+
+
+                                                                 u
+                                                                 t    where c0 is one of the connected components, and 1 ≤ j 0 ≤ |c0 |.
+                                                                      Ac∗ (k, l) is the partition that includes the object Ac∗ (j ∗ ),
+                                                                      hence k ≤ j ∗ ≤ l. We know that Ac∗ (1, j ∗ ) has the maximum
+Theorem 2 Given an optimal arrangement of a scene A∗ ,
+                                                                      utility of all the sequences in the form Aci (1, j) where ci is
+for any two adjacent sequence of objects in the arrangement
+                                                                      any connected component and j = 1, . . . , |ci |. Then,
+A∗ (i, j) and A∗ (j + 1, k), where i ≤ j < k, if there are nei-
+ther accessibility constraints nor joint occlusions between the       U (Ac∗ (1, j ∗ )) > U (Ac∗ (1, k − 1))                                       (6)
+objects in the two sequences (i.e. if the sequences are from
+different connected components), then the utility of the for-         and also
+mer sequence is greater than or equal to the utility of the
+latter sequence: U (A∗ (i, j)) ≥ U (A∗ (j + 1, k)).                   U (Ac∗ (1, j ∗ )) > U (Ac0 (1, j 0 ))                                        (7)
+14                                                                                                        Mehmet R. Dogar et al.
+
+
+     Using Lemma 1 and Eq. 6, we get                                van Hoof H, Kroemer O, Ben Amor H, Peters J (2012) Max-
+                                                                        imally informative interaction learning for scene explo-
+                  U (Ac∗ (k, j ∗ )) > U (Ac∗ (1, j ∗ ))                 ration. In: IEEE/RSJ International Conference on Intel-
+                                                                        ligent Robots and Systems, IEEE, pp 5152–5158
+Then from Eq. 7,
+                                                                    Hopcroft J, Tarjan R (1973) Algorithm 447: efficient algo-
+U (Ac∗ (k, j ∗ )) > U (Ac0 (1, j 0 ))                         (8)       rithms for graph manipulation. Communications of the
+                                                                        ACM 16(6)
+    Considering the utilities of all the partitions in A∗o up to    Kaelbling L, Lozano-Perez T (2012) Unifying perception, es-
+Ac∗ (k, l), we know that they should be ordered in descreasing          timation and action for mobile manipulation via belief
+order of utility and be larger than Ac∗ (k, j ∗ ) (Theorem 2):          space planning. In: IEEE International Conference on
+                                                                        Robotics and Automation
+                U (Ac0 (1, j 0 )) > ... > U (Ac∗ (k, j ∗ ))         Kaelbling LP, Littman ML, Moore AW (1996) Reinforcement
+which contradicts Eq. 8.                                       u
+                                                               t        learning: A survey. Journal of Artificial Intelligence Re-
+                                                                        search
+                                                                    Kollar T, Roy N (2009) Utilizing object-object and object-
+Acknowledgements Special thanks to the members of the                   scene context when planning to find things. In: IEEE In-
+Personal Robotics Lab at Carnegie Mellon University for in-             ternational Conference on Robotics and Automation
+sightful comments and discussions. This material is based           Ma J, Chung TH, Burdick J (2011) A probabilistic framework
+upon work supported by NSF-IIS-0916557 and NSF-EEC-                     for object search with 6-dof pose estimation. International
+0540865.                                                                Journal of Robotics Research 30(10):1209–1228
+                                                                    Martinez M, Collet A, Srinivasa S (2010) MOPED: A Scal-
+                                                                        able and Low Latency Object Recognition and Pose Es-
+                                                                        timation System. In: IEEE International Conference on
+References
+                                                                        Robotics and Automation
+                                                                    Moizumi K, Cybenko G (2001) The traveling agent problem.
+Anand A, Koppula HS, Joachims T, Saxena A (2013)                        Mathematics of Control, Signals, and Systems (MCSS)
+   Contextually guided semantic labeling and search for                 14(3):213–232
+   three-dimensional point clouds. International Journal of         Ota J (2009) Rearrangement planning of multiple movable
+   Robotics Research 32(1):19–34                                        objects by a mobile robot. Advanced Robotics pp 1–18
+Baird D (1995) Experimentation: An introduction to mea-             Overmars MH, Nieuwenhuisen D, Nieuwenhuisen D, Frank
+   surement theory and experiment design. Prentice-Hall                 A, Overmars H (2006) An effective framework for path
+   (Englewood Cliffs, NJ)                                               planning amidst movable obstacles. In: In International
+Ben-Shahar O, Rivlin E (1998) Practical pushing planning                Workshop on the Algorithmic Foundations of Robotics
+   for rearrangement tasks. IEEE Transactions on Robotics           Shubina K, Tsotsos J (2010) Visual search for an object in a
+   and Automation 14:549–565                                            3d environment using a mobile robot. Computer Vision
+van den Berg JP, Stilman M, Kuffner J, Lin MC, Manocha D                and Image Understanding pp 535–547
+   (2008) Path planning among movable obstacles: A proba-           Sjo K, Lopez D, Paul C, Jensfelt P, Kragic D (2009) Object
+   bilistically complete approach. In: In International Work-           search and localization for an indoor mobile robot. Jour-
+   shop on the Algorithmic Foundations of Robotics, pp 599–             nal of Computing and Information Technology pp 67–80
+   614                                                              Srinivasa S, Berenson D, Cakmak M, Collet Romea A, Dogar
+de Berg M, Cheong O, van Kreveld M, Overmars M (2008)                   M, Dragan A, Knepper RA, Niemueller TD, Strabala
+   Computational Geometry: Algorithms and Applications.                 K, Vandeweghe JM, Ziegler J (2012) Herb 2.0: Lessons
+   Springer                                                             learned from developing a mobile manipulator for the
+Chen P, Hwang Y (1991) Practical path planning among                    home. Proceedings of the IEEE 100(8):1–19
+   movable obstacles. In: IEEE International Conference on          Stilman M, Schamburek JU, Kuffner J, Asfour T (2007) Ma-
+   Robotics and Automation                                              nipulation planning among movable obstacles. In: IEEE
+Diankov R, Kuffner J (2008) OpenRAVE: A Planning Archi-                 International Conference on Robotics and Automation
+   tecture for Autonomous Robotics. Tech. Rep. CMU-RI-              Wilfong G (1988) Motion planning in the presence of movable
+   TR-08-34, Robotics Institute                                         obstacles. In: Proceedings of the Fourth Annual Sympo-
+Dogar M, Srinivasa S (2012) A planning framework for non-               sium on Computational Geometry, pp 279–288
+   prehensile manipulation under clutter and uncertainty.           Wong LL, Kaelbling LP, Lozano-Pérez T (2013)
+   Autonomous Robots 33(3):217–236                                      Manipulation-based active search for occluded ob-
+Espinoza J, Sarmiento A, Murrieta-Cid R, Hutchinson S                   jects. In: IEEE International Conference on Robotics
+   (2011) Motion Planning Strategy for Finding an Object                and Automation
+   with a Mobile Manipulator in Three-Dimensional Envi-             Ye Y, Tsotsos J (1995) Where to look next in 3d object search.
+   ronments. Advanced Robotics                                          In: IEEE International Symposium on Computer Vision
+Gupta M, Sukhatme G (2012) Interactive perception in clut-          Ye Y, Tsotsos J (1999) Sensor planning for 3d object search.
+   ter. In: The RSS 2012 Workshop on Robots in Clutter:                 Computer Vision and Image Understanding 73(2):145–
+   Manipulation, Perception and Navigation in Human En-                 168
+   vironments
+Hart PE, Nilsson NJ, Raphael B (1968) A formal basis
+   for the heuristic determination of minimum cost paths.
+   IEEE Transactions On Systems Science And Cybernetics
+   4(2):100–107
+Hauser K (2012) The minimum constraint removal problem
+   with three robotics applications. In: Workshop on the Al-
+   gorithmic Foundations of Robotics (WAFR)
+

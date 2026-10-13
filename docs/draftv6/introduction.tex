@@ -1,49 +1,135 @@
-% 核心观点：有限示范下，动作拟合与任务完成之间存在关系保留和执行信息利用两个缺口。
-% 叙述逻辑：实际问题 -> 两个缺口 -> 互补方法 -> 条件性任务后果分析与验证范围。
+% 第一段：重要性与挑战 -> 定义及生活/手术实例 -> 交互改变决策条件 -> 遮挡情形对比 -> 视觉动作策略要求。
+% 英文为编译正文；中文为逐句对应工作稿。以下旧版注释保留供后续段落修订参考。
 \section{Introduction}
-% \label{sec:intro}
-% 机器人操作中，工具拨空后仍沿原计划运动，或目标未到达区域便进入后续动作，都会使执行难以持续推进。
-% 视觉动作模仿学习从示范中学习控制，动作块预测则为连续操作提供一段未来计划。
-% 但在有限示范下，良好的动作拟合不足以说明策略能辨识上述偏差并作出调整。
-% 本文研究\emph{有限示范下视觉动作模仿策略在执行偏离预期时难以持续推进任务完成的问题，
-% 通过语义引导的任务关系表示与历史条件实时反馈，提升策略对执行偏差的辨识与调整能力。}
+\label{sec:intro}
 
-% 这一问题包含两个互补缺口。首先，有限动作监督未必足以使视觉表示保留关键控制关系。
-% 例如，在遮挡物移开后推动目标进入区域，策略需要区分目标是否暴露、工具相对目标的位置以及目标与区域的关系。
-% 这些关系虽然存在于RGB中，却不一定能仅凭少量动作示范被充分学到。
-% 语义监督提供对象类别与空间范围，关系监督进一步要求表示保留与操作有关的几何量。
-% 它们提供的是有限数据下的学习先验，而不是给已有RGB增加新的测量信息；
-% 分割错误、关系选择不当或动作预测未利用这些关系，都可能抵消收益。
 
-% 其次，准确表示生成动作块时的画面，仍不能保证执行期间的信息充分。
-% 当工具接近目标时，目标可能移动或被遮挡；相似的当前几何关系也可能对应接近、接触或滑脱等不同动态状态。
-% 新观测用于发现原计划形成后的变化，历史用于区分单帧难以确定的动态上下文。
-% 动作块策略可以通过重规划或时间集成使用新观测，并非完全开环；
-% 但这些机制不自动等同于利用观察历史、针对当前计划学习局部修正。
-% 本文因此研究计划条件反馈，而不预设提高重规划频率或使用循环网络就必然改善表现。
-% \draftnote{待补动机图：用可追溯的执行序列标出观察、基础计划、接触变化与修正目标；未验证的失效原因仅作为待检验解释。}
+Reliable execution of sequential manipulation tasks is essential for practical robotic applications but remains challenging~\cite{xu2018ntp}.
+Sequential manipulation tasks require a robot to achieve an overall goal through a sequence of interrelated operations~\cite{liang2022sensorimotor}.
+Such tasks arise in practical applications ranging from household
+cleaning, where a tablecloth is lifted to clear debris beneath it
+and then restored, to surgery, where tissue is retracted to expose
+the target region before resection~\cite{ge2021electrosurgery}.
+A key challenge of these tasks is that preceding interactions change the conditions
+under which subsequent operations can be performed.
+For example, compared with simple pick-and-place tasks involving
+visible and accessible targets, manipulation under occlusion requires
+the robot to assess whether prior actions have made the target visible
+and accessible or further manipulation is needed~\cite{dogar2014search,attanasio2020retraction}.
+Consequently, reliable execution requires a policy that adapts
+subsequent actions to interaction outcomes observed through visual feedback.
 
-% 针对表示与执行信息两个缺口，本文构建语义引导的任务关系表示与历史条件残差反馈框架。
-% 基础策略结合RGB、语义图及几何监督查询生成动作块；冻结基础策略后，
-% 反馈分支根据新观测、因果历史和当前计划修正尚未执行的动作槽位。
-% 两条路径服务于同一任务完成目标，但作用不同：表示监督不能补出未来变化，
-% 历史反馈也不能自动保证识别正确的对象关系。
-% 本文的核心待验证主张是，二者在表示可靠、修正有效且时序对齐的条件下，
-% 能够共同改善有限示范训练的动作块策略表现，而不是对任意任务给出无条件保证。
+Visuomotor imitation learning offers a practical approach to sequential
+manipulation by reducing the need for explicit interaction modeling,
+but reliable execution remains difficult with limited demonstrations.
+It learns a policy that maps visual and proprioceptive observations
+to actions using expert demonstrations.
+For example, Action Chunking with Transformers (ACT)~\cite{zhao2023act}
+has been used in Mobile ALOHA to learn coordinated mobile manipulation,
+including opening a cabinet and storing a cooking pot~\cite{fu2024mobilealoha}.
+Similarly, Diffusion Policy~\cite{chi2023diffusion} has been adopted
+in the Universal Manipulation Interface (UMI) framework to learn
+bimanual cloth folding and multi-step dish washing~\cite{chi2024umi}.
+However, execution errors can lead a policy into states poorly covered
+by limited demonstrations, where its predicted actions may no longer
+suit the actual task conditions, compromising subsequent operations
+and task completion~\cite{ross2011}.
 
-% 本文围绕三个方面组织工作：
-% \begin{enumerate}
-% \item 以动作的任务后果统一分析关系表示的信息损失、历史的决策价值及反馈时效，
-% 明确潜在信息价值与实际闭环收益的区别；
-% 已知性能差分与决策风险分解作为分析工具，而非新的基础定理。
-% \item 构建语义与关系监督的动作块策略及计划条件历史反馈，
-% 通过目标槽位对齐将局部修正作用于对应的未来动作。
-% \item 设计表示与反馈的交叉对照、示范规模实验和机制诊断，
-% 分别检验任务表现、两条路径的贡献以及反馈失效条件。
-% \end{enumerate}
-% \draftnote{待补：以上实验设计尚不构成已完成的实验证据；根据最终核验结果改写实验贡献并填入核心定量结论。}
-% 本文中的有限示范指机器人操作示范受限，不等于总监督资源受限；
-% 额外分割标签、预训练及人工审核成本均需披露。
-% 单一示范规模的改善只能支持该设置下的有效性，样本效率主张需要多个规模的比较。
-% 第二节定位相关工作，第三节给出问题定义与条件性分析，第四节描述方法，
-% 第五节围绕研究问题组织验证，第六节讨论适用边界与结论。
+Prior work has focused on improving the robustness of visuomotor policies
+to execution deviations by expanding data coverage, improving visual
+representations, and adapting actions during execution.
+Ross et al.~\cite{ross2011} expanded the training dataset with expert
+action labels for states visited by the learned policy, while
+Laskey et al.~\cite{laskey2017dart} injected noise into expert actions
+during demonstration collection to obtain examples of recovery behavior.
+Although data coverage expansion improves coverage of states arising
+from execution deviations, it requires additional expert supervision
+or modifications to demonstration collection, limiting its applicability
+when only a fixed demonstration set is available.
+Zhu et al. introduced object-centric visual representations
+for robust visuomotor imitation~\cite{zhu2023viola} and incorporated
+3D object representations to improve generalization across
+backgrounds, viewpoints, and object instances~\cite{zhu2023groot}.
+Although these methods improve generalization to visual variations,
+robust object representations alone do not ensure that subsequent
+actions remain appropriate when execution deviates from demonstrations.
+Ankile et al.~\cite{ankile2024resip} trained a residual policy through
+reinforcement learning to correct the actions of a frozen imitation
+policy, while Sendai et al.~\cite{a2c2} learned corrections from
+demonstrations using updated observations and base-policy context
+to refine actions during chunk execution.
+However, reinforcement-based correction requires additional environment
+interaction, whereas corrections based on updated observations and
+base-policy context may be insufficient when appropriate adjustments
+depend on preceding actions and their observed effects.
+
+In this work, we develop a theory-guided visuomotor imitation learning
+framework that combines task-relevant representation learning with
+history-conditioned feedback to support sequential manipulation
+from limited demonstrations.
+Our analysis derives conditions linking imitation error and
+representation quality to task-failure bounds.
+It further identifies when updated observations and execution history
+provide additional information for predicting residual action errors,
+and when learned corrections can realize this benefit.
+Guided by this analysis, we supervise policy query tokens with task descriptors derived from semantic masks,
+encouraging the policy to retain information relevant to changing manipulation conditions.
+We then train a residual model that combines updated observations,
+the supervised query features, and action--response histories to
+adjust pending actions in the current plan according to observed
+interaction outcomes.
+Both the base policy and the residual model are trained from the same
+fixed demonstration set, without additional robot interaction
+for policy training.
+Simulation and real-world experiments demonstrate the effectiveness
+of the proposed framework in sequential manipulation tasks.
+
+% BEGIN INTRODUCTION IEEE REFERENCES (plain text)
+% Introduction 引用文献：由当前 references.bib 经 IEEEtran.bst 生成；编号与正文一致。
+% 此清单为编辑用纯文本注释；修改引用顺序或文献信息后需重新生成。
+%
+% Citation key: xu2018ntp
+% [1] D. Xu, S. Nair, Y. Zhu, J. Gao, A. Garg, L. Fei-Fei, and S. Savarese, “Neural task programming: Learning to generalize across hierarchical tasks,” in 2018 IEEE International Conference on Robotics and Automation (ICRA), 2018, pp. 3795–3802. [Online]. Available: https://arxiv.org/abs/1710.01813
+%
+% Citation key: liang2022sensorimotor
+% [2] J. Liang, B. Wen, K. Bekris, and A. Boularias, “Learning sensorimotor primitives of sequential manipulation tasks from visual demonstrations,” in 2022 International Conference on Robotics and Automation (ICRA), 2022, pp. 8591–8597. [Online]. Available: https://arxiv.org/abs/2203.03797
+%
+% Citation key: ge2021electrosurgery
+% [3] J. Ge, H. Saeidi, M. Kam, J. Opfermann, and A. Krieger, “Supervised autonomous electrosurgery for soft tissue resection,” in 2021 IEEE 21st International Conference on Bioinformatics and Bioengineering (BIBE), 2021, pp. 1–7. [Online]. Available: https://pmc.ncbi.nlm.nih.gov/articles/PMC10965307/
+%
+% Citation key: dogar2014search
+% [4] M. R. Dogar, M. C. Koval, A. Tallavajhula, and S. S. Srinivasa, “Object search by manipulation,” Autonomous Robots, vol. 36, no. 1, pp. 153–167, 2014. [Online]. Available: https://publications.ri.cmu.edu/object-search-by-manipulation-2
+%
+% Citation key: attanasio2020retraction
+% [5] A. Attanasio, B. Scaglioni, M. Leonetti, A. F. Frangi, W. Cross, C. S. Biyani, and P. Valdastri, “Autonomous tissue retraction in robotic assisted minimally invasive surgery—a feasibility study,” IEEE Robotics and Automation Letters, vol. 5, no. 4, pp. 6528–6535, 2020. [Online]. Available: https://eprints.whiterose.ac.uk/id/eprint/163725/
+%
+% Citation key: zhao2023act
+% [6] T. Z. Zhao, V. Kumar, S. Levine, and C. Finn, “Learning fine-grained bimanual manipulation with low-cost hardware,” in Robotics: Science and Systems, 2023. [Online]. Available: https://arxiv.org/abs/2304.13705
+%
+% Citation key: fu2024mobilealoha
+% [7] Z. Fu, T. Z. Zhao, and C. Finn, “Mobile ALOHA: Learning bimanual mobile manipulation with low-cost whole-body teleoperation,” arXiv:2401.02117, 2024. [Online]. Available: https://arxiv.org/abs/2401.02117
+%
+% Citation key: chi2023diffusion
+% [8] C. Chi, Z. Xu, S. Feng, E. Cousineau, Y. Du, B. Burchfiel, R. Tedrake, and S. Song, “Diffusion policy: Visuomotor policy learning via action diffusion,” arXiv:2303.04137v5, 2024. [Online]. Available: https://arxiv.org/abs/2303.04137v5
+%
+% Citation key: chi2024umi
+% [9] C. Chi, Z. Xu, C. Pan, E. Cousineau, B. Burchfiel, S. Feng, R. Tedrake, and S. Song, “Universal manipulation interface: In-the-wild robot teaching without in-the-wild robots,” in Robotics: Science and Systems, 2024. [Online]. Available: https://roboticsproceedings.org/rss20/p045.pdf
+%
+% Citation key: ross2011
+% [10] S. Ross, G. Gordon, and J. A. Bagnell, “A reduction of imitation learning and structured prediction to no-regret online learning,” in Proceedings of AISTATS, ser. PMLR, vol. 15, 2011, pp. 627–635. [Online]. Available: https://proceedings.mlr.press/v15/ross11a.html
+%
+% Citation key: laskey2017dart
+% [11] M. Laskey, J. Lee, R. Fox, A. Dragan, and K. Goldberg, “DART: Noise injection for robust imitation learning,” in Proceedings of the 1st Annual Conference on Robot Learning, ser. Proceedings of Machine Learning Research, vol. 78, 2017, pp. 143–156. [Online]. Available: https://proceedings.mlr.press/v78/laskey17a.html
+%
+% Citation key: zhu2023viola
+% [12] Y. Zhu, A. Joshi, P. Stone, and Y. Zhu, “VIOLA: Imitation learning for vision-based manipulation with object proposal priors,” in Proceedings of CoRL, ser. PMLR, vol. 205, 2023, pp. 1199–1210. [Online]. Available: https://proceedings.mlr.press/v205/zhu23a.html
+%
+% Citation key: zhu2023groot
+% [13] Y. Zhu, Z. Jiang, P. Stone, and Y. Zhu, “Learning generalizable manipulation policies with object-centric 3D representations,” in Proceedings of The 7th Conference on Robot Learning, ser. Proceedings of Machine Learning Research, vol. 229, 2023, pp. 3418–3433. [Online]. Available: https://proceedings.mlr.press/v229/zhu23b.html
+%
+% Citation key: ankile2024resip
+% [14] L. Ankile, A. Simeonov, I. Shenfeld, M. Torne, and P. Agrawal, “From imitation to refinement—residual RL for precise assembly,” arXiv:2407.16677v4, 2024. [Online]. Available: https://arxiv.org/abs/2407.16677v4
+%
+% Citation key: a2c2
+% [15] K. Sendai, M. Alvarez, T. Matsushima, Y. Matsuo, and Y. Iwasawa, “Leave no observation behind: Real-time correction for VLA action chunks,” arXiv:2509.23224, 2025. [Online]. Available: https://arxiv.org/abs/2509.23224
+% END INTRODUCTION IEEE REFERENCES

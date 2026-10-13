@@ -1,7 +1,7 @@
 \subsection{From Imitation Error to Task Performance}
 \label{sec:actionanalysis}
 Whether action error bounds task failure depends on where deviations occur and their subsequent task consequences.
-We establish this connection and show that transferring action risk to deployment
+We establish this connection and show that transferring imitation risk from demonstrations to deployment
 depends jointly on representation-level coverage and conditional action-error discrepancy.
 
 \subsubsection{Task-Performance Difference Between Policies}
@@ -132,16 +132,25 @@ for translating imitation accuracy into task-performance guarantees.
 We next examine the limitations of complete-history coverage
 and the role of representations in risk transfer.
 
-% \subsubsection{表示层面的覆盖与条件误差差异}
-\subsubsection{Representation-Level Coverage and Conditional Error Discrepancy}
-% 完整历史上的覆盖假设可因小幅动作偏差失效。
-Assumption~\ref{ass:democoverage} is restrictive for complete histories
-and can fail after a small action deviation (Appendix~\ref{app:historycoverage}).
-% 将历史编码为任务表示可以合并无关差异，但也可能合并需要不同动作的情形。
-Encoding histories into a task representation can merge irrelevant differences, but may also merge situations requiring different actions.
+\subsubsection{Imitation-Risk Transfer Through Representations}
+\label{sec:representationcoverage}
+To address the limitations of complete-history coverage, we analyze
+imitation-risk transfer in representation space.
+We derive a bound showing that compression can relax coverage
+requirements, while differences in conditional imitation error must also be accounted for.
+
+Assumption~\ref{ass:democoverage} can fail even after an arbitrarily small action deviation.
+For $T\ge2$, suppose the expert always executes $u_0=0$, whereas the learned policy executes
+an admissible $u_0=\varepsilon\ne0$.
+Histories recording $u_0=\varepsilon$ then occur under the learned policy
+but have zero probability under the expert demonstration distribution.
+No finite coverage constant $C$ can satisfy the assumption.
+
+% 表示可合并上述历史差异，但也可能丢失区分动作后果所需的信息。
+A representation can merge such distinctions, potentially relaxing coverage requirements,
+but may also discard information needed to distinguish action consequences.
 This tension between distributional alignment and information loss under a noninvertible representation
 also appears in domain-adaptation analyses~\cite{johansson2019support,zhao2019invariant}.
-The result below specializes that issue to action-risk transfer between reference and deployment distributions.
 
 % 固定策略、专家和同一个保留时间索引的可测因果编码器Z；mu_Z和nu_Z是部署与参考分布诱导的表示分布。
 For a fixed policy, expert, and common measurable causal encoder $Z=\phi(t,\mathcal H_t)$ retaining the time index, let $\mu_Z$ and $\nu_Z$ be the representation distributions induced by $\bar\mu_\pi$ and $\nu$.
@@ -166,14 +175,12 @@ If Assumption~\ref{ass:actionsensitivity} also holds, the performance-difference
        +TL\sqrt{C_\phi R_\nu(\pi)+D_\phi}.
  \label{eq:representationcoveragebound}
 \end{equation}
-% 附录给出风险迁移与任务界的详细证明。
-Appendix~\ref{app:representationcoverage} gives the detailed proof.
-% 该界同时取决于覆盖加权的参考风险与条件误差差异，覆盖常数较小本身不足以收紧上界。
-The bound depends jointly on the coverage-weighted reference risk and the conditional error discrepancy; a smaller coverage factor alone need not tighten it.
-% 保留RGB后附加确定性语义不自动改善覆盖。
-Appending a deterministic semantic map to retained RGB does not by itself improve coverage.
-% 对固定策略、专家与编码器，D_phi比较两分布的条件平均平方动作误差，而非任务信息损失；合并不同所需动作的历史也可能使其为零。
-For the fixed policy, expert, and encoder, $D_\phi$ compares conditional mean squared action errors across distributions, rather than measuring lost task information.
-It can vanish even when histories requiring different actions are merged, so a zero discrepancy does not establish information sufficiency.
-% C直接以任务后果评价信息保留，与风险迁移分析互补；不界定D_phi，也不依赖上述覆盖条件。
-Section~\ref{sec:representationanalysis} complements risk-transfer analysis by assessing information preservation directly through task consequences; it neither bounds $D_\phi$ nor requires the preceding coverage conditions.
+
+Appendix~\ref{app:representationcoverage} provides the proof.
+% 固定模仿风险与动作敏感性时，表示对该界的影响体现为覆盖因子与条件误差差异。
+With imitation risk and action sensitivity fixed,~\eqref{eq:representationcoveragebound}
+shows that the effect of a representation on the bound depends jointly on
+the coverage factor $C_\phi$ and the conditional error discrepancy $D_\phi$.
+% 因此，一条收紧上界的途径是降低覆盖因子，同时控制条件误差差异，使组合项减小。
+This motivates seeking representations that reduce $C_\phi$ while controlling $D_\phi$,
+so that their combined contribution $C_\phi R_\nu(\pi)+D_\phi$ decreases.

@@ -1,0 +1,771 @@
+                                        JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                                                                                    1
+
+
+
+
+                                               Preparatory Manipulation Planning using
+                                           Automatically Determined Single and Dual Arms
+                                                                               Weiwei Wan, Kensuke Harada, and Fumio Kanehiro
+
+
+
+                                           Abstract—This paper presents a manipulation planning al-
+                                        gorithm for robots to reorient objects. It automatically finds
+                                        a sequence of robot motion that manipulates and prepares an
+                                        object for specific tasks. Examples of the preparatory manipu-
+                                        lation planning problems include reorienting an electric drill to
+arXiv:1812.03274v1 [cs.RO] 8 Dec 2018
+
+
+
+
+                                        cut holes, reorienting workpieces for assembly, and reorienting
+                                        cargo for packing, etc. The proposed algorithm could plan single
+                                        and dual arm manipulation sequences to solve the problems. The
+                                        mechanism under the planner is a regrasp graph which encodes
+                                        grasp configurations and object poses. The algorithms search the
+                                        graph to find a sequence of robot motion to reorient objects. The          Fig. 1: (a.1-a.4): Preparatory manipulation of an electric drill
+                                        planner is able to plan both single and dual arm manipulation.             using a single arm. (b.1-b.4): The same preparatory manipu-
+                                        It could also automatically determine whether to use a single              lation using dual-arm handover.
+                                        arm, dual arms, or their combinations to finish given tasks. The
+                                        planner is examined by various humanoid robots like Nextage,
+                                        HRP2Kai, HRP5P, etc., using both simulation and real-world
+                                        experiments.                                                               We develop algorithms to find a sequence of collision-free
+                                                                                                                   and IK-feasible motion to move and reorient objects, and
+                                          Index Terms—Manipulation Planning, Reorienting Objects,                  propose a super regrasp graph that helps to determine the
+                                        Dual-arm Robots
+                                                                                                                   sequence of multi-arm handover and whether to use a single
+                                                                                                                   arm, dual arms, or their combinations to perform given tasks.
+                                                                  I. Introduction                                  Lots of related studies have been devoted to the topic in the
+                                                                                                                   past few decades. They are summarized in the related work
+                                        P     REPARATORY manipulation planning automatically
+                                              finds a sequence of robot motion that manipulates and
+                                        prepares an object for specific tasks [1]. The reason prepara-
+                                                                                                                   section. Compared with them, this paper initially performs
+                                                                                                                   preparatory manipulation planning using fully automatically
+                                                                                                                   generated grasps and object poses. It is also the first work
+                                        tory manipulation is needed is that objects in the real world are
+                                                                                                                   that automatically determines the choices of arms.
+                                        not always well posed. Take Fig.1 for example. In the figure,
+                                                                                                                      The mechanism under the planner is a regrasp graph, where
+                                        an electric drill is in two initial poses shown in Fig.1(a.1) and
+                                                                                                                   each node in the graph represents one grasp configuration.
+                                        Fig.1(b.1). To use the drill, a human worker has to reorient the
+                                                                                                                   Given the initial and goal poses of an object, the planner
+                                        drill to let the tooltip face to targets like Fig.1(a.4) and (b.4).
+                                                                                                                   connects the accessible grasps of initial and goal poses of an
+                                        The reorienting process is named preparatory manipulation.
+                                                                                                                   object to the graph and searches the graph to find a sequence
+                                           Fig.1 shows two ways to do preparatory manipulation. The
+                                                                                                                   of pick-and-place-based preparatory manipulation motion. For
+                                        first one is single-arm regrasp shown in Fig.1(a.1-a.4), where
+                                                                                                                   dual-arm manipulation, the planner builds two regrasp graphs
+                                        the human worker picks up the electric tool using his right
+                                                                                                                   where each one encodes the grasps of one hand. The planner
+                                        hand in (a.1), places it down on the table in (a.2), changes
+                                                                                                                   connects the two graphs at hand-over poses to make a super
+                                        the pose of his right hand to regrasp the tool in (a.3), and
+                                                                                                                   regrasp graph, and searches the super regrasp graph to find
+                                        successfully reorients the tooltip in (a.4). Only a single arm
+                                                                                                                   a sequence of preparatory manipulation motion. The results
+                                        (the right arm and right hand) is used in the process. The
+                                                                                                                   could be either pick-and-place using a single arm, hand-over
+                                        second one is dual-arm handover shown in Fig.1(b.1-b.4),
+                                                                                                                   using dual arms, or mixed single and dual-arm operations,
+                                        where the human picks up the electric tool using his left hand
+                                                                                                                   depending on feasibility and lengths of paths found by the
+                                        in (b.1), moves it to a hand-over pose in (b.2), hands it over to
+                                                                                                                   graph search algorithms.
+                                        his right hand in (b.3), and reorients the tooltip in (b.4). Both
+                                                                                                                      The planner is part of an open source project named
+                                        arms are used in the second case.
+                                                                                                                   PYHIRO1 . It is examined by various humanoid robots like
+                                           Preparing objects using single-arm and dual-arm manip-
+                                                                                                                   HRP2Kai, Nextage, etc, using both simulation and real-world
+                                        ulation is common and important to handle objects in our
+                                                                                                                   experiments.
+                                        daily life. It motivates us to develop algorithms for robots to
+                                        have similar manipulation skills. In the paper, we challenge
+                                                                                                                                 II. Related Work and Contributions
+                                        the difficulty of planning multiple robot motions together
+                                        and automatically selecting the necessary number of arms.                    There are two problems in preparatory manipulation plan-
+                                                                                                                   ning. One is to find a sequence of collision-free and IK-
+                                              W. Wan and K. Harada are with Osaka University, Japan. F. Kanehiro
+                                        is with National Inst. of AIST, Japan. wan-weiwei@aist.go.jp                  1 Project link is excluded for review.
+JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                                                                                   2
+
+
+
+feasible motion to move and reorient objects. The problem,              [23], Zhou et al. [24], and Suarez-Rui et al. [25] respectively
+in this case, is usually named the sequential manipulation              applied integral prehensile and non-prehensile sequential dual-
+planning problem or the combined task and motion planning               arm motion planning to the preparatory manipulation of a
+problem. The other one is to incorporate multiple arms and              chair. Vezzani et al. [26] presented a framework for simul-
+determines the sequence of multi-arm handover and whether               taneous handover and visual recognition.
+to use a single arm or dual arms.                                          Compared with the related work, our contribution is a
+   Lots of studies have been devoted to the first problem. Some         super regrasp graph which is extensible over multi-modal
+early publications include [2] [3],which used grasp-placement           configuration spaces and multiple arms. The super regrasp
+tables to find a sequence of preparatory motion. The grasp-             graph is composed of components like partial regrasp graphs
+placement tables orchestrate the stable states and accessible           for the initial and goal poses, single-arm regrasp graphs, and
+grasps of an object to provide a data structure for searching           hand-over regrasp graphs. The proposed planner could search
+manipulation sequences. The grasps in these early work were             the super regrasp graph to automatically decide whether to
+predefined or generated by planners designed for specific               use a single arm or both arms to finish given tasks. To our
+grippers, and the objects were simple polygonal objects.                best knowledge, this paper is the first work that automatically
+   Recent work included more complicated grasp planners                 chooses the number of arms and uses mixed single and dual-
+and was integrally considered with backtracking, geometrical            arm operations for preparatory manipulation.
+reasoning, and motion planning. For example, Simeon et al.
+[4] presented a framework which integrated motion planning                            III. Multi-modal Motion Planning
+and preparatory manipulation planning to move objects among
+obstacles. Xue et al. [5] used shape primitives to plan the             A. The theory
+grasps of a multi-finger hand and implemented the prepara-                 The fundamental theory supporting preparatory manipula-
+tory manipulation planning of a cup using the multi-finger              tion planning is multi-modal motion planning [21], which
+hand. Bohg et al. [6] used Bayesian Network to model task               means to plan paths across multiple configuration spaces, and
+constraints and plan the preparatory manipulation sequence              output a sequence of transfer and transit motion.
+of containers and toys. King et al. [7] used integral primitive-
+based prehensile and non-prehensile grasp planning to exercise
+preparatory manipulation of everyday objects. Lozano-Perez et
+al. [8] used symbolic search to find manipulation sequences
+under various constraints. The method was used to plan
+sequences for a mobile manipulator to rearrange objects. Sim-
+ilarly, Srivastava et al. [9], Krontiris et al. [10], Toussaint [11],
+and Dantam et al. [12] respectively used symbolic reasoning to          Fig. 2: An example of multi-modal motion planning. (a)
+remove obstacles and pick up or rearrange objects. Especially,          Planning across seven configuration spaces. (b) A path found
+Toussaint [11] and Dantam et al. [12] presented algorithms to           by the multi-modal planner.
+plan motion sequences for robots to stack distributed objects,
+considering both task and motion constraints. Mirabel et al.               Fig.2 sketches an example of multi-modal motion planning.
+[13] presented a planner considering the constraints from               Here, the goal is to plan robot motion across eight configura-
+coordinated manipulators. More extensively, Lee et al. [14]             tion spaces named C0 , C1 , . . . , C7 . A configuration space is
+and Woodruff et al. [15] respectively presented a framework             defined as:
+work that used integral prehensile and non-prehensile planning                           C = {dg , q0 , q1 , . . . , qn ∈ T n+2 }     (1)
+to generate sequential manipulation.
+   There are also lots of studies on dual-arm or multi-arm              where T n+2 indicates an n+2-dimensional topology torus. dg
+preparatory manipulation planning. For example, Koga et al.             denotes the jawwidth of a robotic gripper, qi indicates the ith
+[16] used predefined grasps to plan sequential manipulation for         joint angle of a manipulator. The seven configuration spaces
+multiple manipulators in early time. Cho et al. [17] applied            are connected to each other by overlapped manifolds. As is
+the grasp-placement tables developed by [2] to dual-arm                 shown in Fig.2(a), the areas named Ti j are the overlapped
+robots. Saut et al. [18] used decomposition to plan grasps and          manifolds. A Ti j connects two adjacent configuration spaces
+implemented dual-arm regrasp of complicated mesh models.                Ci and C j . It is composed by the shared configurations of Ci
+Graphs, instead of grasp-placement tables, were used in the             and C j . Formal definitions of Ti j will be presented in the next
+planner. Harada et al. [19] presented regrasp and hand-over             subsection. In multi-modal motion planning, the overlapped
+planning of dual-arm robots across multi-modal configuration            manifolds are named transit spaces. The remaining configura-
+spaces, and implemented a practical system in [20]. Details of          tion spaces are named transfer spaces. Fig.2(b) shows a path
+multi-modal motion planning could be found in [21], which               found by the multi-modal planner. The initial configuration
+made a concrete description of the concept and presented                is denoted by a red point. It is in configuration space C0 .
+several implementations. More recent work like [22] used                The goal configuration is denoted by a blue point. It is in
+dual-arm sequential manipulation planning to wrap up the                configuration space C7 . The planner finds a path crossing six
+fabric. It is also quite relevant except that reorienting directions    configuration spaces C0 , C2 , C3 , C4 , C6 , and C7 . Along the
+are constrained by the wrapping heuristics. Lertkultanon et al.         path, the black edges connect two identical poses, they are
+JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                                                                                                                3
+
+
+
+transfer edges. The cyan edges connect two different poses,                                      are sampled. Each node indicates a sampled configuration.
+they are the transit edges. The planned result is a sequence of                                  Especially, the two nodes under T (Pi , P j ) correspond to
+transfer and transit motion along the transfer and transit edges.                                four grasps shown in an upper shadow and a lower shadow
+                                                                                                 respectively. In the upper shadow, the objects are at two
+B. The modalities of preparatory manipulation                                                    different poses. The two grasps associated with the two poses
+                                                                                                 are identical in the local coordinate system of the object. They
+   Solving a multi-modal motion planning problem requires                                        are essentially the same grasp that represents the upper node
+properly identifying the modalities. Considering that the goal                                   in the transit manifold.
+of the preparatory manipulation planning is (1) to reorient the
+poses of objects, and (2) to find a sequence of arm motion,
+we use the configuration space of a robot arm as a transfer
+space, and use object poses to identify various modals. Fig.3(a)
+exemplifies the identification. Each modal is essentially the
+configuration space of a single arm. It is varied by object
+poses and is written as C(Pi ), which means the configuration
+space is modalized by an object pose Pi . Let Pi be defined as:
+                        Pi = {pix , piy , piz , rix , ryi , rzi ∈ S E(3)}                  (2)
+pix , piy , piz , rix , ryi , rzi denote the position and orientation                            Fig. 3: (a) Two modals. C(Pi ) and C(P j ) are the transfer spaces.
+components of the object pose. A modalized configuration                                         T (Pi , P j ) is the transit manifold. (b) The two object poses
+space could be written as:                                                                       identifying the two modals. (c) Sampled nodes in C(Pi ), C(P j ),
+ C(Pi ) = {dg , q0 , q1 , . . . , qn , pix , piy , piz , rix , ryi , rzi ∈ T n+2 × S E(3)}       and T (Pi , P j ). Each node corresponds to one collision-free and
+                                                                                        (3)      IK-feasible grasp.
+The jawwidth dg is a value irrelevant to the pose of an object.
+The total dimension of a modalized configuration space is                                           Details of planning across multi-modal configuration spaces
+T n+2 × S E(3). It is a n+8-dimensional manifold. By replacing                                   are shown in Fig.3(c). Here, the object is a three-direction pipe
+the items using                                                                                  (the orange object in the figure). Pi is a standing pose shown in
+                              q = {q0 , q1 , . . . , qn }                               (4)      the left part of Fig.3(b). P j is a resting pose shown in the right
+                                                                                                 part of Fig.3(b). The arm configurations in C(Pi ) are related to
+and                                                                                              the standing pose. The arm configurations in C(Pi ) are related
+                                                                       pix 
+                                                                              
+                        cryi crzi                    −cryi srzi              sryi             to the resting pose.
+                s i s i c i + crix srzi        −srix sryi srzi + crix crzi
+                                                                               
+                                                                       piy 
+                                                                              −srix cryi            When doing sampling-based motion planning in a transfer
+             
+  TPi =  rx ry rz
+               −crix sryi crzi + srix srzi   crix sryi srzi + srix crzi
+                                                                       piz                  space, a planner will sample the space considering grasp
+                                                                                
+                                                                              crix cryi
+                 
+                              0                              0          1
+                                                                                
+                                                                                 0               configurations. An example is shown in Fig.3(c). There are
+                                                                          (5)                    two configuration spaces C(Pi ) and C(P j ) in the figure. The
+, where srix = sin(rix ), crix = cos(rix ), sryi = sin(ryi ), cryi = cos(ryi ),                  two spaces are connected to each other by a transit space
+srzi = sin(rzi ), crzi = cos(rzi ), equation (3) can be rewritten as:                            T (Pi , P j ). A sampling-based planner samples the configuration
+                                                                                                 spaces considering grasps, and each of the two configuration
+                                     C(Pi ) = {dg , q, TPi }                               (6)   spaces in the figure are sampled into five nodes (see the yellow
+   Two modals, for example C(Pi ) and C(P j ) shown in the                                       and purple points in the figure). Nodes n1 , n2 , n3 , n4 , n5 belong
+Fig.3(a), are connected to each other by a transit manifold                                      to C(Pi ) . Nodes n6 , n7 , n8 , n9 , n10 belong to C(P j ) . In these
+named T (Pi , P j ). The transit manifold could be either modal-                                 sampled nodes, n1 , n2 , n3 are further illustrated using green
+ized by Pi or P j . When modalized by Pi , the manifold is                                       hand under the C(Pi ) shadow. They belong to the transfer
+defined as {dg , q, TPi }. When modalized by P j , the manifold                                  space. n4 , n5 are also further illustrated using green hand under
+is defined as {dg , q, TP j } The two definitions are equal to each                              the T (Pi , P j ) shadow. They belong to the transit space. n4 , n5 ,
+in the object’s local coordinate system:                                                         n6 , and n9 , n10 are illustrated in the same way under the C(P j )
+                                                                                                 shadow and T (Pi , P j ) shadow respectively.
+                               TPi · J(q(i) ) = TP j · J(q( j) )                           (7)      The sampled nodes in C(Pi ), C(P j ), and T (Pi , P j ), are
+                                                                                                 connected into a graph considering collisions and feasibility
+Here, J(q(i) ) and J(q( j) ) indicate the Jacobian matrix of a robot
+                                                                                                 of IK. The graph is a preliminary form of the regrasp graph.
+under joint angles q from configuration spaces modalized by
+                                                                                                 We will further organize the preliminary graph considering
+Pi and P j respectively.
+                                                                                                 both arms as well as handover states in following sections to
+   Equations (3-7) show: (1) A configuration in T (Pi , P j ) is on
+                                                                                                 perform single-arm and dual-arm planning.
+a manifold; (2) The configuration belongs to both C(Pi ) and
+C(P j ); (3) The configuration implies a grasp that is identical
+in the local coordinate system of the object.                                                                            IV. Regrasp Graph
+   Fig.3(b) shows the configurations and their relations in                                         This section presents the details of the regrasp graph,
+the modalized configuration spaces. The configuration spaces                                     including automatic grasp planning, selection of object poses,
+JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                                                                                                 4
+
+
+
+organizations of nodes, single-arm regrasp graphs, and dual-                  B. Single-arm regrasp graph
+arm extensions, etc.                                                             To plan across the multiple configuration spaces, we sample
+                                                                              nodes in each of the configuration space and build a roadmap
+                                                                              for search by connecting the sampled node. Fig.5(a) shows
+A. Grasps and object poses
+                                                                              a configuration space and the sampled nodes (denoted by the
+   The fundamental elements of a regrasp graph are grasp                      circled grasps). The configuration space is modalized by a pose
+configurations. In our planner, the grasp configurations of                   of the object shown in the center. Each sampled node is one
+an object are planned considering force closure using self-                   collision-free and IK-feasible grasp of the object at the pose.
+developed grasp planners.                                                     A node gk is formally defined as a sample of C(Pi ), following
+   The object poses that modalize the configuration spaces are                equation (6):
+defined by the stable placements of an object on a table.                                         gk ∈ C(Pi ) = {dg , q, TPi }            (8)
+The stable placements are planned considering the projec-
+tion of com (center of mass) on a supporting area using                       The transfer edges Et f connecting the sampled nodes in C(Pi )
+a self-developed placement planner. Especially we limit the                   are formally defined as:
+number of object poses by discretizing the positions of a                             Et f = {(gk0 , gk1 )|gk0 , gk1 ∈ C(Pi ) ∧ q(k0 ) , q(k1 ) }    (9)
+stable placement and its rotation around the vertical axis. A
+discretized placement, together with its accessible grasps and                , where q(k0 ) and q(k1 ) are the q components of gk0 and gk1
+the collision-free and IK-feasible configurations of a robot,                 respectively.
+defines a configuration space Ci . The accessible grasps will                    In the case of Fig.5(a), there are 12 sampled grasps and
+be the nodes of a graph in Ci .                                               consequently 12 nodes. These nodes are connected into a
+   Fig.4 shows the modalization of configuration spaces using                 graph by transfer edges. The cyan edges in Fig.5(a) indicate
+the three-direction pipe model. The planned grasps are shown                  the transfer edges. The graph is named a partial graph since
+in Fig.4(a). The stable placements of the pipe on a table                     it is part of the whole roadmap.
+without considering variation in positions and rotations are                     Fig.5(b) further shows the result after considering rotation
+shown in Fig.4(b)2 . Fig.4(c) shows stable placements con-                    around the vertical axis. There are 8 configuration spaces
+sidering rotation around the vertical axis. In the figure, the                and consequently 8 partial regrasp graphs (shown in cyan
+rotation is descritized by π2 intervals for clear visualization               color). Inside each partial regrasp graph, the transfer edges
+and easy computation. Each placement in Fig.4(b) therefore                    connect sampled nodes. It is the partial roadmap of a transfer
+spawns eight poses, and the total number of poses reaches to                  space. Across the partial regrasp graphs, transit edges (the
+48.                                                                           black edges) connect the sampled nodes of the transfer spaces
+   Fig.4(d) further shows the results after considering the                   through transit manifolds. The transit edges Ett are formally
+variation in positions. The figure is a top view where the                    defined as:
+black frame indicates a table. Like rotation, the positions
+on the table are sampled by grids for clear visualization                             Ett = {(gk0 , gk1 )|gk0 ∈ C(Pi ) ∧ gk1 ∈ C(P j )∧
+and easy computation. 5×6 grids are used for sampling and                                             TPi · J(q(k0 ) ) = TP j · J(q(k1 ) )}         (10)
+in total, the positions on the table are discretized into 5×6
+                                                                                 Fig.5(c) shows the regrasp graph after considering variation
+locations. The 48 poses in Fig.4(c) are further moved to these
+                                                                              in poses. There are 48 configuration spaces and the regrasp
+locations. In total, after considering the positions on a table,
+                                                                              graph involves 48 partial regrasp graphs as well as the transit
+the number of poses is 1440. Each of the 1440 poses identifies
+                                                                              edges connecting them. Fig.5(d) further considers the different
+one configuration space, and the multi-modal planner shall
+                                                                              positions on a table. In this case, there are 1440 configuration
+plan across 1440 configuration spaces to find a preparatory
+                                                                              spaces and consequently 1440 partial regrasp graphs. Together
+manipulation sequence for the three-direction pipe.
+                                                                              with the transit edges, the regrasp graph grows into a big graph
+   Note that the discretization of rotations and positions signif-
+                                                                              shown in Fig.5(d). The graph includes 30 components like
+icantly impair the scale of the regrasp graph. More rotations
+                                                                              Fig.5(c). Each component corresponds to a different position
+and positions increase manipulability, as well as increase the
+                                                                              on a table. The additional edges in (c) and (d) follow the same
+scale of a regrasp graph. It adds heavy work load to building
+                                                                              definition as equation (9), except that more object poses with
+the regrasp graph. The scale of a regrasp graph is asymptotic
+                                                                              varying rotation around the vertical axis and different positions
+to ng × nr × n p where ng is the number of planned grasps,
+                                                                              on a table are further considered.
+nr is the number of discretized rotation, n p is the number of
+                                                                                 The regrasp graph in Fig.5(d) is for a single arm. The grasps
+discretized positions. The number of planned stable poses is
+                                                                              represented by the nodes are only feasible to one arm. Thus,
+small compared to these values and is therefore considered as a
+                                                                              we name the graph single-arm regrasp graph, and use G x to
+constant. Using modern computers and databases, the planner
+                                                                              denote it.
+may plan across as many as 10,000s of nodes [27].
+                                                                                                G x = {{gk |gk ∈ C(Pi )}, Et f , Ett }     (11)
+     2 Note that we do not consider symmetry in computing these poses. For
+                                                                              x could be replaced by l or r. Gl denotes the single-arm
+example, pose 2 and pose 3 are laying on an upper face and bottom face
+respectively. They are symmetrically the same, but are treated as different   regrasp graph for a left arm. Gr denotes the single-arm regrasp
+stable placements.                                                            graph for a right arm.
+JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                                                                            5
+
+
+
+
+Fig. 4: (a) The automatically planned grasps of a pipe model. (b) The stable placements (and the configuration spaces modalized
+by the placements) of the pipe on a table without considering rotation around vertical axis. There are 6 stable placements
+and 6 configuration spaces modalized by them. (c) The stable placements after considering rotation around vertical axis. The
+rotation angle is discretized into eight values. Thus, the poses in (b) further spawn 6×8=48 stable placements, corresponding
+to 48 configuration spaces. There are 6 groups. Objects belonging to the same group are at the same stable placement with
+different orientations. (d) The stable placements at discretized positions on a table.
+
+
+
+
+Fig. 5: (a) The samples and roadmap built in one configuration space. Each circle indicates one sample. The samples are
+connected by transfer edges (cyan segments). (b) The roadmap built across the configuration spaces of one stable placement at
+8 different orientation. There are totally 8 configuration spaces. Transit edges (cyan segments) connect the samples belonging
+to the sample configuration space. Transfer edges (black segments) connect the samples belonging to different configuration
+spaces. (c) The roadmap built across the configuration spaces modalized by all stable placements at the 8 discretized orientation.
+(d) The samples and roadmap built across the configuration spaces at discretized positions all over a table.
+
+
+
+
+Fig. 6: (a) The hand-over poses and the accessible grasps of two hands (red and blue). (b) One hand-over pose modalizes two
+configuration spaces. One is for the right hand. The other is for the left hand. (c) The dual-arm regrasp graph.
+
+
+C. Dual-arm regrasp graph                                         hand-over poses to identify hand-over modals. The hand-
+                                                                  over poses of an object are discretized using 3D lattice and
+   The single-arm regrasp graph G x could be extended to dual-
+                                                                  icosphere. Each crossing point of a 3D lattice in the workspace
+arm regrasp graph by building two regrasp graphs for two
+                                                                  is used as a candidate hand-over position. Each vector pointing
+arms and additionally including a hand-over regrasp graph.
+                                                                  to a vertex of an icosphere centered at a position determined
+   The hand-over graph is made by two modals identified by
+                                                                  by the 3D lattice is used as a hand-over orientation. Fig.6(a)
+a hand-over pose of the object. The nodes in the graph are
+                                                                  shows three hand-over poses. These hand-over poses are at the
+the accessible grasps associated with the hand-over pose. To
+                                                                  same position. The position is determined by a single crossing
+extend to dual-arm regrasp, we build a single-arm regrasp
+                                                                  point of a 3D lattice. On the other hand, the hand-over poses
+graph for the right arm, and build another single-arm regrasp
+                                                                  are at different orientations. The orientations are determined by
+graph for the left arm. These two graphs are connected to the
+                                                                  three vertices on an icosphere centered at the aforementioned
+two modals in the hand-over graph. The hand-over graph acts
+                                                                  single crossing point. The accessible grasps for two hands are
+as a bridge for planning hand-over motions.
+                                                                  shown in red and blue respectively. Each of the hand-over
+   See Fig.6 for details. First, the planner prepares candidate
+JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                                                                                   6
+
+
+
+poses modalizes two configuration spaces. One is for the right            near the spots with heavy red and blue colors). The planner
+hand, the other is for the left hand.                                     searches the shortest path from Gi to Gg to plan single-arm
+   The first pose of Fig.6(a) corresponds to two configuration            preparatory manipulation sequences for the task. The initial
+spaces (right-arm configuration space and left-arm configu-               and goal grasps could be any node on Gi and Gg . The green
+ration space) shown in Fig.6(b). The sampled nodes of the                 path in Fig.7(b) shows one path found by the planner.
+configuration spaces are shown by the grasps in the red or                   The output of the single-arm planning is a sequence of
+blue circles. These sampled nodes are used for hand-over.                 collision-free and IK-feasible grasps, and the result of single-
+They are connected to each other to form a hand-over regrasp              arm planning is essentially a sequence of grasps and robot
+graph, considering the collisions between the two hands and               configurations. The motion between the configurations in the
+the feasibility of IK.                                                    sequence is not necessarily feasible due to obstacles, unavail-
+   We use Pi(o) to denote a hand-over pose. Following equation            able IKs, and some other task assumptions like the end-effector
+(6), the configuration spaces modalized by Pi(o) is defined as:           constraints [28], especially in complicated workspaces. On-
+                                                                          line sampling-based motion planning is therefore employed in
+                     C(Pi(o) ) x = {dg , q x , TPi(o) }            (12)
+                                                                          a later step to further generate detailed arm motion. Dynamic
+   Here, q x could be the joint angles of left arm (ql ) or               Domain RRT (DD-RRT) [29] is used to generate samples and
+right arm (qr ). Accordingly, C(Pi(o) ) x is written as C(Pi(o) )l or     plan paths. DD-RRT is used because we assume the workspace
+C(Pi(o) )r . The edges connecting two grasps associated with              is not crowded with obstacles and the configuration space does
+a hand-over pose are:                                                     not have many narrow passages. DD-RRT searches more in the
+                                                                          open space and finds paths quickly under these assumptions.
+      t f = {(gk0 , gk1 )|gk0 ∈ C(P
+     E(o)                          i(o) l
+                                       ) ∧ gk1 ∈ C(Pi(o) )r ∧             For configuration spaces connected by narrow passages, DD-
+                                      M(gk0 ) ∩ M(gk1 ) = ∅}       (13)   RRT is a bit slow. Methods like [30] are preferable.
+                                                                             The sequence planning and motion planning are performed
+Here, M(gk0 ) ∩ M(gk1 ) = ∅ indicates the mesh models of the
+                                                                          sequentially and repeatedly in a loop shown in Alg.1. If motion
+gripper at the two configurations do not collide with each
+                                                                          planning fails, the blocked edge will be removed from the
+other. The object poses at the end of the edges are the same,
+                                                                          regrasp graph and the single-arm regrasp planner replans (the
+thus the edges are transfer edges.
+                                                                          highlighted section of Alg.1).
+   The edges connecting the placements and hand-over poses
+are:
+
+       tt = {(gk0 , gk1 )|gk0 ∈ C(P ) ∧ gk1 ∈ C(P
+      E(o)                         i              j(o)
+                                                       )∧
+                        TPi · J(q(i) ) = TP j(o) · J(q( j(o)) )}   (14)
+These edges are transit edges.
+  The hand-over regrasp graph is denoted by Go where
+                  Go = {{gk |gk ∈ C(Pi(o) ) x }, E(o)
+                                                  tf }             (15)   Fig. 7: Single-arm planning. (a) The partial regrasp graphs of
+                                                                          initial and goal poses are connected to the single-arm regrasp
+Go is connected to the two single-arm regrasp graphs to build
+                                                                          graph. The red segments are connected to the initial graph.
+a dual-arm regrasp graph like Fig.6(c). The dual-arm regrasp
+                                                                          The blue segments are connected to the goal graph. (b) A
+graph is denoted by G(Gl ,Go ,Gr ) . Here, Gl and Gr are the two
+                                                                          path found by searching from the initial to the goal.
+single-arm regrasp graphs built for right and left arms. Gl and
+Go , or Gr and Go , are connected to each other by E(o) tf .
+
+
+          V. Regrasp Planning using Regrasp Graphs                          Algorithm 1: Incorporating Motion Planning
+A. Single-arm planning                                                       Data: The regrasp graph G(Gx ,Gi ,Gg )
+                                                                             Result: Motion for preparatory manipulation
+   Given the initial and goal poses of an object, the proposed
+                                                                           1 begin
+planner finds the accessible grasps of the two poses and
+                                                                           2    while True do
+generates the partial regrasp graphs for the initial and goal
+                                                                           3        path = search(G(Gx ,Gi ,Gg ) )
+poses. Gi and Gg are used to denote the partial regrasp graphs
+                                                                           4        if path is None then
+for the initial and goal poses. The planner connects Gi and Gg
+                                                                           5            return None
+to a single-arm regrasp graph G x , and searches the connected
+graph G(Gx ,Gi ,Gg ) to find preparatory manipulation sequences            6        motion = DDRRT(path)
+for a single arm. Fig.7 shows an example. The partial regarsp              7        if motion is Blocked then
+graphs for the initial and goal poses Gi and Gg are similar                8            removeblockededge(G(Gx ,Gi ,Gg ) , path)
+to the one shown in Fig.5(a), as the initial and goal poses are            9            Continue
+assumed to be a stable placement on a table. Gi and Gg are
+                                                                          10        return motion
+connected to a single-arm regrasp graph to build G(Gx ,Gi ,Gg )
+in Fig.7(a). Here, Gi and Gg can be hardly seen since they
+are overwhelmed by the red and blue segments (they are
+JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                                                                                       7
+
+
+
+B. Dual-arm planning                                              the path spans the graphs of a single arm or both arms,
+   Dual-arm planning is essentially the same as the single-arm    hence automatically determines the necessary number of arms.
+planning, except that Gi and Gg are respectively connected to     The shortest path heuristic is also reasonable in that fewer
+the Gr and Gl components of a dual-arm regrasp graph.             times of regrasp reduce the propagation of noises, making the
+   Fig.8 shows an example. Like the single-arm case, the          preparatory manipulation more robust 3 .
+planner searches the shortest path from the initial regrasp          Fig.9 shows an example. In Fig.9(a), Gi is connected to Gr
+graph to the goal regrasp graph, and performs iterative motion    (red segments) and Gg is connected to Gl (blue segments).
+planning to generate preparatory manipulation motion. In the      In Fig.9(b), Gi is additionally connected to Gl (red segments)
+case of Fig.8, the hand-over is from right hand to left hand      and Gg is additionally connected to Gr (blue segments). In
+since Gi is connected to the Gr component (red segments)          Fig.9(c), Gi is connected to Gg (brown segments). Fig.9(c) is
+and Gg is connected to the Gl component (blue segments).          the super regrasp graph after making up all the five connec-
+The direction of the hand-over motion could the exchanged         tions.. A shortest path found by searching the super graph is
+by swapping the connection from Gi ↔ Gr , Gg ↔ Gl to              shown in Fig.9(d).
+Gi ↔ Gl , Gg ↔ Gr . Readers are recommended to refer to
+[31] for more details about single-arm and dual-arm planning.
+
+
+
+
+Fig. 8: Dual-arm planning. (a) The partial regrasp graph Gi is
+connected to the right arm (red segments). The partial regrasp
+graph Gg is connected to the left arm (blue segments). (b) A
+path found by searching from the initial to the goal. In this
+case, the hand-over direction is from right hand to left hand.
+
+
+
+C. Automatically choosing the number of arms
+   The most advantageous the new planner proposed in this         Fig. 9: Mixed single and dual arm planning. (a) The partial
+work is it is able to automatically choose the number of arms     regrasp graph Gi is connected to the right arm (red segments).
+by building and searching a super regrasp graph which holds       The partial regrasp graph Gg is connected to the left arm (blue
+all connections among Gi , Gg , and the components of dual-       segments). (b) The partial regrasp graph Gi is additionally
+arm regrasp graph. The connections include:                       connected to the left arm (additional red segments). The partial
+                                                                  regrasp graph Gg is additionally connected to the right arm
+   • Connection between Gi and Gr .
+                                                                  (additional blue segments). (c) Gi is connected to Gg (brown
+   • Connection between Gg and Gl .
+                                                                  segments). (d) A path found by searching from the initial to
+   • Connection between Gi and Gl .
+                                                                  the goal. In this case, the planer determines to only use the
+   • Connection between Gg and Gr .
+                                                                  right arm.
+   • Connection between Gi and Gg .
+   Making up all the five connections leads to a super regrasp
+graph. Our planner could search the super regrasp graph to
+                                                                                     VI. Experiments and Analysis
+find a preparatory manipulation sequence which automatically
+determines whether to use single-arm regrasp, dual-arm han-       A. Results using various robots
+dover, or mixed single-arm regrasp and dual-arm handover, to         The planner is tested using various robots including Nex-
+perform given tasks. The search is done using conventionally      tage, HRP5P, and HRP2Kai. Results of the planner and the
+heuristic search algorithm like A* [32]. The heuristic we used    correspondent regrasp graphs are shown in Fig.10. The task
+is the length of a path. Since the length of a path corresponds
+                                                                      3 Note that there might be multiple solutions that require the same times
+to the times of transfer and transit changes or the times of
+                                                                  of regrasp. We do not further differentiate them in this work. However,
+regrasps, our planner may find a path that requires fewest        practitioners may choose their own strategy to rank these solutions. E.g. One
+times of regrasp. Meanwhile, it automatically determines if       may give high priority to human-like poses.
+JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                                                                              8
+
+
+
+
+Fig. 10: Kawada Nextage and a three-direction pipe – Example 1. The initial and goal poses of the object have the same
+orientation, but different positions. The planner suggests (a.1-a.2) or (b.1-b.2), which involves only one time of single-arm
+regrasp. (c.1-c.5) and (d.1-d.5) show another two solutions using one time of handover. They cost more than (a.1-a.2) and
+(b.1-b.2), and are consequently not suggested.
+
+
+
+
+Fig. 11: Kawada Nextage and a three-direction pipe – Example 2. In this case, the initial and goal poses are different in both
+positions and orientations. The robot could either use one time of single-arm regrasp, or one time of single-arm regrasp plus
+one time of hand over, to perform the task. The planner suggests (a.1-a.6) as it is shorter and consumes less energy.
+
+
+                                                                    is to move objects from initial poses marked in transparent
+                                                                    red color to goal poses marked in transparent green color.
+                                                                    The results in Fig.10(a-d) perform a simple pick-and-place
+                                                                    task. The pose of the object is not changed. The robot is
+                                                                    Kawada Nextage. Four sequences to finish the task are shown
+                                                                    in Fig.10(a.1-a.2), Fig.10(b.1-b.2), (c.1-c.4), and (d.1-d.4),
+                                                                    respectively. The regrasp graphs are shown in Fig. 10(a), (b),
+                                                                    (c), and (d). Fig.10(a) and (a.1-a.4) are the regrasp graphs and
+                                                                    planned results by using the right arm. Fig.10(b) and (b.1-b.4)
+                                                                    are the regrasp graphs and planned results by using the left
+                                                                    arm. Fig.10(c) and (c.1-c.4) are the regrasp graph and results
+                                                                    by using right-to-left handover. Fig.10(d) and (d.1-d.4) are the
+                                                                    regrasp graph and results by using left-to-right handover. In
+                                                                    this case, the planner suggests using the shorter paths (a.1-a.2)
+                                                                    or (b.1-b.2) to perform the task, which involves only one time
+Fig. 12: A special case where the planner suggested two times       of single-arm regrasp. (c.1-c.5) and (d.1-d.5) involve one time
+of handover to perform a task. (a.3, a.4): Hand over to left arm;   of handover. They cost more than (a.1-a.2) and (b.1-b.2), and
+(a.5): Reorient the object; (a.6, a.7): Hand over to right arm.     are consequently not suggested.
+JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                                                                            9
+
+
+
+
+Fig. 13: Using an HRP5P robot to reorient an electric drill. The robot could either use two times of single-arm regrasp (a.1-a.9)
+or one time of single-arm regrasp plus one time of handover (b.1-b.9) to perform the task. (a.1-a.9) is preferred.
+
+
+
+
+       Fig. 14: Using a HRP2Kai robot to reorient a workpiece. The only solution is to use handover shown in (1-5).
+
+
+   The results in Fig.11(a-b) use the same robot and object, but       Real-world experiments are conducted on a Nextage robot.
+the initial and goal poses of the object are changed. In this       In the real-world experiments, we used two external Kinect V1
+case, the robot could either use two times of single-arm regrasp    cameras and evaluated the pose of an object by minimizing the
+(a.1-a.6) or one time of single-arm regrasp plus one time of        distance between the 3D point clouds and a mesh model. The
+handover (b.1-b.8) to perform the task. The regrasp graph and       hardware configurations and two matching results are shown in
+path corresponding to (a.1-a.6) is shown in (a), where the          Fig.15. Each detection takes about 1 second, which had been
+thick segment in (a)-s1 implies the pick-and-place sequence         analyzed in detail in [20]. There is no re-estimation during
+shown in (a.1-a.3), the thick segment in (a)-s2 implies a second    the regrasp. The results corresponding to Fig.10(d.1-d.5) are
+pick-and-place sequence shown in (a.4-a.6). The regrasp graph       shown in Fig.16. The robot automatically uses the shortest
+and path corresponding to (b.1-b.8) are shown in (b), where         path (either single-arm, dual-arm, or mixed single and dual
+the thick segments in (b)-s1 correspond the pick-and-place          arm regrasp) to finish the task.
+sequence shown in (b.1-b.4), the thick segments in (a)-s2
+correspond the handover sequence shown in (b.5-b.8). The
+planner suggests using the shorter path (a.1-a.6) to perform
+the task. The results in Fig.12 show a special case where the
+robot picks up an object using its right arm, hands it over to
+uses its left arm to re-orient the object, and hands it back to
+the right arm. The planner suggested two times of handover
+to finish the task. The results in Fig.13(a-b) show the result of
+reorienting an electric drill using an HRP5P robot. In this case,
+The robot could either use two times of single-arm regrasp
+(a.1-a.9) or one time of single-arm regrasp plus one time of
+handover (b.1-b.9) to perform the task. The planner outputs         Fig. 15: (a) The two external Kinect V1 cameras used for pose
+(a.1-a.9). The task cannot be done by simple pick-and-place         detection. (b) A matching result by using the right Kinect. (c)
+or direct handover. The results in Fig.14 show the result of        A matching result by using the left Kinect.
+reorienting a workpiece using an HRP2Kai robot. In this case,
+the only solution is to use handover shown in (1-5). The robot         One thing to note is we build the regrasp graph with a
+cannot perform the task using a single arm.                         large number of nodes. It is redundant and offers many choices
+JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                                                                                                      10
+
+
+
+
+                Fig. 16: Real-world experiments using a Nextage robot. The executed sequence is Fig.10(d.1-d.5).
+
+                                                                  TABLE I: Time cost
+
+                                        Online cost (s)                                            Offline cost (s)
+   Robot      DoFs                                                                                                                                # paths
+                          IK,CD(Gi )    IK,CD(Gg )        SG       t         gp       pp     IK,CD(G x )     hp       IK,CD(Go )      t
+
+  Nextage      12             8.00         13.72          2.29   24.01     12.40     7.21      1702.11     32.59       1490.01     3244.32         13.50
+   HRP5P       18            20.23         38.40          2.07   60.70     10.22    12.73      3397.10     54.29       3670.27     7177.20          6.48
+  HRP2Kai      14            10.65         19.88          1.44   31.97     18.35    11.36      2552.51     26.18       1901.75     4510.05          2.22
+The online cost and number of paths are the average value of 10 executions. All time costs are measured in seconds. Abbreviations: IK - Inverse Kinematics;
+CD - Collision Detection; SG - Super Graph; gp - grasp planning; pp - placement planning; hp - handover planning.
+
+
+
+with equal times of regrasp. A robot may switch to a different                 design than the other two robots. It has fewer DoFs, but could
+choice if the object is not well recognized by the vision system.              finish the given tasks with more sequences (see the # paths
+The visual system assumes a single object without surrounding                  column), and within less time (see the online cost column).
+obstacles. The detection is robust under this assumption. We                      2) Performance: Table II compares the performance of
+didn’t spot a failure caused by the vision system during the                   single-arm regrasp planner, dual-arm regrasp planner, and the
+planning.                                                                      newly proposed mixed planner using ten regrasp tasks and the
+                                                                               objects shown in Fig.17. The initial and goal poses of these
+B. Time cost and performance                                                   tasks are randomly generated. Compared to the single-arm
+                                                                               regrasp planner and dual-arm handover planner, the newly pro-
+   1) Time cost: The planner includes an offline part and an
+                                                                               posed planner does preparatory manipulation planning using
+online part. Both of them are computed automatically. The
+                                                                               automatically determined single and dual arms. It has higher
+offline part includes grasp planning, placement planning, han-
+                                                                               success rates in reorienting. Also, the planner is able to do
+dover planning, and pre-building of partial roadmaps. These
+                                                                               both regrasp and handover, which significantly improves the
+computations are independent of specific environments since
+                                                                               ability of humanoid robots.
+they are irrelevant to obstacles. They can be built once and
+reused later. The online part builds supper roadmaps and
+performs graph search. Super roadmaps have to be built online
+since the initial and goal poses of objects, as well as the size
+of tables (obstacles) change from task to task. The associated
+grasps and the edges that connect these grasps to the partial
+roadmaps must be computed in realtime. The planner searches
+all possible paths by using single-arms, dual-arms, or their                   Fig. 17: The objects used in the comparison experiments. From
+combinations and outputs the shortest path as the result. The                  left to right: (1) An electric drill. (2) A metal work piece. (3)
+cost of the algorithms, including both the online and offline                  A three-way tube. (4) A connector. (5) A toy plane rear.
+part are shown in Table I. The processor of our computer
+is Intel Xeon 2.8GHz. Its graphics card is NVIDIA Quadro                          3) Discussions on more than two arms: Extending the
+M3000M. The version of the programming language is Python                      algorithms to more than two arms is not difficult since the
+2.7.11. As is shown in Table I, the offline part may cost hours,               graphs are built incrementally. More than two arms require
+depending on the number of DoFs. The online part, in contrast,                 including more G x where x indicates the identifier of all arms,
+could be done in a few seconds. The most time-consuming                        rather than the binary values r and l in dual-arm planning.
+part of the online cost is the computation of IK and CD. In                    Accordingly, connections between the partial regrasp graphs
+the worst case, the cost reaches to 38.40s. In contrast, building              and single-arm regrasp graphs should include: (1) Connec-
+super graphs and searching the graph is very fast. The most                    tions between Gi and all G x . (2) Connection between Gg
+time-consuming part of the offline cost is still the computation               and all G x . (3) Connection between Gi and Gg . Although
+of IK and CD. Grasp planning and placement planning also                       incrementally building the connections between Gi , Gg , and
+cost more than ten seconds. Handover planning costs several                    all other G x do not significantly increase computational cost,
+tens of seconds. The best way to lower time cost is to reduce                  preparing the additional G x s cost many extra offline resources.
+the number of automatically planned grasps. The time cost                      Accordingly to Table I, the offline time cost for a single G x
+table shows that the Nextage robot has much better kinematic                   (6-DoF Nextage) is around 1500s. The offline time cost of
+JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                                                                                                11
+
+
+         TABLE II: Performance of different planners                                                      References
+               Sgl-arm planner     Dual-arm planner     Auto planner       [1] A. Nguyen, D. Kanoulas, D. G. Caldwell, and N. G. Tsagarakis,
+    ir-gr            7/10                 8/10             10/10               “Preparatory Object Reorientation for Task-oriented Grasping,” in Proc.
+                                                                               International Conference on Intelligent Robots and Systems, pp. 893–
+    il-gl            5/10                 8/10              9/10               899, 2016.
+    ir-gl             ×                  10/10             10/10           [2] P. Tournassound, T. Lozano-Perez, and E. Mazer, “Regrasping,” in
+    il-gr             ×                  10/10             10/10               Proceedings of International Conference on Robotics and Automation,
+                                                                               pp. 1924–1928, 1987.
+   regrasp                                 ×                               [3] H. Terasaki and T. Hasegawa, “Motion Planning of Intelligent Manipula-
+  handover            ×                                                        tion by a Parallel Two-Fingered Gripper Equiped with a Simple Rotating
+                                                                               Mechanism,” IEEE Transactions on Robotics and Automation, vol. 14,
+ The success rates are based on ten times of executions. ir-gr means           pp. 207–219, 1998.
+ initializing from right arm and reaching to the goal using right arm.     [4] T. Simeon, J.-P. Laumond, J. Cortes, and A. Shbani, “Manipulation Plan-
+ ir-gl means initializing from right arm and reaching to the goal using        ning with Probabilistic Roadmaps,” International Journal of Robotics
+ left arm. il-gl and il-gr follow similar definitions.                         Research, vol. 23, pp. 729–746, 2004.
+                                                                           [5] Z. Xue et al., “Planning Regrasp Operations For a Multifingered Robotic
+                                                                               Hand,” in Proceedings of International Conference on Automation
+                                                                               Sicence and Engineering, pp. 778–783, 2008.
+an n-arm 6-DoF robot will be as much as 1500ns. The high                   [6] J. Bohg, K. Welke, B. Leon, M. Do, D. Song, W. Wohlkinger, M. Madry,
+cost makes it impractical to extend the present algorithms to                  A. Aldoma, M. Przybylski, T. Asfour, H. Marti, D. Kragic, A. Morales,
+                                                                               and M. Vincze, “Task-based Grasp Adaptation on a Humanoid Robot,”
+multiple arms.                                                                 in Proceedings of International IFAC Symposium on Robot Control,
+                                                                               pp. 779–786, 2012.
+              VII. Conclusions and Future work                             [7] J. King, M. Klingensmith, and C. Dellin, “Regrasp Manipulation as
+                                                                               Trajectory Optimization,” in Proceedings of Robotics: Science and
+   In this paper, we presented a preparatory manipulation                      Systems, 2013.
+planner to plan a sequence of manipulation motion that                     [8] T. Lozano-Perez and L. P. Kaelbling, “A Constraint based Method for
+prepared an object into expected poses. The planner was                        Solving Sequential Manipulation Planning Problems,” in Proceedings of
+                                                                               International Conference on Intelligent Robots and Systems, pp. 3684–
+demonstrated by various robots using both simulation and                       3691, 2014.
+real-world experiments. The results showed that the planner                [9] S. Srivastava, E. Fang, L. Riano, R. Chitnis, S. Russell, and P. Abbeel,
+could plan single-arm, dual-arm, as well as mixed single                       “Combined Task and Motion Planning through an Extensible Planner-
+                                                                               independent Interface Lyer,” in Proceedings of IEEE international
+and dual arm preparatory manipulation sequences. It could                      Conference on Robotics and Automation, pp. 639–646, 2014.
+automatically determine the employment of single and dual                 [10] A. Krontiris and K. E. Bekris, “Dealing with Difficult Instances of Object
+arms by minimizing the number of regrasp and handover. The                     Rearrangement,” in Proceedings of : Science and Systems, 2015.
+planner is a high-level component and is applicable to various            [11] M. Toussaint, “Logic-Geometric Programming: An Optimization-Based
+                                                                               Approach to Combined Task and Motion Planning,” in Proceedings of
+humanoid robots like HRP2Kai, Nextage, etc.                                    Internatoinal Joint Conference on Artificial Intelligence, pp. 1930–1936,
+   There are several future directions. First, as discussed in the             2015.
+experimental section, the present algorithms are not suitable             [12] N. Dantam, Z. Kingston, and S. Chauhuri, “Incremental Task and Motion
+                                                                               Planning: A Constraint-Based Approach,” in Proceedings of Robotics:
+for more than two arms due to the high offline computational                   Science and Systems, 2016.
+cost. The present algorithms plan over both arms in a cen-                [13] J. Mirabel and F. Lamiraux, “Manipulation Planning: Building Paths on
+tralized way, which we believe is not applicable to more than                  Constrained Manifolds,” in Proceedings of IEEE International Confer-
+                                                                               ence on Robotics and Automation, 2017.
+two arms since few creatures in nature control more than two              [14] G. Lee, T. Lozano-Perez, and L. P. Kaelbling, “Hierarchical Planning
+dexterous arms using a central brain. Thus, we will explore                    for Multi-contact Non-prehensile Manipulation,” in Proceedings of In-
+decentralized methods and study planning across multiple                       ternational Conference on Intelligent Robots and Sytems, pp. 264–271,
+                                                                               2015.
+industrial robots (more than two arms) or human-robot coor-               [15] J. Z. Woodruff and K. M. Lynch, “Planning and Control for Dynamic,
+dination using a combination of the proposed algorithms and                    Nonprehensile, and Hybrid Manipulation Tasks,” in Proceedings of IEEE
+decentralized approaches. Second, the current visual detection                 International Conference on Robotics and Automation, pp. 4066–4073,
+                                                                               2017.
+system assumes a single object without surrounding obstacles.
+                                                                          [16] Y. Koga, K. Kondo, J. Kuffner, and J.-C. Latombe, “Planning Motions
+Although the assumption eases visual estimation, in more                       with Intentions,” in Proceedings of Annual Conference on Computer
+complicated environments where the object is obstructed and                    Graphics and Interactive Techniques, pp. 395–408, 1994.
+can hardly be recognized from one view, we may use hand                   [17] K. Cho, M. Kim, and J.-B. Song, “Complete and Rapid Regrasp Planning
+                                                                               with Look-up Table,” Journal of Intelligent and Robotic Systems, vol. 36,
+mounted cameras and active visual perception to perform                        pp. 371–387, 2003.
+mixed view and preparatory manipulation planning. Third, the              [18] J.-P. Saut, M. Gharbi, J. Cortes, D. Sidobre, and T. Simeon, “Planning
+placement planning algorithm is specially designed for tables.                 Pick-and-place Tasks with Two-hand Regrasping,” in Proceedings of
+                                                                               International Conference on Intelligent Robots and Sytems, pp. 4528–
+It would be interesting and promising to develop general stable                4533, 2010.
+state planners that is applicable to any supporting surfaces and          [19] K. Harada et al., “A manipulation motion planner for dual-arm industrial
+unstructured environments. We have done some preliminary                       manipulators,” in Proceedings of International Conference on Robotics
+                                                                               and Automation, pp. 928–934, 2014.
+studies on it, and will explore more in the future. Moreover,
+                                                                          [20] K. Harada et al., “Project on Development of a Robot System for Ran-
+changing environments, especially the environments where                       dom Picking-Grasp/Manipulation planner for a Dual-arm Manipulator,”
+human works together with the robot and has to be treated                      in Proc. International Symposium on System Integration, pp. 583–589,
+as a moving obstacle, also deserves exploration. The current                   2014.
+                                                                          [21] K. Hauser and J.-C. Latombe, “Multi-modal Motion Planning in Non-
+DD-RRT algorithm and regrasp replanning have to be adapted                     expansive Spaces,” International Journal of Robotics Research, vol. 29,
+to determined good timing for reactions.                                       pp. 897–951, 2010.
+JOURNAL OF LATEX CLASS FILES, VOL. X, NO. X, XXXX YYYY                         12
+
+
+
+[22] N. Hayashi, T. Suehiro, , and S. Kudoh, “Planning Method for a
+     Wrapping-with-fabric Task using Regrasping,” in Proceedings of Inter-
+     national Conference on Robotics and Automation, pp. 1285–1290, 2017.
+[23] P. Lertkultanon and Q.-C. Pham, “A Certified-Complete Bimanual
+     Manipulation Planner,” IEEE Transactions on Automation Science and
+     Engineering, 2018.
+[24] X. Zhou, P. Lertkultanon, and Q.-C. Pham, “Closed-chain Manipulation
+     of Large Objects by Multi-arm Robotic Systems,” IEEE Robotics and
+     Automation Letters, vol. 2, no. 4, pp. 1832–1839, 2017.
+[25] F. Suárez-Ruiz, X. Zhou, and Q.-C. Pham, “Can Robots Assemble an
+     IKEA Chair?,” Science Robotics, vol. 3, no. 17, 2018.
+[26] G. Vezzani, M. Regoli, U. Pattacini, and L. Natale, “A Novel Pipeline
+     for Bi-manual Handover Task,” Advanced Robotics, pp. 1–14, 2017.
+[27] W. Wan and K. Harada, “Regrasp Planning using 10,000 Grasps,” Proc.
+     International Conference on Intelligent Robots and Systems, 2017.
+[28] Z. Kingston, M. Moll, , and L. E. Kavraki, “Sampling-Based Methods
+     for Motion Planning with Constraints,” Annual Review of Control,
+     Robotics, and Autonomous Systems, vol. 1, pp. 159–185, 2018.
+[29] A. Yershova, L. Jaillet, T. Siméon, and S. M. LaValle, “Dynamic-domain
+     RRTs: Efficient exploration by controlling the sampling domain,” in
+     Proceedings of the IEEE International Conference on Robotics and
+     Automation, pp. 3856–3861, 2005.
+[30] W. Wan and K. Harada, “Divide-and-conquer Manipulation Planning
+     by Lazily Searching a Weighted Two-layer Manipulation Graph,” in
+     Proceedings of IEEE International Workshop on Advanced Robotics and
+     its SOcial ompacts, 2015.
+[31] W. Wan and K. Harada, “Developing and Comparing Single-arm and
+     Dual-arm Regrasp,” IEEE Robotics and Automation Letters, pp. 243–
+     250, 2016.
+[32] P. E. Hart, N. J. Nilsson, and B. Raphael, “A Formal Basis for the
+     Heuristic Determination of Minimum Cost Paths,” IEEE transactions
+     on Systems Science and Cybernetics, vol. 4, no. 2, pp. 100–107, 1968.
+

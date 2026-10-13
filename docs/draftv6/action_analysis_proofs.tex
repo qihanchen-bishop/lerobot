@@ -1,7 +1,7 @@
 
-\section{Task Performance and Imitation Risk}
+\section{}
 \label{app:actionproofs}
-\subsection{Performance-Difference Identity}
+\subsection{Proof of the Policy Performance-Difference Identity}
 \label{app:pdidentity}
 We prove~\eqref{eq:pd} by summing expected changes in the reference value.
 The evaluation-domain restriction in Section~\ref{sec:task} and
@@ -139,127 +139,47 @@ Applying it to $e(h)^2$ and using~\eqref{eq:populationimitationrisk} gives
 Combining~\eqref{eq:riskproofsensitivity}--\eqref{eq:riskproofcoverage}
 establishes~\eqref{eq:successbound}.
 
-% \subsection{完整动作历史上的覆盖限制}
-\subsection{Coverage Limitations for Complete Action Histories}
-\label{app:historycoverage}
-% 以下反例说明完整历史上的覆盖假设可能失效。
-The following example shows how Assumption~\ref{ass:democoverage} can fail for complete histories.
-% 取 $T\ge2$，确定性专家在初始时刻恒执行 $u_0=0$，
-Let $T\ge2$. A deterministic expert always executes $u_0=0$ initially,
-% 学习器恒执行一个允许的非零动作 $u_0=\varepsilon$。
-whereas the learner always executes an admissible nonzero action $u_0=\varepsilon$.
-% 由于H_1包含已执行动作，事件
-Because $\mathcal H_1$ contains the executed action, the event
-% $\mathcal B=\{t=1,\ u_0=\varepsilon\}$ 满足
-$\mathcal B=\{t=1,\ u_0=\varepsilon\}$ satisfies
-\begin{equation}
- \bar\mu_{\pi_{\mathrm E}}(\mathcal B)=0,
- \qquad \bar\mu_\pi(\mathcal B)=1/T>0.
- \label{eq:apphistorysupport}
-\end{equation}
-% 故当 $\nu=\bar\mu_{\pi_{\mathrm E}}$ 时，$\bar\mu_\pi\not\ll\nu$，
-Thus, for $\nu=\bar\mu_{\pi_{\mathrm E}}$, we have $\bar\mu_\pi\not\ll\nu$, violating Assumption~\ref{ass:democoverage},
-% 无论 $\varepsilon$ 多小，也无论专家示范增加多少条。
-regardless of how small $\varepsilon$ is or how many expert demonstrations are collected.
-% 这一反例甚至允许动作不影响下一步物理状态；失配来自记录的动作历史本身。
-This counterexample even allows actions to have no effect on the next physical state; the mismatch arises from the recorded action history itself.
-
-% 选取更广的参考分布只可能改变覆盖条件，不能同时提供该分布上的专家动作标签或泛化保证。
-Choosing a broader reference distribution can change coverage, but does not simultaneously provide expert action labels or generalization guarantees on that distribution.
-% 若用历史压缩替代完整历史进行性能差分，还需证明它保留任务记忆、受控转移和执行规则。
-Replacing the full available history by a compressed representation in the performance-difference argument would additionally require proving that it retains the task memory, controlled transitions, and action-chunk execution rules,
-% 并据此重新定义沿参考策略执行的失败概率；以下仅在表示空间迁移动作风险，性能差分仍在完整历史上进行。
-and redefining the failure probability under reference-policy continuation accordingly. The representation-based risk transfer below instead retains complete histories for the performance-difference identity.
-
-% \subsection{表示空间中的动作风险迁移}
-\subsection{Action-Risk Transfer Through a Representation}
+% \subsection{表示层面迁移界的证明}
+\subsection{Proof of the Representation-Level Transfer Bound}
 \label{app:representationcoverage}
-% 该节是补充风险迁移分析，不是C节任务后果表示损失命题的推导前提。
-This supplementary risk-transfer analysis is not a premise of the task-consequence representation bound in Section~\ref{sec:representationanalysis}.
-% 表示覆盖与信息损失的权衡也见域适应文献，但以下结论由本文的条件独立推导。
-Related coverage--information tradeoffs appear in domain adaptation~\cite{johansson2019support,zhao2019invariant}; the following result is derived under the present conditions.
-% 固定策略、专家和同一个可测因果编码器，时间索引保留在表示中。
-Fix the policy $\pi$, expert $\pi_{\mathrm E}$, and a common measurable causal encoder $Z=\phi(t,\mathcal H_t)$ retaining the time index.
-% mu为完整历史部署分布，mu_Z和nu_Z分别为Z的诱导分布。
-Let $\mu=\bar\mu_\pi$, and let $\mu_Z$ and $\nu_Z$ denote the induced distributions of $Z$.
-% 假设表示空间为标准Borel空间，使以下条件期望具有关于z的可测版本；动作平方误差在mu和nu下可积。
-Assume the representation space is standard Borel so that the conditional expectations below admit measurable versions as functions of $z$, and that $e(h)^2=\norm{\pi(h)-\pi_{\mathrm E}(h)}^2$ is integrable under both $\mu$ and $\nu$.
-% m_mu和m_nu分别是相同表示下的部署与参考条件平均平方误差，D_phi度量两者的部署加权差异。
-Define the conditional mean squared errors and their deployment-weighted discrepancy by
+% 先分离条件误差差异与分布覆盖，再用动作敏感性得到任务界。
+We prove~\eqref{eq:representationrisktransfer-main} by separating conditional error discrepancy from distributional coverage, then apply action sensitivity to obtain~\eqref{eq:representationcoveragebound}.
+
+% 沿用B3符号及其可积性和可测条件均值条件。
+Let $\mu=\bar\mu_\pi$, with the remaining notation and the integrability and measurable conditional-mean conditions as in Section~\ref{sec:representationcoverage}.
+% 表示覆盖保证示范零测集也是部署零测集，因此示范侧条件均值在部署表示下有意义。
+Representation coverage ensures that $\nu_Z$-null sets are also $\mu_Z$-null sets, so the demonstration-side conditional mean is well defined for the deployment comparison.
+
+\begin{subequations}
+\label{eq:representationrisktransfer}
+% 第一步：按表示条件化，将部署误差写成各表示下条件平均误差的平均。
+First, conditioning on the representation gives
+\begin{equation}
+ \E_\mu e(h)^2=\E_{\mu_Z}m_\mu(Z).
+ \label{eq:transferconditioning}
+\end{equation}
+
+% 第二步：同一表示下部署与示范的误差可能不同，由D_phi控制这一差异。
+At the same representation, deployment and demonstration conditional errors can differ. By the definition of $D_\phi$,
 \begin{equation}
  \begin{aligned}
- m_\mu(z)&=\E_\mu[e(h)^2\mid Z=z],\\
- m_\nu(z)&=\E_\nu[e(h)^2\mid Z=z],\\
- D_\phi&=\E_{z\sim\mu_Z}|m_\mu(z)-m_\nu(z)|.
+ \E_{\mu_Z}m_\mu(Z)
+ &\le\E_{\mu_Z}m_\nu(Z)
+    +\E_{\mu_Z}|m_\mu(Z)-m_\nu(Z)|\\
+ &=\E_{\mu_Z}m_\nu(Z)+D_\phi.
  \end{aligned}
- \label{eq:appconditionalerrors}
+ \label{eq:transferdiscrepancy}
 \end{equation}
-% 用表示覆盖替代完整历史覆盖；它使条件均值不依赖参考零测集上的版本选择。
-In place of Assumption~\ref{ass:democoverage}, suppose
-$\mu_Z(\mathcal B)\le C_\phi\nu_Z(\mathcal B)$ for every measurable representation event, with $1\le C_\phi<\infty$.
-This condition ensures that reference null sets are also deployment null sets, so $D_\phi$ is independent of the versions chosen for the conditional means.
-% 由条件期望及非负函数的覆盖界，
-Conditioning on $Z$ and applying coverage to the nonnegative function $m_\nu$ give
-\begin{align}
- \E_\mu e(h)^2
- &=\E_{\mu_Z}m_\mu(Z)\nonumber\\
- &\le \E_{\mu_Z}m_\nu(Z)+D_\phi\nonumber\\
- &\le C_\phi\E_{\nu_Z}m_\nu(Z)+D_\phi\nonumber\\
- &=C_\phi R_\nu(\pi)+D_\phi.
- \label{eq:representationrisktransfer}
-\end{align}
-% 有限覆盖常数和两边平方可积也保证D_phi有限。再应用敏感性与Cauchy--Schwarz得正文结果。
-These assumptions also make $D_\phi$ finite and establish~\eqref{eq:representationrisktransfer-main}.
-If Assumption~\ref{ass:actionsensitivity} also holds, the performance-difference identity gives
-$F(\pi)-F(\pi_{\mathrm E})\le TL\E_\mu e(h)$.
-Applying Cauchy--Schwarz and~\eqref{eq:representationrisktransfer} yields the main-text bound~\eqref{eq:representationcoveragebound}.
-% 两个结论均不需要完整历史覆盖或表示具有Markov性，只有任务界需要动作敏感性。
-Neither result requires Assumption~\ref{ass:democoverage} or a Markov assumption on $Z$;
-only the task-performance bound additionally requires Assumption~\ref{ass:actionsensitivity}.
-% 若存在相同的可测函数使策略和专家在两分布下均只依赖Z，则e平方是Z的共同函数，D_phi为零。
-If common measurable functions express both $\pi(h)$ and $\pi_{\mathrm E}(h)$ solely in terms of $Z$ under both distributions, then $e(h)^2$ is a common function of $Z$ and $D_\phi=0$.
-% 一般情形下D_phi并非单一歧义指标，零值也不推出表示充分；它只是该固定策略的条件平均误差差异。
-In general, $D_\phi$ measures a conditional mean-error difference for this fixed policy, not all decision ambiguity; $D_\phi=0$ alone does not establish representation sufficiency.
-% D_phi与C节基于任务后果的表示损失不同，也涉及离线示范无法单独提供的部署专家动作。
-It differs from the task-consequence representation loss in Section~\ref{sec:representationanalysis} and involves expert actions on deployment histories that fixed demonstrations alone do not supply.
-% 该界是固定对象的条件性界，而不是数据依赖训练过程的统一泛化保证。
-The result is a conditional bound for fixed objects, not a uniform generalization guarantee for data-dependent training.
 
-% 可测压缩将事件合并，因此完整空间的覆盖常数也适用于表示空间；反方向通常不成立。
-Measurable compression merges events: any complete-space coverage constant also bounds representation events by taking their preimages, but the converse need not hold.
-% 可测可逆变换在两方向均保留事件，故最佳覆盖常数不变。保留RGB并附加其确定性语义图也有可测逆投影。
-A measurable invertible transformation with measurable inverse preserves the best coverage constant in both directions.
-Appending a deterministic semantic map to retained RGB has the same property relative to RGB, since projection recovers the input.
-% 仅在有损表示时覆盖可改善，而式中的D_phi保留条件误差差异的代价；历史增加也不保证覆盖常数更小。
-Coverage can improve through a lossy representation, with $D_\phi$ retaining the cost of conditional error differences; adding history need not reduce the coverage constant.
-
-% \subsection{更小动作风险但更差任务表现的反例}
-\subsection{A Counterexample: Lower Action Risk but Worse Task Performance}
-% 考虑 $T=1$、两个等概率且可观测的初始状态，
-Consider $T=1$ with two equally likely, observable initial states,
-% 动作集合为 $[0,0.2]$，专家在两种状态均选择 $0$。
-action set $[0,0.2]$, and an expert that chooses $0$ in both states.
-% 第一种状态的失败概率为 $\min(1,100a^2)$，
-The failure probability in the first state is $\min(1,100a^2)$,
-% 第二种状态始终成功。
-while the second state always leads to success.
-% 终局图像可直接显示成功或失败，因此满足视觉可评估性。
-The final image directly reveals success or failure, satisfying visual assessability.
-
-% 策略 $\pi_1$ 分别输出 $(0.1,0)$，策略 $\pi_2$ 分别输出 $(0,0.2)$。
-Policies $\pi_1$ and $\pi_2$ output $(0.1,0)$ and $(0,0.2)$ across the two states, respectively.
-% 在共同初始分布 $\nu$ 上，
-Under the common initial distribution $\nu$,
-\begin{align}
- R_\nu(\pi_1)&=0.005<0.02=R_\nu(\pi_2),\nonumber\\
- J(\pi_1)&=0.5<1=J(\pi_2).
- \label{eq:counterexample}
-\end{align}
-% 本例中覆盖常数 $C=1$，敏感性界可取 $L=10$，
-The coverage constant is $C=1$, and the sensitivity bound holds with $L=10$,
-% 因为 $\min(1,100a^2)\le10a$。
-since $\min(1,100a^2)\le10a$.
-% 因而即使正文的界成立，较小动作风险也不蕴含策略成功率排序。
-Thus, even when the bound in the main text holds, smaller action risk does not imply higher task success.
-% 差异来自误差发生的位置与任务后果，而不是界的代数错误。
-The difference comes from where errors occur and their task consequences, not from an algebraic error in the bound.
+% 第三步：对非负条件误差应用表示覆盖，再用全期望得到示范总体风险。
+Finally, applying representation coverage to the nonnegative function $m_\nu$ and taking the total expectation give
+\begin{equation}
+ \E_{\mu_Z}m_\nu(Z)
+ \le C_\phi\E_{\nu_Z}m_\nu(Z)
+ =C_\phi R_\nu(\pi).
+ \label{eq:transfercoverage}
+\end{equation}
+\end{subequations}
+% 上述三步建立风险迁移界。任务界沿用A-B的敏感性、时间平均与Cauchy--Schwarz步骤。
+Combining~\eqref{eq:transferconditioning}--\eqref{eq:transfercoverage} establishes~\eqref{eq:representationrisktransfer-main}.
+Under Assumption~\ref{ass:actionsensitivity}, substituting this result into the sensitivity, time-average, and Cauchy--Schwarz steps~\eqref{eq:riskproofsensitivity}--\eqref{eq:riskproofsquared} yields~\eqref{eq:representationcoveragebound}.
