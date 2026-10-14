@@ -1,466 +1,488 @@
-% 日常任务的完整证据链 -> 手术模拟任务上的跨任务适用性。
-% 所有结果均留空；括号内下划线文字是待填写的分析提示。
-% 组织参考：Cable Routing (T-RO 2024) 的研究问题与分层验证，GC-DA (T-RO 2024) 的问题驱动消融。
+% 主线：整体表现、标注质量、表示消融、历史反馈，最后验证跨任务适用性。
+% 结果保持留空；括号加下划线的文字为待完成内容。
+% 本次只翻译及调整排版，不擅自替换尚未确认的实验配置。
 \section{Experimental Evaluation}
 \label{sec:experiments}
+% 本节在双臂暴露与执行任务上验证方法，前序交互改变目标的可见性和可操作性。
 This section evaluates the proposed method on a bimanual exposure and execution task.
 The task requires coordinated actions under deformable occlusion,
 where preceding interactions change the visibility and accessibility of the target.
+% 先比较物体、位置和颜色条件下的表现，再验证标注、表示、反馈，最后扩展到手术模拟任务。
 We first assess overall task performance across object categories, initial positions, and occluder colors,
 then examine annotation reliability, semantic representations, and history-conditioned correction through controlled ablations.
 Finally, we evaluate the framework on a surgical-phantom task to assess its applicability beyond the primary setting.
 
-主要实验围绕四个问题展开：
+% 主要实验围绕四个问题展开。
+The main experiments address four questions:
 \begin{enumerate}
-\item 完整方法能否提高任务完成率，且收益是否在不同物体、初始位置和遮挡物颜色上保持一致？
-\item 质量感知迭代能否在保持分割精度的同时减少异常，并降低人工标注负担？
-\item 语义输入与任务描述量监督分别带来什么收益，感知质量如何影响这些收益？
-\item 更新观测与历史能否减少执行错误，并促进自然偏差后的恢复？
+% 完整方法能否提高成功率，且收益是否在不同物体、位置和颜色上保持？
+\item Does the complete method improve task success across objects, initial positions, and occluder colors?
+% 质量感知迭代能否保持精度、减少异常并降低人工负担？
+\item Can quality-aware iteration reduce segmentation anomalies and annotation effort while preserving accuracy?
+% 语义和描述量监督分别有什么收益，感知质量如何影响这些收益？
+\item What do semantic inputs and task-descriptor supervision contribute, and how does perception quality affect their benefits?
+% 更新观测和历史能否减少错误并促进自然恢复？
+\item Can recent observations and history reduce execution errors and support recovery from naturally occurring deviations?
 \end{enumerate}
 
 \subsection{Experimental Setup}
 \label{sec:evalprotocol}
 \input{task_instance}
 
-\begin{figure*}[t]
+\begin{figure*}[!t]
 \centering
-\fbox{\parbox[c][2.1cm][c]{0.95\textwidth}{\centering
-(a) 双臂平台全景、前视与侧视相机、工具及目标区域\\[4pt]
-(b) 同一试验的初始遮挡--暴露--分离--入区--布料复原关键帧\\[4pt]
-替换为真实照片；图中标明前序交互如何改变后续操作条件}}
+% 占位：平台、相机、工具、区域及同次试验的完整关键帧。
+\fbox{\parbox{.95\textwidth}{\centering\small
+(a) Platform, cameras, tool, and target region\\[3pt]
+(b) Occlusion, exposure, separation, placement, and cloth restoration}}
 \caption{Bimanual exposure and execution: the experimental platform and a complete task sequence.}
 \label{fig:tasksetup}
 \end{figure*}
 
 \subsubsection{Demonstrations and Test Conditions}
-数据集包含90条示范、53,723个帧对齐样本，采集频率为30\,Hz。
-前视与侧视原始图像均为$640\times360$，本体状态和动作均为10维关节位置，
-对应每条机械臂的5个关节。
+% 数据集90条示范、53,723帧，采集频率30Hz。
+The dataset contains 90 demonstrations and 53,723 frame-aligned samples recorded at 30\,Hz.
+% 前侧图像640x360，状态和动作为10维关节位置，每臂5维。
+Both camera streams have a resolution of $640\times360$.
+Proprioceptive states and actions are 10-dimensional joint-position vectors, with five joints per arm.
+% 初始位置为3x4网格，示范覆盖6位置，测试3类别x12位置共36条件。
+Initial object positions follow a $3\times4$ grid, with demonstrations covering six positions (Fig.~\ref{fig:objectpositions}).
+The basic test set comprises all three demonstrated object categories at all twelve positions, yielding 36 conditions.
+% 未见布料颜色检验外观变化；各方法匹配条件和独立重置次数。
+Cloth of an unseen color tests appearance variation under matched object and position conditions.
+Each method receives the same number of independently reset trials per condition, with results reported separately for seen and unseen positions.
+% 待确定颜色、组合和重复次数。
+\draftnote{Specify the unseen cloth color, test combinations, and repetitions per condition.}
 
-物体初始位置按$3\times4$网格布置，示范覆盖其中六个位置，如图~\ref{fig:objectpositions}所示；
-基础测试覆盖三类已见物体与全部12个位置的组合，共36个条件。
-另使用未见颜色的遮挡布料，在相同物体与位置条件下检验外观变化的影响。
-各方法在每个条件下进行相同次数的独立重置试验，分别报告已见与未见位置的表现。
-\draftnote{确定未见布料颜色与重复次数；固定三类物体、12个位置和各布料颜色的测试组合。}
-
-\begin{figure}[t]
+\begin{figure}[!tb]
 \centering
-\fbox{\parbox[c][2.8cm][c]{.92\columnwidth}{\centering
-(a) 方块、纸团、螺丝螺母及已见／未见颜色布料\\[4pt]
-(b) 桌面$3\times4$网格及固定目标区域\\[4pt]
-实心：6个示范位置；空心：6个未见测试位置\\[4pt]
-标注行列方向、间距和前视相机方向}}
+% 占位：三个物体、不同颜色布料、网格与目标区域。
+\fbox{\parbox{.92\columnwidth}{\centering\small
+(a) Objects and seen/unseen cloth colors\\[3pt]
+(b) Position grid and target region\\[3pt]
+Filled: six demonstration positions; open: six unseen positions}}
 \caption{Object categories, occluder colors, and initial positions. Filled and open markers indicate demonstration and unseen test positions, respectively.}
 \label{fig:objectpositions}
 \end{figure}
 
 \subsubsection{Training Settings}
-各方法在固定示范预算下使用相同的RGB观测、本体状态、动作接口和示范划分；语义方法增加由示范视频获得的语义监督。
-基础策略匹配训练更新次数与样本访问量，语义预训练和残差训练的额外资源单独报告。
-残差消融共用冻结的基础策略，模型选择与最终测试分开。
-表~\ref{tab:protocol}汇总关键执行设置，数据使用与评价细则见附录~\ref{app:datascope}及\ref{app:evaluationdetails}。
+% 固定示范预算，相同观测、动作接口及数据划分，语义方法增加视频标注监督。
+All methods use a fixed demonstration budget, identical RGB and proprioceptive observations, the same action interface, and matched data splits.
+Semantic methods additionally use annotations derived from the demonstration videos.
+% 匹配更新和样本访问量，额外语义与残差资源单独报告。
+Base-policy training matches update counts and sample exposure; additional segmentation and residual-training resources are reported separately.
+% 残差消融共用冻结基础策略，模型选择与最终测试分开。
+Residual ablations share a frozen base policy, and model selection is separate from final testing.
+% 设置见表，数据及评价细则见附录。
+Table~\ref{tab:protocol} summarizes execution settings; data usage and evaluation details appear in Appendices~\ref{app:datascope} and~\ref{app:evaluationdetails}.
 
-\begin{table}[t]
+\begin{table}[!tb]
+% 关键训练与执行设置。
 \caption{Key training and execution settings.}
 \label{tab:protocol}
 \centering\small
-\begin{tabular}{p{.38\columnwidth}p{.49\columnwidth}}
+\begin{tabular}{p{.69\columnwidth}p{.18\columnwidth}}
 \toprule
-项目 & 配置\\
+% 项目与配置。
+Setting & Value\\
 \midrule
-数据划分／训练种子 & 待填\\
-每个条件执行重复 & 待填\\
-时限／布料覆盖阈值 & 待填\\
-控制频率／部署设备 & 待填\\
-动作块／重规划间隔 & 待填\\
-残差间隔／预留延迟 & 待填\\
+% 数据划分/种子、重复、时限/覆盖、控制/设备、动作块/重规划、残差/延迟。
+Data split / training seeds & TBD\\
+Repetitions per condition & TBD\\
+Time limit / coverage threshold & TBD\\
+Control rate / deployment hardware & TBD\\
+Chunk length / replanning interval & TBD\\
+Residual interval / delay allowance & TBD\\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsubsection{Evaluation Metrics}
-主要指标为固定时限内的完整任务成功率，报告成功次数／总次数及不确定性区间。
-补充指标包括成功试验的完成时间、以全部试验为分母的累计成功时间曲线、
-阶段到达与条件完成率，以及主要失败类型。
-各方法采用一致的初始条件和计时规则，测试顺序在条件区组内随机安排。
-任务成功与阶段进展由独立视频审核判定。
+% 主指标是完整成功率，报告次数/总数及区间。
+The primary metric is full-task success within the time limit, reported as successes/total trials with uncertainty intervals.
+% 补充成功时间、全部试验累计成功曲线、阶段率及失败类型。
+Additional metrics include completion time for successful trials, cumulative success over time using all trials as the denominator, stage attainment and conditional completion rates, and primary failure categories.
+% 初始条件和计时一致，区组内随机执行，独立视频审核。
+Initial conditions and timing rules are matched across methods, with randomized execution order within condition blocks.
+Task success and stage progress are determined by independent video review.
 
 \subsection{Overall Task Performance}
 \label{sec:overallperformance}
-本节比较整体任务表现，并考察物体类别、初始位置和遮挡物颜色变化下的成功率。
-对照包括ACT~\cite{zhao2023act}、Diffusion Policy~\cite{chi2023diffusion}和完整方法；
-另预留A2C2~\cite{a2c2}作为在线动作块纠正对照、VIOLA~\cite{zhu2023viola}作为对象中心表示对照。
-\draftnote{完成所选基线的合理调试后再纳入最终表格，报告适配改动与额外资源。
-ACT上的A2C2适配不等于原版复现，本文MLP消融也不能直接标为A2C2。}
-
-各基线采用匹配的模型选择与调参预算。
-推理速度以部署设备上的端到端测量为准，不以名义更新频率代替实际频率。
+% 比较整体表现和类别、位置、颜色变化。
+We compare overall performance and success across object categories, initial positions, and occluder colors.
+% ACT和DP为基线，A2C2和VIOLA作为在线纠偏与对象中心对照预留。
+Baselines include ACT~\cite{zhao2023act} and Diffusion Policy~\cite{chi2023diffusion};
+A2C2~\cite{a2c2} and VIOLA~\cite{zhu2023viola} are reserved as online chunk-correction and object-centric baselines, respectively.
+% 待完成适配和调试；ACT+A2C2不是原版复现，自有MLP也不能直接标为A2C2。
+\draftnote{Complete baseline adaptation and tuning, and report additional resources. Distinguish ACT+A2C2 adaptation from both the original implementation and our MLP ablation.}
+% 匹配调参预算，报告真实端到端速度。
+Model-selection and tuning budgets are matched, and inference speed is measured end to end on the deployment hardware.
 
 \subsubsection{Task Success and Completion Time}
-表~\ref{tab:mainresults}汇总三个已见物体类别、已见与未见位置、已见与未见遮挡物颜色的成功率，
-以及整体成功率和成功试验的平均完成时间。
-整体成功率以预先确定的完整测试池为分母，每次试验只计一次；分组列分别统计满足对应条件的试验。
-图~\ref{fig:positionperformance}进一步展示逐位置表现。
+% 总表报告三类已见物体、位置、颜色分组，整体成功和平均成功时间。
+Table~\ref{tab:mainresults} reports success for the three demonstrated object categories, seen/unseen positions, and seen/unseen cloth colors, together with overall success and mean completion time for successful trials.
+% 总体试验去重，分组各自统计，热图展示逐位置。
+Overall success counts each trial once in the predefined test pool; subgroup columns use their respective trial subsets.
+Figure~\ref{fig:positionperformance} provides position-wise results.
 
-\begin{table*}[t]
-\caption{Task success across object categories, initial positions, and occluder colors, with overall success and mean completion time. Success entries report count/total and percentage; time is computed over successful trials.}
+\begin{table*}[!t]
+% 类别、位置、颜色与整体表现；成功次数/总数及百分比，时间仅成功试验。
+\caption{Task success by object category, initial position, and occluder color. Success entries report count/total and percentage; mean completion time includes successful trials only.}
 \label{tab:mainresults}
 \centering\small
-\setlength{\tabcolsep}{3pt}
+\setlength{\tabcolsep}{4pt}
 \begin{tabular}{lccccccccc}
 \toprule
-& \multicolumn{3}{c}{类别成功率} & \multicolumn{2}{c}{位置成功率} & \multicolumn{2}{c}{遮挡物颜色成功率} & \multicolumn{2}{c}{整体表现}\\
+% 类别成功率、位置成功率、颜色成功率和整体表现。
+& \multicolumn{3}{c}{Object category} & \multicolumn{2}{c}{Position} & \multicolumn{2}{c}{Cloth color} & \multicolumn{2}{c}{Overall}\\
 \cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}\cmidrule(lr){9-10}
-方法 & 方块 & 纸团 & 螺丝螺母 & 已见 & 未见 & 已见 & 未见 & 成功率 & 时间(s)\\
-& 已见 & 已见 & 已见 & 6位置 & 6位置 & 颜色 & 颜色 & & \\
+% 三个已见类别，六个已见和六个未见位置。
+Method & Cube & Paper & Screws/nuts & Seen & Unseen & Seen & Unseen & Success & Time (s)\\
+& Seen & Seen & Seen & 6 positions & 6 positions & & & & \\
 \midrule
 ACT & -- & -- & -- & -- & -- & -- & -- & -- & --\\
 Diffusion Policy & -- & -- & -- & -- & -- & -- & -- & -- & --\\
-ACT＋A2C2适配 & -- & -- & -- & -- & -- & -- & -- & -- & --\\
-VIOLA适配 & -- & -- & -- & -- & -- & -- & -- & -- & --\\
+ACT+A2C2 (adapted) & -- & -- & -- & -- & -- & -- & -- & -- & --\\
+VIOLA (adapted) & -- & -- & -- & -- & -- & -- & -- & -- & --\\
 Ours & -- & -- & -- & -- & -- & -- & -- & -- & --\\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-\begin{figure*}[t]
+\begin{figure*}[!t]
 \centering
-\fbox{\parbox[c][2.1cm][c]{.95\textwidth}{\centering
-行：方块、纸团、螺丝螺母；列：ACT、DP、Ours\\[4pt]
-每个面板为$3\times4$位置成功率热图，统一色标，标出示范位置\\[4pt]
-每格标记成功次数／重复次数，按布料颜色分面；未测试组合留空}}
+% 占位：物体x方法x颜色的3x4热图，示范位置和每格分母。
+\fbox{\parbox{.95\textwidth}{\centering\small
+Position-wise success: three object categories, ACT/DP/Ours, and cloth colors\\[3pt]
+$3\times4$ grids with counts and demonstration positions; untested cells left blank}}
 \caption{Position-wise task success by object category and occluder color. Highlighted cells indicate demonstration positions; untested combinations remain blank.}
 \label{fig:positionperformance}
 \end{figure*}
-\draftnote{先比较整体成功率与完成时间，再检查收益在三个物体类别上是否一致，
-以及未见位置和颜色下是否保持。结合全部试验的成功时间曲线，避免仅由成功样本均值判断效率。
-分别分析位置、颜色变化及两者同时变化的情况；结论限定为固定示范预算下的表现。}
+% 待分析总体、时间、类别与未见条件；不能仅看成功样本均值，结论限定固定预算。
+\draftnote{Compare overall success and time, then consistency across objects and unseen conditions. Use cumulative success to interpret timing; distinguish position shifts, color shifts, and their combination under the fixed demonstration budget.}
 
 \subsubsection{Completion Time, Stage Progress, and Failures}
-图~\ref{fig:timeandstages}比较完成时间与阶段到达情况，
-表~\ref{tab:failurecounts}汇总主要失败类型。
-二者用于区分暴露、目标执行与复原环节的改善，具体失败机制在Discussion中分析。
-\begin{figure*}[t]
+% 时间和阶段图、失败统计定位收益，原因在讨论中分析。
+Figure~\ref{fig:timeandstages} compares completion time and stage progress, while Table~\ref{tab:failurecounts} summarizes primary failures.
+These results locate improvements in exposure, execution, or restoration; failure mechanisms are examined in the Discussion.
+\begin{figure*}[!t]
 \centering
-\fbox{\parbox[c][2.1cm][c]{0.95\textwidth}{\centering
-(a) 截至时间$t$的完整成功比例曲线\\[4pt]
-(b,c) 暴露、分离、入区、复原的累计到达率／条件完成率\\[4pt]
-按方法绘制，包含误差区间和分母；不将失败试验从时间曲线中删除}}
-\caption{Completion-time and stage-level comparisons. Placeholder for measured curves and stage statistics.}
+% 占位：累计成功曲线、阶段累计与条件完成率。
+\fbox{\parbox{.95\textwidth}{\centering\small
+(a) Cumulative task success over time\\[3pt]
+(b,c) Cumulative and conditional stage completion, with counts and intervals}}
+\caption{Completion-time and stage-level comparisons. All trials contribute to the denominator of the cumulative-success curve.}
 \label{fig:timeandstages}
 \end{figure*}
 
-\begin{table}[t]
-\caption{Primary failure categories for the everyday task. Report counts and fractions of all trials for each method.}
+\begin{table}[!tb]
+% 主要失败类型，以全部试验为分母。
+\caption{Primary failures, reported as counts and fractions of all trials for each method.}
 \label{tab:failurecounts}
 \centering\small
-\begin{tabular}{p{.22\columnwidth}p{.34\columnwidth}p{.29\columnwidth}}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lp{.51\columnwidth}l}
 \toprule
-方法 & 主要失败类型 & 次数／全部试验\\
+Method & Failure category & Count/total\\
 \midrule
-待填 & 未完成暴露 & --\\
-待填 & 无效接触／拨空气 & --\\
-待填 & 目标移出可操作范围 & --\\
-待填 & 入区不完整 & --\\
-待填 & 复原不足 & --\\
-待填 & 其他／原因未确定 & --\\
+% 未暴露、无效接触、移出范围、入区不完整、复原不足、其他。
+TBD & Exposure incomplete & --\\
+TBD & Ineffective contact & --\\
+TBD & Object out of reach & --\\
+TBD & Incomplete placement & --\\
+TBD & Insufficient restoration & --\\
+TBD & Other / undetermined & --\\
 \bottomrule
 \end{tabular}
 \end{table}
-
-\draftnote{比较完整方法相对各基线的成功率差值及区间，再结合时间曲线和阶段统计说明收益发生在哪个环节。
-若只在某类物体或初始条件下改善，直接限定结论范围。表~\ref{tab:failurecounts}只统计现象，
-具体原因结合视频与日志在Discussion分析；未完成的可选基线行在定稿时删除。}
-\FloatBarrier
+% 待分析差值、区间、阶段收益与条件局限；日志支持原因，删除未实现基线。
+\draftnote{Report success differences and intervals, locate stage-level gains, and state condition-specific limitations. Analyze causes using videos and logs in the Discussion; remove unimplemented optional baselines.}
 
 \subsection{Quality-Aware Semantic Annotation}
 \label{sec:annotationexperiments}
-本节检验质量感知迭代能否在保持分割精度的同时减少异常，并降低获得可靠标签的人工成本。
-按完整视频划分标注开发数据与独立人工审核数据。
-比较种子模型、无质量筛选的迭代和质量筛选迭代；
-两条迭代路径使用相同候选视频池及匹配训练预算，并记录实际保留的数据量。
-独立人工审核视频包含普通帧以及暴露、接触和入区等关键事件，
-两类样本分层报告，评价不以迭代自身的质量分数代替人工参考。
+% 检验精度保持、异常减少和人工成本；按完整视频分开开发与独立审核。
+We test whether quality-aware iteration reduces anomalies and the cost of reliable labels while preserving segmentation accuracy.
+Annotation development and independent review sets are separated by complete videos.
+% 种子、有/无筛选迭代对比，同候选池和预算，记录保留量。
+We compare the seed model, iteration without quality filtering, and quality-filtered iteration using the same candidate pool and matched training budgets, recording the retained data volume.
+% 普通帧和事件分层报告，不用自动分数代替人工参考。
+Independent review covers ordinary frames and exposure, contact, and placement events, reported separately rather than evaluated solely by the pipeline's quality scores.
 
-表~\ref{tab:annotationquality}报告原始输出的mIoU、异常率、可用标签比例与人工投入。
-异常帧由预先定义的漏分、错分和非真实结构突变规则审核；
-时间一致性使用有效光流对应区域的运动补偿IoU。
-原始输出与后处理结果分开统计，以区分模型本身的改善和筛选／修补的作用。
-按类别补充目标和工具的IoU及异常计数，跨视频指标以视频为单位汇总。
-人工成本计入关键帧标注、检查与修正时间，并结合达到统一审核标准的可用标签数量报告。
-在相同视频子集上记录人工逐帧标注／修正流程的耗时，作为人工成本参照。
-\begin{table*}[t]
-\caption{Annotation quality and human effort on independently reviewed everyday-task videos. Iteration index $k$ is not fixed in advance.}
+% 原始mIoU、异常率、标签保留、人工；异常定义和运动补偿IoU。
+Table~\ref{tab:annotationquality} reports raw mIoU, anomaly rate, label retention, and human effort.
+Anomalies are reviewed using predefined criteria for missing masks, incorrect assignments, and spurious structural changes.
+Temporal consistency uses motion-compensated IoU on valid optical-flow correspondences.
+% 原始和后处理分开，目标/工具分组，以视频汇总。
+Raw and postprocessed outputs are evaluated separately, with per-class object/tool IoU and anomaly counts aggregated by video.
+% 人工包含关键帧、检查和修正，对照统一审核标准和相同视频子集。
+Human effort includes keyframe annotation, inspection, and correction, reported alongside the volume of labels meeting a common review standard.
+A manual frame-by-frame annotation/correction workflow on the same video subset provides a labor-cost reference.
+
+\begin{table*}[!t]
+\caption{Annotation quality and human effort on independently reviewed videos. The final iteration index $k$ is not fixed in advance.}
 \label{tab:annotationquality}
 \centering\small
-\begin{tabular}{p{.22\textwidth}cccccc}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lcccccc}
 \toprule
-标注／分割版本 & 标注视频数 & raw mIoU & 原始异常率 & 运动IoU & 保留标签率 & 人工分钟／视频\\
+% 版本、视频数、精度、异常、运动IoU、保留率、人工时间。
+Model / labels & Videos & Raw mIoU & \shortstack{Raw anomaly\\rate} & Motion IoU & \shortstack{Label\\retention} & \shortstack{Human effort\\(min/video)}\\
 \midrule
-种子模型 & -- & -- & -- & -- & -- & --\\
-无质量筛选迭代 & -- & -- & -- & -- & -- & --\\
-质量筛选迭代1 & -- & -- & -- & -- & -- & --\\
-质量筛选迭代$k$ & -- & -- & -- & -- & -- & --\\
+Seed model & -- & -- & -- & -- & -- & --\\
+Unfiltered iteration & -- & -- & -- & -- & -- & --\\
+Quality-filtered, round 1 & -- & -- & -- & -- & -- & --\\
+Quality-filtered, round $k$ & -- & -- & -- & -- & -- & --\\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-\begin{figure}[t]
+\begin{figure}[!tb]
 \centering
-\fbox{\parbox[c][3cm][c]{.92\columnwidth}{\centering
-(a) 累积标注量--精度／异常率曲线\\[4pt]
-(b) 同一视频的质量轨迹与真实事件标记\\[4pt]
-(c) 异常帧的原始预测、处理结果和人工参考\\[4pt]
-保留真实暴露／接触变化作为对照}}
-\caption{Annotation expansion and temporal quality diagnostics. Placeholder for measured curves and reviewed mask examples.}
+% 占位：标注量质量曲线、质量轨迹、异常前后及参考图。
+\fbox{\parbox{.92\columnwidth}{\centering\small
+(a) Label volume, accuracy, and anomalies\\[3pt]
+(b) Quality traces and task events\\[3pt]
+(c) Raw masks, processed masks, and references}}
+\caption{Annotation expansion and temporal quality diagnostics, including genuine exposure and contact changes.}
 \label{fig:annotationquality}
 \end{figure}
-\draftnote{先比较无筛选与有筛选迭代，再分析每轮精度、异常率、保留率及人工成本的变化。
-不能把排除了更多帧等同于模型更稳定；分别说明原始预测与后处理的贡献。
-如精度基本持平而异常下降，应以稳定性改善为结论，不写成空间精度显著提升。
-填写人工耗时记录与对照子集；没有实际耗时时仅报告异常和复核需求，暂不声称节省人工时间。}
-\draftnote{核对用于该实验的分割训练记录。现有数据集的前视标注继承旧版本，侧视来自另一标注流程，
-不能将已有标签直接记为最新迭代方法的产物；必要时在相同原始视频上补做匹配实验。
-分别报告前视与侧视结果，人工成本同时计入种子标注和后续复核。}
-\FloatBarrier
+% 待分析筛选与轮次趋势；剔除更多帧不等于原始模型更稳定，没测人工时间不能宣称节省。
+\draftnote{Compare filtering and iteration trends in accuracy, anomalies, retention, and effort. Separate raw-model improvements from postprocessing; claim time savings only when supported by recorded labor.}
+% 旧标注前后视来源不同，不自动归因于最新流程，核对来源并报告完整人工成本。
+\draftnote{Verify annotation provenance before attributing existing labels to the latest pipeline. Report front/side results and all seed-annotation and review costs.}
 
 \subsection{Semantic Representation Ablations}
 \label{sec:representationexperiments}
-本节在不启用残差反馈的条件下，区分语义输入、查询容量和描述量监督的贡献。
-各组在三类物体和12个位置上采用相同的测试条件，主要消融沿用已见颜色的布料。
-正文报告分类别、已见／未见位置成功率以及阶段完成率和失败类型，完整逐条件结果放补充材料。
-表~\ref{tab:representationablation}中S0--S3逐步加入语义与查询；
-S2和S3保持查询数量及结构一致，只改变描述量辅助监督。
-S3与S4使用相同标签和分割器，仅改变质量权重。
-S4停用质量筛选与降权，但保留相同的几何有效性标记，不对无定义距离进行监督。
-这些配置分别训练基础策略，并保持动作监督、视角及预算一致。
+% 无残差，区分语义、查询容量与描述量监督。
+Without residual feedback, we isolate semantic inputs, query capacity, and descriptor supervision.
+% 三类物体12位置，已见颜色，正文汇总，细节补充。
+All groups use the same three objects and twelve positions with the demonstrated cloth color.
+We report success by object and seen/unseen position, stage completion, and failure categories; full condition-level results are provided as supplementary material.
+% S0--S3递增，S2/S3结构相同只改监督，S3/S4只改质量权重。
+In Table~\ref{tab:representationablation}, S0--S3 progressively add semantics and queries.
+S2 and S3 share query count and architecture, differing only in auxiliary descriptor supervision.
+S3 and S4 use identical labels and segmenters but differ in quality weighting.
+% S4停用质量筛选降权但保留几何有效标记；各配置分别匹配训练。
+S4 disables quality-based filtering and downweighting while retaining geometric-validity masks for undefined quantities.
+These base policies are trained separately with matched action supervision, views, and budgets.
+% S5固定策略，仅替换低质量在线分割器，类别尺寸编码一致，延迟单记。
+S5 fixes the S3 policy and replaces its inference-time segmenter with a lower-quality model selected on validation data.
+Class definitions, input resolution, and semantic encoding remain unchanged; latency differences are recorded separately.
+% 不改训练标签，分开感知退化与训练质量变化。
+Training labels are unchanged, separating online perception degradation from changes in supervision quality.
 
-S5固定S3的策略权重，仅在推理时替换为验证集上预先选定的较低质量分割器，
-保持类别定义、输入尺寸与语义编码一致，以评价在线感知质量的影响。
-分割器更换造成的延迟变化单独记录。
-此组不同时改变训练标签；不同质量标签训练出的策略属于另一种对照，不能混合解释。
-
-\begin{table*}[t]
+\begin{table*}[!t]
 \caption{Representation ablations without residual feedback. UQ: queries without descriptor supervision; SQ: supervised task-descriptor queries.}
 \label{tab:representationablation}
 \centering\small
+\setlength{\tabcolsep}{5pt}
 \begin{tabular}{clccccc}
 \toprule
-ID & 输入／查询 & 质量权重 & 推理分割 & 策略重训 & 成功率 & 端到端p95(ms)\\
+% 输入、质量权重、分割器、重训、成功、延迟。
+ID & Inputs / queries & \shortstack{Quality\\weighting} & Segmenter & Retrained & Success & \shortstack{Latency\\p95 (ms)}\\
 \midrule
-S0 & RGB & 不适用 & 无 & 是 & -- & --\\
-S1 & RGB＋语义 & 不适用 & 标准 & 是 & -- & --\\
-S2 & RGB＋语义＋UQ & 不适用 & 标准 & 是 & -- & --\\
-S3 & RGB＋语义＋SQ & 启用 & 标准 & 是 & -- & --\\
-S4 & RGB＋语义＋SQ & 停用 & 标准 & 是 & -- & --\\
-S5 & 同S3 & 同S3 & 较低质量 & 否 & -- & --\\
+S0 & RGB & N/A & None & Yes & -- & --\\
+S1 & RGB + semantics & N/A & Standard & Yes & -- & --\\
+S2 & RGB + semantics + UQ & N/A & Standard & Yes & -- & --\\
+S3 & RGB + semantics + SQ & On & Standard & Yes & -- & --\\
+S4 & RGB + semantics + SQ & Off & Standard & Yes & -- & --\\
+S5 & Same as S3 & Same as S3 & Lower quality & No & -- & --\\
 \bottomrule
 \end{tabular}
 \end{table*}
+% 类别位置、阶段失败定位收益；独立审核伪标签和描述量，分面积距离方向，报有效比例。
+Figure~\ref{fig:representationdiagnostics} summarizes task outcomes and stage-specific failures.
+On independently reviewed data, we additionally measure pseudo-label and deployment-mode descriptor errors for area, distance, and direction, together with label validity.
+% 重构探针及其划分见附录，对应理论的信息保留路径。
+An expert-action reconstruction probe examines whether descriptors retain action-selection information (Appendix~\ref{app:evaluationdiagnostics}).
+These diagnostics examine the information-preservation pathway in Section~\ref{sec:representationanalysis}.
 
-图~\ref{fig:representationdiagnostics}按物体与位置汇总任务结果，并定位阶段收益与失败类型的变化。
-进一步在独立审核数据上评价伪标签误差和部署模式下的描述量读出误差，
-按面积、距离和方向分别报告，并保留有效标签比例。
-补充的专家动作重构探针用于考察描述量是否保留动作选择所需的信息，
-其划分与对照见附录~\ref{app:evaluationdiagnostics}。
-该分析检验第~\ref{sec:representationanalysis}节提出的任务信息保留路径。
-
-\begin{figure*}[t]
+\begin{figure*}[!t]
 \centering
-\fbox{\parbox[c][2.7cm][c]{.95\textwidth}{\centering
-(a) S0--S5三个类别及已见／未见位置的成功率\\[4pt]
-(b) 阶段累计到达率与条件完成率；(c) 主要失败类型占全部试验的比例\\[4pt]
-(d) 伪标签与模型读出的分类描述量误差及有效标签比例\\[4pt]
-标明样本量和区间；专家动作重构探针结果放附录}}
+% 占位：类别位置、阶段、失败、描述量误差及有效比例；探针结果附录。
+\fbox{\parbox{.95\textwidth}{\centering\small
+(a) Success by object and position; (b) Stage completion; (c) Failure categories\\[3pt]
+(d) Descriptor errors and valid-label fractions, with sample counts and intervals}}
 \caption{Representation ablations: task success, stage progress, failure categories, and descriptor accuracy.}
 \label{fig:representationdiagnostics}
 \end{figure*}
-
-\draftnote{S1--S0检验语义输入；S3--S2检验描述量监督是否超出查询容量本身的作用；
-S3--S4检验质量权重；S5--S3检验感知退化影响。
-先检查分类别与已见／未见位置的趋势，再结合阶段、失败类型和描述量误差解释收益。
-若低质量感知削弱收益，报告其具体影响环节。读出／重构结果用于解释信息保留，不直接估计理论覆盖常数。}
-\FloatBarrier
+% 比较语义、监督、质量权重和退化；解释具体影响，不能把诊断直接当覆盖常数估计。
+\draftnote{Compare S1--S0, S3--S2, S3--S4, and S5--S3. Interpret class/position trends using stage outcomes, failures, and descriptor accuracy; these diagnostics do not directly estimate theoretical coverage constants.}
 
 \subsection{History-Conditioned Residual Feedback}
 \label{sec:feedbackexperiments}
-本节固定同一个RGB＋语义＋QToken基础checkpoint，
-检验语义任务上下文与历史能否减少执行错误，并帮助策略从自然偏差中恢复。
-表~\ref{tab:feedbackablation}采用MLP／GRU与是否读取语义＋QToken信息的交叉设计；
-语义特征和QToken特征在本消融中作为组合加入，不分别归因。
+% 同一冻结语义查询基础策略，检验上下文和历史对错误减少及恢复的作用。
+Using one frozen RGB+semantics+QToken base policy, we test whether task context and history reduce execution errors and support natural recovery.
+% MLP/GRU与有无语义查询组合信息交叉。
+Table~\ref{tab:feedbackablation} crosses MLP/GRU correction with access to semantic and QToken features, which are supplied jointly.
 
 \subsubsection{Matched Inputs and Residual Models}
-全部残差组读取最新RGB、本体状态、当前基础计划及目标槽位信息。
-不读取语义组合的组也不读取融合语义或QToken后的Transformer特征；
-基础动作仍来自共同的语义增强策略。
-语义组合组额外读取语义特征与缓存的QToken特征，
-分别记录其对应的观测时刻，不将缓存查询视为最新观测。
-\draftnote{确认残差语义特征来自本次分割还是缓存；
-固定这项实现后再训练所有组合组，报告额外分割带来的实际时延。}
+% 全部读取最新RGB、本体、计划和槽位，无语义组排除融合语义查询特征，但基础动作相同。
+All residual models receive the latest RGB observation, proprioception, the current base plan, and target-slot information.
+Models without semantic context also exclude Transformer features fused with semantics or QTokens, while retaining the same semantic base actions.
+% 语义组读语义和缓存QToken，各自标明对应时刻。
+Context-enabled models additionally receive semantic features and cached QTokens, with their respective observation timestamps recorded.
+% 待确认特征是否缓存和实际分割延迟。
+\draftnote{Fix whether residual semantic features are fresh or cached, use the same convention across groups, and report segmentation latency.}
+% MLP当前，GRU历史；匹配目标、间隔、长度、限幅和数据，明确速度和上一指令，控制容量。
+The MLP uses the current record; the GRU uses a history window containing that same record.
+Residual training matches action targets, update intervals, output horizons, clipping, and data splits.
+Inputs such as velocity or previous commands are specified explicitly, and a capacity-matched current-information model checks whether gains arise merely from parameter count.
 
-MLP使用当前记录，GRU使用包含相同当前记录的历史窗口。
-各组分别训练残差头，匹配目标动作、更新间隔、输出长度、限幅与训练划分；
-历史携带的速度或上一指令等信息在各组输入定义中明确。
-主要组复核容量接近的当前信息模型，避免仅将参数增加解释为历史收益。
-
-\begin{table*}[t]
-\caption{Residual ablations and a correction-method comparison with one frozen semantic-query base policy. Error incidence and recovery are measured from naturally occurring execution errors.}
+\begin{table*}[!t]
+\caption{Residual ablations and a correction-method comparison with one frozen base policy. Error incidence and recovery concern naturally occurring execution errors.}
 \label{tab:feedbackablation}
 \centering\small
+\setlength{\tabcolsep}{5pt}
 \begin{tabular}{clcccccc}
 \toprule
-ID & 残差模型 & 语义＋QToken & 历史 & 成功率 & 错误发生率 & 自然恢复率 & 动作MSE\\
+% 模型、语义查询、历史、成功、错误、恢复、MSE。
+ID & Model & \shortstack{Semantic +\\QToken input} & History & Success & \shortstack{Error\\incidence} & Recovery & Action MSE\\
 \midrule
-F0 & 无残差 & 不适用 & 不适用 & -- & -- & -- & --\\
-F1 & MLP & 否 & 否 & -- & -- & -- & --\\
-F2 & MLP & 是 & 否 & -- & -- & -- & --\\
-F3 & GRU & 否 & 是 & -- & -- & -- & --\\
-F4 & GRU & 是 & 是 & -- & -- & -- & --\\
+F0 & None & N/A & N/A & -- & -- & -- & --\\
+F1 & MLP & No & No & -- & -- & -- & --\\
+F2 & MLP & Yes & No & -- & -- & -- & --\\
+F3 & GRU & No & Yes & -- & -- & -- & --\\
+F4 & GRU & Yes & Yes & -- & -- & -- & --\\
 \midrule
-对照 & A2C2适配 & 匹配 & 原方法 & -- & -- & -- & --\\
+Baseline & A2C2 (adapted) & Matched & Original & -- & -- & -- & --\\
 \bottomrule
 \end{tabular}
 \end{table*}
-
-F0与S3使用同一基础策略，F4为完整方法。
-另在相同冻结基础策略上接入A2C2适配模块，作为外部修正方法对照，
-匹配可用输入与训练预算，并记录其原有逐步修正方式与本文执行方式的实际时延差异。
-另以RGB ACT＋RGB历史残差作为连接对照，与S0、S3和F4构成表示增强与反馈的整体比较。
-为比较执行方式，在同一基础模型上保留更频繁重规划与temporal ensemble对照，
-并记录实际算力和更新频率，而不默认其与残差具有相同计算成本。
+% F0=S3、F4完整方法，A2C2同基础模型同输入预算，时延单独测量。
+F0 shares the S3 base policy, and F4 is the complete method.
+A2C2 is adapted to the same frozen base for an external correction-method comparison, matching available inputs and training budgets while measuring execution-latency differences.
+% 连接RGB历史残差对照，并比较频繁重规划和TE的实际成本。
+RGB ACT with RGB-history correction provides a connecting comparison with S0, S3, and F4.
+More frequent replanning and temporal ensembling on the same base policy provide execution-scheme controls, with actual compute and update rates reported.
 
 \subsubsection{Error Reduction and Natural Recovery}
-各组沿用表示消融的物体与初始位置条件，不施加人工扰动。
-除分类别、已见／未见位置成功率外，比较阶段完成率和主要失败类型，
-并从完整执行视频中记录布料缠阻、无效接触、目标输送偏差和执行停滞四类事件。
-这些事件可出现在成功或失败试验中；局部错误后的恢复与最终任务成功分别记录。
+% 相同物体位置，不施人工扰动，记录类别位置阶段和四类自然错误。
+Groups use the object and position conditions of the representation ablations without artificial disturbances.
+Alongside subgroup success and stage outcomes, full execution videos are reviewed for cloth entanglement, ineffective contact, transport deviation, and execution stagnation.
+% 局部错误可发生在成功或失败试验，局部恢复与整体成功分开。
+These events may occur in successful or failed trials; local recovery and eventual task completion are recorded separately.
+% 错误率为至少出错一次的试验比例；恢复率为窗口内恢复事件数/全部事件。
+Error incidence is the fraction of trials containing at least one error.
+Recovery is the fraction of identified events resolved within a predefined window, supplemented by recovery time and final success among error-containing trials.
+% 无事件不适用，规则在附录；不同策略经历错误不同，需结合总体结果。
+Recovery is not applicable when no events occur.
+Table~\ref{tab:recoveryruntime} breaks down results by error type; event and counting rules appear in Appendix~\ref{app:naturalrecovery}.
+Because encountered errors can differ across policies, recovery statistics are interpreted jointly with overall success and error incidence.
 
-错误发生率以出现至少一次错误的试验数除以全部试验数；
-自然恢复率以预定窗口内恢复的事件数除以全部已识别事件数，
-并报告出错试验的最终成功率和恢复耗时。
-无错误事件时恢复率记为不适用，不记为零。
-表~\ref{tab:recoveryruntime}按错误类型统计上述结果。
-事件起止、恢复条件和重复计数规则见附录~\ref{app:naturalrecovery}。
-不同策略经历的错误状态可能不同，因此自然恢复统计与相同基础策略上的总体成功率、错误发生率结合解释。
-
-\begin{table*}[t]
-\caption{Natural-error and recovery diagnostics. Instantiate each method separately. Final success is measured over trials containing the specified error; recovery time is conditional on event recovery.}
+\begin{table*}[!t]
+\caption{Natural-error and recovery diagnostics, instantiated for each method. Final success uses error-containing trials; recovery time includes recovered events only.}
 \label{tab:recoveryruntime}
 \centering\small
 \begin{tabular}{llcccc}
 \toprule
-方法 & 错误类型 & 出错试验／总数 & 恢复／事件数 & 出错试验最终成功率 & 恢复时间(s)\\
+% 方法、类型、出错试验、恢复事件、最终成功、恢复时间。
+Method & Error type & \shortstack{Error trials /\\all trials} & \shortstack{Recovered /\\events} & \shortstack{Final success\\after error} & \shortstack{Recovery\\time (s)}\\
 \midrule
-待填 & 布料缠阻 & -- & -- & -- & --\\
-待填 & 无效接触 & -- & -- & -- & --\\
-待填 & 输送偏差 & -- & -- & -- & --\\
-待填 & 执行停滞 & -- & -- & -- & --\\
-待填 & 去重合计 & -- & -- & -- & --\\
+TBD & Cloth entanglement & -- & -- & -- & --\\
+TBD & Ineffective contact & -- & -- & -- & --\\
+TBD & Transport deviation & -- & -- & -- & --\\
+TBD & Execution stagnation & -- & -- & -- & --\\
+TBD & Deduplicated total & -- & -- & -- & --\\
 \bottomrule
 \end{tabular}
 \end{table*}
 
 \subsubsection{Correction Accuracy and Runtime}
-离线纠偏评价使用相同回放样本、专家动作目标、执行槽位和动作尺度，
-报告基础动作与修正动作的MSE及式~\eqref{eq:residualgain}中的对齐收益和修正能量。
-表~\ref{tab:feedbackruntime}记录端到端延迟、观测年龄、实际更新频率和过期修正比例。
-候选修正与实际执行指令分别记录；控制组若保留反馈计算但屏蔽输出，
-可以进一步检查计算调度变化是否影响基础策略。
+% 同样本、目标、槽位和尺度对比动作MSE和对齐收益、修正能量。
+Offline correction is evaluated on matched replay samples, expert targets, execution slots, and action scales, reporting base/corrected MSE and the alignment benefit and correction energy in~\eqref{eq:residualgain}.
+% 记录实际端到端延迟、观测年龄、频率及过期；候选和实际指令分开，必要时排除调度影响。
+Table~\ref{tab:feedbackruntime} records end-to-end latency, observation age, effective update rate, and expired corrections.
+Candidate corrections and executed commands are logged separately.
+A control retaining feedback computation but suppressing its output can additionally check scheduling effects.
 
-\begin{table*}[t]
-\caption{Correction accuracy and runtime. Offline errors use matched evaluation samples; runtime is measured on the deployment device.}
+\begin{table*}[!t]
+\caption{Correction accuracy and runtime. Offline errors use matched samples; runtime is measured on the deployment device.}
 \label{tab:feedbackruntime}
 \centering\small
-\setlength{\tabcolsep}{4pt}
+\setlength{\tabcolsep}{5pt}
 \begin{tabular}{lcccccc}
 \toprule
-修正方法 & 对齐收益 & 修正能量 & 延迟p50／p95(ms) & 观测年龄(ms) & 更新频率(Hz) & 过期比例\\
+% 方法、对齐收益、能量、延迟、观测年龄、频率、过期比例。
+Corrector & \shortstack{Alignment\\benefit} & \shortstack{Correction\\energy} & \shortstack{Latency\\p50/p95 (ms)} & \shortstack{Observation\\age (ms)} & \shortstack{Update rate\\(Hz)} & \shortstack{Expired\\fraction}\\
 \midrule
 F1 & -- & -- & -- & -- & -- & --\\
 F2 & -- & -- & -- & -- & -- & --\\
 F3 & -- & -- & -- & -- & -- & --\\
 F4 & -- & -- & -- & -- & -- & --\\
-A2C2适配 & -- & -- & -- & -- & -- & --\\
+A2C2 (adapted) & -- & -- & -- & -- & -- & --\\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-\begin{figure*}[t]
+\begin{figure*}[!t]
 \centering
-\fbox{\parbox[c][2.5cm][c]{.95\textwidth}{\centering
-(a) F0--F4分类别、已见／未见位置成功率及阶段完成率\\[4pt]
-(b) 失败类型、出错试验最终成功率及自然恢复结果\\[4pt]
-(c) 自然错误--修正--恢复／未恢复视频序列与同步指令轨迹\\[4pt]
-标明错误起点、恢复时刻及计划／反馈更新时间；同时展示减少错误与恢复失败案例}}
-\caption{Error reduction and natural recovery with residual feedback. Placeholder for task results and synchronized visual and command traces.}
+% 占位：分类位置和阶段、错误和最终结果、自然纠偏视频轨迹，包含失败。
+\fbox{\parbox{.95\textwidth}{\centering\small
+(a) Subgroup success and stages; (b) Errors, recovery, and final outcomes\\[3pt]
+(c) Error--correction--recovery sequences and synchronized commands, including failures}}
+\caption{Error reduction and natural recovery with residual feedback. Mark error onset, recovery, and plan/feedback updates in synchronized traces.}
 \label{fig:feedbackrecovery}
 \end{figure*}
-
-\draftnote{F2--F1与F4--F3检验语义＋QToken组合信息；
-F3--F1与F4--F2检验历史。先看同槽动作误差，再看恢复及最终成功，
-区分预测改善、修正被及时采用和闭环收益。
-同时检查错误发生率：若错误更少，即使恢复事件减少也可能体现反馈收益。
-与同基础策略的A2C2比较修正效果和端到端延迟；记录p50／p95、观测年龄与过期比例。
-若某组更慢或出现有害修正，结合延迟和修正能量报告，不以更平滑的轨迹代替有效纠偏。
-失败机制在Discussion结合独立证据解释。}
-\FloatBarrier
+% F2-F1/F4-F3看语义，F3-F1/F4-F2看历史，结合误差、时效、错误率、恢复和成功；不只展示成功。
+\draftnote{Compare semantic-context and history contrasts, then link matched-slot error, timely execution, error incidence, recovery, and final success. Compare A2C2 latency and correction quality; include harmful corrections and failed recovery.}
 
 \subsection{Cross-Task Applicability}
 \label{sec:crosstask}
-最后检验相同框架能否支持日常推动以外的操作。
-本节在手术模拟任务数据上分别训练各方法，保留语义监督、任务描述量查询和历史残差的整体设计，
-评价对象是方法的跨任务适用性，而非同一策略的零样本迁移。
+% 用新任务示范训练每个方法，验证框架适用性而非零样本迁移。
+We further evaluate the framework beyond tabletop pushing by training each method on surgical-phantom demonstrations.
+The semantic supervision, task-descriptor queries, and history-conditioned residual design are retained to assess cross-task applicability rather than zero-shot policy transfer.
 
 \subsubsection{Surgical-Phantom Task and Adaptation}
-该任务使用组织模拟材料遮挡目标，由双臂协同完成牵拉暴露、夹取和向指定区域转移。
-相较日常任务，接触方式由推动转为夹持，且暴露动作须与后续抓取协调。
-以目标完整进入指定区域并完成释放作为拟定终止条件，
-过程评价记录暴露、稳定夹持和放置三个里程碑。
-\draftnote{确认最终成功条件是否还要求组织复原，填写时限、持续确认时间、机器人与动作接口、
-物体和初始条件、数据规模、独立测试重复以及安全停止规则；图表仅为待完成实验的预留。}
+% 牵拉材料暴露、夹取并转移；从推动变为夹持接触。
+The arms retract tissue-mimicking material, expose an occluded object, grasp it, and transfer it into a designated region.
+Unlike pushing, this task requires grasping contact coordinated with exposure.
+% 暂定完整入区释放为成功，阶段为暴露、夹持、放置。
+The provisional completion condition requires full placement and release, with exposure, stable grasping, and placement as intermediate milestones.
+% 待补复原、时限、硬件、接口、数据、条件、重复和安全。
+\draftnote{Finalize completion and restoration requirements, timing, hardware, action interface, dataset, test conditions, repetitions, and safety-stop rules.}
 
-\begin{figure}[t]
+\begin{figure}[!tb]
 \centering
-\fbox{\parbox[c][2.8cm][c]{.92\columnwidth}{\centering
-(a) 手术模拟平台、器械、相机与材料\\[4pt]
-(b) 遮挡--牵拉暴露--稳定夹持--转移放置\\[4pt]
-使用同一次试验的关键帧，标明成功终止状态}}
-\caption{Surgical-phantom exposure and execution as an additional application. Placeholder for the platform and task sequence.}
+% 占位：手术模拟平台及同次试验序列。
+\fbox{\parbox{.92\columnwidth}{\centering\small
+(a) Phantom setup, tools, and cameras\\[3pt]
+(b) Occlusion, retraction, grasping, and placement}}
+\caption{Surgical-phantom exposure and execution: the platform and a complete task sequence.}
 \label{fig:surgicaltask}
 \end{figure}
-
-各方法使用相同的新任务示范和评价条件，模型选择与测试分开。
-需要适配的部分包括机器人动作接口、语义类别以及任务描述量的实例定义；
-训练流程与模型设计的共用部分和实际改动分别报告。
-\draftnote{列出实际保留与调整的设计、分割标注人工成本和新增训练预算；
-若更换描述量、相机布置或控制频率，明确其原因，不将任务相关适配表述为无需修改。}
+% 匹配新任务示范和条件，说明动作接口、语义和描述量适配。
+All methods use the same task-specific demonstrations and evaluation conditions, with model selection separate from testing.
+Adaptations to the action interface, semantic classes, and task descriptors are reported alongside shared training and architectural choices.
+% 待列明保留和修改内容、标注和训练成本。
+\draftnote{List retained and adapted components, annotation effort, and training cost; explain changes to descriptors, camera placement, or control rate.}
 
 \subsubsection{Overall Comparison and Key Ablations}
-表~\ref{tab:crosstaskresults}比较ACT、DP与完整方法，并保留语义输入、
-语义＋QToken无残差、语义＋QToken配合MLP残差三项关键对照。
-前两项检查表示收益是否延续，MLP与GRU的比较检查历史是否仍有帮助，
-不在此重复日常任务的全部消融。
-残差组共用在手术模拟数据上训练的语义查询基础策略。
+% ACT、DP、完整方法，以及语义、语义查询、MLP对照；不重复全部消融，共用新任务基础策略。
+Table~\ref{tab:crosstaskresults} compares ACT, DP, and the complete method, retaining semantic-input, semantic-query, and MLP-residual controls.
+These comparisons test whether representation and history benefits persist without repeating the full ablation suite.
+Residual variants share the same semantic-query base trained on the surgical-phantom data.
 
-\begin{table*}[t]
-\caption{Cross-task applicability on surgical-phantom execution. Models are trained on this task's demonstrations. Stage entries are cumulative attainment rates; time is conditional on full success.}
+\begin{table}[!tb]
+% 紧凑单栏；E/G/P分别为暴露、夹持、放置累计到达率，Sem./Q为语义与查询。
+\caption{Surgical-phantom results. E/G/P: exposure, grasping, and placement attainment. Sem./Q: semantics and QToken. Time includes successful trials only.}
 \label{tab:crosstaskresults}
 \centering\small
-\begin{tabular}{p{.30\textwidth}ccccc}
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{p{.40\columnwidth}ccccc}
 \toprule
-方法 & 完整成功率 & 时间(s) & 暴露率 & 夹持率 & 放置率\\
+% 完整成功率、时间、暴露、夹持、放置。
+Method & Success & Time (s) & E & G & P\\
 \midrule
 ACT & -- & -- & -- & -- & --\\
 Diffusion Policy & -- & -- & -- & -- & --\\
-ACT＋语义 & -- & -- & -- & -- & --\\
-ACT＋语义＋QToken & -- & -- & -- & -- & --\\
-ACT＋语义＋QToken＋MLP残差 & -- & -- & -- & -- & --\\
-Ours（GRU残差） & -- & -- & -- & -- & --\\
+ACT + Sem. & -- & -- & -- & -- & --\\
+ACT + Sem. + Q & -- & -- & -- & -- & --\\
+ACT + Sem. + Q + MLP & -- & -- & -- & -- & --\\
+Ours (GRU residual) & -- & -- & -- & -- & --\\
 \bottomrule
 \end{tabular}
-\end{table*}
-\draftnote{先比较完整方法与ACT、DP，再检查表示和历史残差的收益是否与日常任务一致。
-结合各阶段结果说明提升是否发生在暴露、夹持或放置；若趋势不同，分析任务接触要求与感知条件的差异。
-若放置已是全部终止条件，合并表中放置率与完整成功率以避免重复。
-结论限于两个应用中实际测试的条件，不表述为未训练策略的跨任务泛化或临床有效性。}
-\FloatBarrier
+\end{table}
+% 待比较总体、模块和阶段趋势；必要时合并放置和成功列，不宣称零样本或临床有效性。
+\draftnote{Compare overall and stage-level gains with the primary task. Merge placement and full success if their criteria coincide; limit conclusions to evaluated applications, not zero-shot transfer or clinical effectiveness.}
+% 不在章节末强制清空浮动体，避免最后一张表单独占页。

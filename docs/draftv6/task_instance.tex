@@ -1,13 +1,15 @@
-% 主实验任务；附加手术模拟任务在跨任务适用性小节单独定义。
+% 主实验任务；手术模拟任务在跨任务适用性小节定义。
 \subsubsection{Task and Platform}
-平台采用两条SO-ARM101机械臂，右臂末端安装长板工具，
-通过固定的前视与侧视相机观察桌面操作区域。
-示范中的目标包括方块、纸团和螺丝螺母三类，遮挡物为同一颜色的可形变布料。
-任务开始时目标位于布料下方，双臂协同拨开布料，使目标暴露并与布料分离，
-再将目标推入指定区域，最后恢复布料在前视画面中的覆盖率。
+% 平台采用两条SO-ARM101机械臂，右臂末端安装长板工具，前侧固定相机观察桌面。
+The platform consists of two SO-ARM101 arms, a paddle tool attached to the right arm, and fixed front and side cameras observing the tabletop workspace.
+% 示范包含方块、纸团、螺丝螺母三类目标，初始由同色可形变布料遮挡。
+Demonstrations involve three object categories: cubes, crumpled paper, and screws/nuts, initially covered by deformable cloth of one color.
+% 先暴露并分离，再推入指定区域，最后恢复前视画面中的布料覆盖率。
+The arms first expose and separate the object from the cloth, push it into a designated region, and then restore cloth coverage in the front view.
 
-以完整目标投影 $O_t^\star$、完整目标区域足迹 $R^\star$ 和布料投影 $C_t$
-定义入区与复原条件：
+% 用完整目标投影、目标区域足迹和布料投影定义完成条件。
+Let $O_t^\star$, $R^\star$, and $C_t$ denote the complete object projection, full target-region footprint, and cloth projection, respectively.
+The placement and restoration conditions are
 \begin{equation}
  \begin{aligned}
  p_{\mathrm{in}}(t)&=\ind\{O_t^\star\subseteq R^\star\},\\
@@ -16,13 +18,15 @@
  \end{aligned}
  \label{eq:taskpredicates}
 \end{equation}
-其中 $\Omega$ 为固定前视相机的整幅图像域，$\theta_C$ 为布料覆盖阈值。
-任务成功要求目标完整入区且布料覆盖率达到阈值，
-两项条件须在规定时限内同时成立：
+% Omega为整幅前视图像域，theta_C为布料覆盖阈值。
+where $\Omega$ is the full image domain of the fixed front camera and $\theta_C$ is the required cloth-coverage ratio.
+% 两项条件须在时限内同时成立。
+The task is complete when both conditions hold within the time limit:
 \begin{equation}
  \Phi(s_{0:T})=
  \ind\{\exists\,t\le T:
  p_{\mathrm{in}}(t)=1\land p_{\mathrm{restore}}(t)=1\}.
  \label{eq:completiontask}
 \end{equation}
-\draftnote{填写最大执行时间与布料覆盖阈值。}
+% 待填写最大执行时间与布料覆盖阈值。
+\draftnote{Specify the time limit and cloth-coverage threshold.}
