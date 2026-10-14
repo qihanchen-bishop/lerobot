@@ -16,6 +16,44 @@ conda run -n lerobot python mycode/gui_record_so101_bimanual.py
 
 The GUI is used to configure arm ports, calibration path, camera inputs, dataset location, task name, episode length, FPS, preview options, and save/export controls.
 
+### Initial Object Position
+
+Before each recording, select the object's initial workspace grid cell in `采集位置`.
+The default grid has 3 rows and 4 columns, matching the evaluation convention:
+`(0,0)` is the top-left cell, x increases to the right, and y increases downward.
+Rows and columns can be changed; changing the grid clears the selection.
+These labels describe the manually chosen workspace cell, not measured pixel or 3-D coordinates.
+
+The selection is captured when `Record` is clicked. Changes during recording apply
+to the next episode. Successfully saved episodes receive one record in
+`<dataset_root>/meta/episode_positions.jsonl`, containing `episode_index`, task,
+grid shape, `grid_cell`, x/y indices, axis conventions, and frame count.
+Discarded recordings do not receive a record. The shared single-arm recorder can
+continue without a position label. Existing unlabeled episodes display `未标注`.
+The episode browser includes a position column, and `位置统计` shows counts grouped
+by task, grid shape, and position, with an `导出 CSV` button. Recorder cleanup and
+deletion reindex the labels with the episodes and retain the original backup.
+
+### Camera Resolution
+
+`Low res cameras` defaults to enabled (640×360). Disable it for 1280×720.
+Both modes request 30 FPS; this is a target, not a measured capture throughput.
+The live preview reports observed update rates. Higher resolution increases image
+processing and storage work, so check actual preview rates on the collection setup.
+
+Both camera previews fit the available window area while preserving aspect ratio,
+including enlarging low-resolution frames to use the available display space.
+The default layout is `左右` (side by side); `预览布局` also offers `上下` (stacked).
+Each view has its own Zoom controls. `Fit` restores that view's complete frame;
+`+` zooms in, with scrollbars for inspecting the enlarged image. Zoom also works
+when the source image already fits at its native size. Preview scaling does not
+change the recorded resolution, which still defaults to 640×360 at a target 30 FPS.
+Use `收起设置` to hide the device/camera configuration and leave more space for
+the previews; recording buttons and the initial-position selector remain visible.
+Connecting automatically collapses these settings; `展开设置` opens them again.
+Connecting also hides the episode list to give both previews more room. Toggle
+`示范列表` to show it; stopping the recorder restores the list for dataset browsing.
+
 ### Arm Device Matching
 
 The current version uses stable Linux serial paths by default instead of volatile `/dev/ttyACM*` names:
