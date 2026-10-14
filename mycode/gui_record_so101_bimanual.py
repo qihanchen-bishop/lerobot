@@ -22,7 +22,7 @@ import tkinter.font as tkfont
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from types import MethodType
 from typing import Any
 
@@ -36,6 +36,14 @@ if str(CURRENT_REPO_SRC) not in sys.path:
     sys.path.insert(0, str(CURRENT_REPO_SRC))
 
 try:
+    from mycode.episode_positions import (
+        export_position_counts,
+        grid_position,
+        load_episode_positions,
+        position_counts,
+        reindex_episode_positions,
+        save_episode_position,
+    )
     from mycode.gui_view_lerobot_dataset import (
         read_nested_parquets,
         rewrite_dataset,
@@ -43,6 +51,14 @@ try:
         video_keys_from_info,
     )
 except ModuleNotFoundError:
+    from episode_positions import (
+        export_position_counts,
+        grid_position,
+        load_episode_positions,
+        position_counts,
+        reindex_episode_positions,
+        save_episode_position,
+    )
     from gui_view_lerobot_dataset import read_nested_parquets, rewrite_dataset, stats_from_episode_row, video_keys_from_info
 
 from lerobot.datasets.compute_stats import aggregate_stats
@@ -682,7 +698,12 @@ def fast_delete_or_rewrite_dataset(
     can_fast, reason = _can_fast_reindex(root, info, episodes_df, keep_episode_indices, video_keys)
     if not can_fast:
         progress.put(f"Fast delete skipped: {reason}. Falling back to full rewrite.")
+        load_episode_positions(root)
         backup = rewrite_dataset(root, keep_episode_indices, progress)
+        reindex_episode_positions(
+            backup, root,
+            {old: new for new, old in enumerate(sorted(keep_episode_indices))},
+        )
         return DatasetRewriteOutcome(backup, "full rewrite")
 
     chunks_size = int(info.get("chunks_size", 1000))
@@ -697,6 +718,8 @@ def fast_delete_or_rewrite_dataset(
     step = 0
 
     progress.put(f"PROGRESS|{step}|{total_steps}|Fast delete verified: {reason}")
+    # Validate labels before changing any dataset files.
+    load_episode_positions(root)
     backup_root = _hardlink_backup_tree(root)
     step += 1
     progress.put(f"PROGRESS|{step}|{total_steps}|Fast backup created: {backup_root.name}")
@@ -784,6 +807,7 @@ def fast_delete_or_rewrite_dataset(
     step += 1
     progress.put(f"PROGRESS|{step}|{total_steps}|Updated stats.json.")
 
+    reindex_episode_positions(root, root, old_to_new)
     _validate_fast_reindexed_dataset(root, info)
     progress.put(f"PROGRESS|{total_steps}|{total_steps}|Fast delete + reindex complete.")
     return DatasetRewriteOutcome(backup_root, "fast suffix reindex")
@@ -812,6 +836,7 @@ class BimanualRecorder:
         self.save_thread: threading.Thread | None = None
         self.episode_count = 0
         self.current_episode_task = settings.task
+        self.current_episode_position: dict[str, Any] | None = None
         self.dataset: LeRobotDataset | None = None
         self.raw_depth_frames: list[np.ndarray] = []
         self.raw_depth_metadata: dict[str, np.ndarray] = {}
@@ -825,7 +850,7 @@ class BimanualRecorder:
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
-    def request_record(self, task: str) -> None:
+    def request_record(self, task: str, position: dict[str, Any] | None = None) -> None:
         if not self.ready:
             self._put_status("Not ready yet. Wait until status says preview and teleoperation are running.")
             return
@@ -835,7 +860,8 @@ class BimanualRecorder:
         if self.pending_save_confirmation:
             self._put_status("Episode is waiting for save/discard confirmation.")
             return
-        self.command_queue.put(("record", task))
+        # Snapshot on the GUI thread; later selection changes affect the next episode only.
+        self.command_queue.put(("record", task, dict(position) if position is not None else None))
 
     def request_end_episode(self) -> None:
         self.command_queue.put("end")
@@ -1772,6 +1798,9 @@ class BimanualRecorder:
                 elif not self.recording:
                     requested_task = command[1] if isinstance(command, tuple) and len(command) > 1 else self.settings.task
                     self.current_episode_task = str(requested_task or self.settings.task)
+                    self.current_episode_position = (
+                        command[2] if isinstance(command, tuple) and len(command) > 2 else None
+                    )
                     self._delete_temporary_episode_images(self.episode_count)
                     self.recording = True
                     self.raw_depth_frames = []
@@ -1780,7 +1809,13 @@ class BimanualRecorder:
                     self.control_io_warning_reasons = []
                     self._put_episode(self.episode_count, recording=True)
                     self._put_progress(0, 100, f"Recording episode {self.episode_count}")
-                    self._put_status(f"Recording episode {self.episode_count} with task '{self.current_episode_task}'...")
+                    position_text = (
+                        self.current_episode_position["grid_cell"] if self.current_episode_position else "unlabeled"
+                    )
+                    self._put_status(
+                        f"Recording episode {self.episode_count} with task '{self.current_episode_task}', "
+                        f"initial object position {position_text}..."
+                    )
             elif command_name == "end":
                 self._end_episode_if_needed()
             elif command_name == "confirm_save":
@@ -1831,6 +1866,17 @@ class BimanualRecorder:
         raw_depth_metadata = self.raw_depth_metadata
         skipped_recording_frames = self.skipped_recording_frames
         warning_reasons = list(self.control_io_warning_reasons)
+        position_record = (
+            {
+                **self.current_episode_position,
+                "episode_index": saved_episode_index,
+                "task": self.current_episode_task,
+                "frame_count": frame_count,
+                "saved_at": datetime.now().isoformat(timespec="seconds"),
+            }
+            if self.current_episode_position is not None
+            else None
+        )
         self.raw_depth_frames = []
         self.raw_depth_metadata = {}
         self.skipped_recording_frames = 0
@@ -1852,6 +1898,7 @@ class BimanualRecorder:
                 raw_depth_metadata,
                 skipped_recording_frames,
                 warning_reasons,
+                position_record,
             ),
             daemon=True,
         )
@@ -1865,6 +1912,7 @@ class BimanualRecorder:
         raw_depth_metadata: dict[str, np.ndarray],
         skipped_recording_frames: int,
         warning_reasons: list[str],
+        position_record: dict[str, Any] | None = None,
     ) -> None:
         try:
             if self.dataset is None:
@@ -1876,6 +1924,8 @@ class BimanualRecorder:
             self._put_progress(20, 100, "Writing parquet data and encoding videos...")
             self._validate_temporary_video_frames(saved_episode_index, frame_count)
             self.dataset.save_episode()
+            if position_record is not None:
+                save_episode_position(self.dataset.root, position_record)
             self._put_progress(85, 100, "Saving raw depth sidecar...")
             self._save_raw_depth_sidecar(saved_episode_index, raw_depth_frames, raw_depth_metadata)
             self._append_record_warning_sidecar(
@@ -2237,6 +2287,14 @@ class RecorderApp:
         self.play_offset_s = 0.0
         self.play_started_at = 0.0
         self.preview_zoom = tk.DoubleVar(value=1.0)
+        self.side_preview_zoom = tk.DoubleVar(value=1.0)
+        self.main_preview_frame: np.ndarray | None = None
+        self.side_preview_frame: np.ndarray | None = None
+        self.preview_resize_after: str | None = None
+        self.device_settings_visible = True
+        self.settings_toggle_text = tk.StringVar(value="收起设置")
+        self.preview_layout = tk.StringVar(value="左右")
+        self.episode_browser_visible = tk.BooleanVar(value=True)
         self.live_frame_stats: dict[str, tuple[int, int, float]] = {}
         self.live_frame_times: dict[str, float] = {}
         self.active_dataset_root: Path | None = None
@@ -2262,6 +2320,9 @@ class RecorderApp:
             "task": tk.StringVar(value=TASK_CHOICES[0]),
             "edit_task": tk.StringVar(value=TASK_CHOICES[0]),
             "preview_key": tk.StringVar(value=""),
+            "grid_rows": tk.StringVar(value="3"),
+            "grid_cols": tk.StringVar(value="4"),
+            "grid_cell": tk.StringVar(value=""),
         }
         self.resume = tk.BooleanVar(value=False)
         self.push_to_hub = tk.BooleanVar(value=False)
@@ -2282,6 +2343,9 @@ class RecorderApp:
         self._refresh_selected_save_text()
 
         self._build_ui()
+        self._refresh_position_cells()
+        for key in ("grid_rows", "grid_cols"):
+            self.vars[key].trace_add("write", self._refresh_position_cells)
         self.root.after(30, self._poll_queues)
 
     def _configure_style(self) -> None:
@@ -2293,6 +2357,7 @@ class RecorderApp:
 
         style = ttk.Style(self.root)
         style.configure("TButton", font=("TkDefaultFont", 12), padding=(14, 8))
+        style.configure("Preview.TButton", font=("TkDefaultFont", 10), padding=(5, 3))
         style.configure("TLabel", font=("TkDefaultFont", 12))
         style.configure("TCheckbutton", font=("TkDefaultFont", 12), padding=(4, 4))
         style.configure("TEntry", font=("TkTextFont", 12), padding=(4, 4))
@@ -2304,8 +2369,14 @@ class RecorderApp:
         controls = ttk.Frame(self.root, padding=14)
         controls.pack(fill=tk.X)
 
+        settings_toolbar = ttk.Frame(controls)
+        settings_toolbar.pack(fill=tk.X)
+        ttk.Button(
+            settings_toolbar, textvariable=self.settings_toggle_text, command=self.toggle_device_settings
+        ).pack(side=tk.RIGHT)
         grid = ttk.Frame(controls)
         grid.pack(fill=tk.X)
+        self.device_settings_frame = grid
         fields = [
             ("Follower L", "left_follower_port"),
             ("Follower R", "right_follower_port"),
@@ -2361,8 +2432,27 @@ class RecorderApp:
         grid.columnconfigure(1, weight=1)
         grid.columnconfigure(3, weight=1)
 
+        position_row = ttk.Frame(controls)
+        position_row.pack(fill=tk.X, pady=(6, 0))
+        ttk.Label(position_row, text="物体初始位置").pack(side=tk.LEFT)
+        ttk.Label(position_row, text="行").pack(side=tk.LEFT, padx=(12, 4))
+        ttk.Spinbox(position_row, from_=1, to=20, width=4, textvariable=self.vars["grid_rows"]).pack(side=tk.LEFT)
+        ttk.Label(position_row, text="列").pack(side=tk.LEFT, padx=(8, 4))
+        ttk.Spinbox(position_row, from_=1, to=20, width=4, textvariable=self.vars["grid_cols"]).pack(side=tk.LEFT)
+        ttk.Label(position_row, text="位置 (x,y)").pack(side=tk.LEFT, padx=(12, 4))
+        self.position_combo = ttk.Combobox(
+            position_row, textvariable=self.vars["grid_cell"], state="readonly", width=10
+        )
+        self.position_combo.pack(side=tk.LEFT)
+        ttk.Button(position_row, text="位置统计", command=self.show_position_statistics).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Label(
+            controls, text="位置以工作区网格为准：左上角 (0,0)，x 向右、y 向下。点击 Record 时固定本条位置。",
+            wraplength=1200,
+        ).pack(anchor=tk.W, pady=(4, 0))
+
         options = ttk.Frame(controls)
         options.pack(fill=tk.X, pady=(8, 0))
+        self.camera_options_frame = options
         ttk.Checkbutton(options, text="Resume dataset", variable=self.resume).pack(side=tk.LEFT)
         ttk.Checkbutton(options, text="Push to Hub on close", variable=self.push_to_hub).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Checkbutton(options, text="Enable RealSense", variable=self.enable_realsense).pack(
@@ -2424,6 +2514,7 @@ class RecorderApp:
         content.rowconfigure(0, weight=1)
 
         left_panel = ttk.Frame(content)
+        self.episode_browser_panel = left_panel
         left_panel.grid(row=0, column=0, sticky=tk.NS, padx=(0, 10))
         left_panel.rowconfigure(2, weight=1)
         left_panel.columnconfigure(0, weight=1)
@@ -2446,7 +2537,7 @@ class RecorderApp:
         ttk.Button(delete_row, text="Apply Delete + Reindex", command=self.apply_episode_deletions).pack(
             side=tk.LEFT, padx=(8, 0)
         )
-        columns = ("id", "status", "length", "task")
+        columns = ("id", "status", "length", "task", "position")
         tree_frame = ttk.Frame(left_panel)
         tree_frame.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         tree_frame.rowconfigure(0, weight=1)
@@ -2459,7 +2550,7 @@ class RecorderApp:
             height=18,
             style="Episode.Treeview",
         )
-        for col, width in (("id", 48), ("status", 70), ("length", 70), ("task", 180)):
+        for col, width in (("id", 48), ("status", 70), ("length", 70), ("task", 120), ("position", 110)):
             self.episode_tree.heading(col, text=col)
             self.episode_tree.column(col, width=width, minwidth=48, anchor=tk.W, stretch=col == "task")
         episode_y_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.episode_tree.yview)
@@ -2473,22 +2564,47 @@ class RecorderApp:
         right_panel = ttk.Frame(content)
         right_panel.grid(row=0, column=1, sticky=tk.NSEW)
         right_panel.columnconfigure(0, weight=1)
-        right_panel.rowconfigure(1, weight=3)
-        right_panel.rowconfigure(3, weight=1)
-        self.video_title = tk.StringVar(value="Select a dataset folder or click Connect for live preview.")
-        title_label = ttk.Label(right_panel, textvariable=self.video_title, anchor=tk.W, font=("TkDefaultFont", 10))
-        title_label.grid(row=0, column=0, sticky=tk.EW)
-        self.preview_label = ttk.Label(right_panel, anchor=tk.CENTER)
-        self.preview_label.grid(row=1, column=0, sticky=tk.NSEW, pady=(6, 0))
-        self.side_video_title = tk.StringVar(value="Aux preview: not connected")
-        side_title_label = ttk.Label(
-            right_panel, textvariable=self.side_video_title, anchor=tk.W, font=("TkDefaultFont", 10)
+        right_panel.rowconfigure(1, weight=1)
+        layout_toolbar = ttk.Frame(right_panel)
+        layout_toolbar.grid(row=0, column=0, sticky=tk.EW)
+        ttk.Label(layout_toolbar, text="预览布局").pack(side=tk.LEFT)
+        layout_combo = ttk.Combobox(
+            layout_toolbar, textvariable=self.preview_layout, values=("左右", "上下"), state="readonly", width=5
         )
-        side_title_label.grid(row=2, column=0, sticky=tk.EW, pady=(8, 0))
-        self.side_preview_label = ttk.Label(right_panel, anchor=tk.CENTER)
-        self.side_preview_label.grid(row=3, column=0, sticky=tk.NSEW, pady=(4, 0))
+        layout_combo.pack(side=tk.LEFT, padx=(6, 12))
+        layout_combo.bind("<<ComboboxSelected>>", self._apply_preview_layout)
+        ttk.Checkbutton(
+            layout_toolbar, text="示范列表", variable=self.episode_browser_visible,
+            command=self.toggle_episode_browser,
+        ).pack(side=tk.LEFT)
+        self.preview_area = ttk.Frame(right_panel)
+        self.preview_area.grid(row=1, column=0, sticky=tk.NSEW, pady=(6, 0))
+        self.preview_area.grid_propagate(False)
+        self.main_preview_card = ttk.Frame(self.preview_area, padding=(0, 0, 4, 0))
+        self.side_preview_card = ttk.Frame(self.preview_area, padding=(4, 0, 0, 0))
+        for card in (self.main_preview_card, self.side_preview_card):
+            card.grid_propagate(False)
+            card.columnconfigure(0, weight=1)
+            card.rowconfigure(2, weight=1)
+        self.video_title = tk.StringVar(value="Select a dataset folder or click Connect for live preview.")
+        self.preview_title_label = ttk.Label(
+            self.main_preview_card, textvariable=self.video_title, anchor=tk.W, font=("TkDefaultFont", 10), wraplength=400
+        )
+        self.preview_title_label.grid(row=0, column=0, sticky=tk.EW)
+        self.preview_label, self.preview_canvas, self.preview_window = self._build_preview_viewport(self.main_preview_card, 2)
+        self.side_video_title = tk.StringVar(value="Aux preview: not connected")
+        self.side_preview_title_label = ttk.Label(
+            self.side_preview_card, textvariable=self.side_video_title, anchor=tk.W, font=("TkDefaultFont", 10), wraplength=400
+        )
+        self.side_preview_title_label.grid(row=0, column=0, sticky=tk.EW)
+        self.side_preview_label, self.side_preview_canvas, self.side_preview_window = self._build_preview_viewport(
+            self.side_preview_card, 2
+        )
+        self._build_preview_zoom_controls(self.main_preview_card, side=False)
+        self._build_preview_zoom_controls(self.side_preview_card, side=True)
+        self._apply_preview_layout(redraw=False)
         playback_row = ttk.Frame(right_panel)
-        playback_row.grid(row=4, column=0, sticky=tk.EW, pady=(8, 0))
+        playback_row.grid(row=2, column=0, sticky=tk.EW, pady=(8, 0))
         self.play_button_text = tk.StringVar(value="Play")
         ttk.Button(playback_row, textvariable=self.play_button_text, command=self.toggle_dataset_playback).pack(
             side=tk.LEFT
@@ -2496,13 +2612,6 @@ class RecorderApp:
         ttk.Button(playback_row, text="Stop Playback", command=self.stop_dataset_playback).pack(
             side=tk.LEFT, padx=(8, 0)
         )
-        ttk.Label(playback_row, text="Zoom").pack(side=tk.LEFT, padx=(18, 6))
-        ttk.Button(playback_row, text="-", width=3, command=lambda: self.adjust_preview_zoom(0.8)).pack(side=tk.LEFT)
-        ttk.Label(playback_row, textvariable=self.preview_zoom, width=4, anchor=tk.CENTER).pack(
-            side=tk.LEFT, padx=(4, 4)
-        )
-        ttk.Button(playback_row, text="+", width=3, command=lambda: self.adjust_preview_zoom(1.25)).pack(side=tk.LEFT)
-        ttk.Button(playback_row, text="Reset", command=self.reset_preview_zoom).pack(side=tk.LEFT, padx=(8, 0))
 
         bottom = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         bottom.pack(fill=tk.X)
@@ -3050,7 +3159,11 @@ class RecorderApp:
         self.episode_tree.delete(*self.episode_tree.get_children())
         self.video_mode = "dataset"
         self.video_title.set("No playable dataset selected.")
+        self.main_preview_frame = None
+        self.side_preview_frame = None
         self.preview_label.configure(image="")
+        self.side_preview_label.configure(image="")
+        self.side_preview_image = None
         self.dataset_image = None
 
         info_path = dataset_root / "meta" / "info.json"
@@ -3060,6 +3173,7 @@ class RecorderApp:
         try:
             self.dataset_info = json.loads(info_path.read_text())
             episodes_df = read_nested_parquets(dataset_root / "meta" / "episodes").sort_values("episode_index")
+            positions = load_episode_positions(dataset_root)
         except Exception as exc:
             self.status.set(f"Could not load episode browser: {exc}")
             self.video_title.set("Dataset metadata could not be loaded.")
@@ -3072,6 +3186,12 @@ class RecorderApp:
         loaded_indices: set[int] = set()
         for _, row in episodes_df.iterrows():
             ep_idx = int(row["episode_index"])
+            position = positions.get(ep_idx)
+            row = row.copy()
+            row["capture_position"] = (
+                f"{position['grid_rows']}×{position['grid_cols']} {position['grid_cell']}"
+                if position else "未标注"
+            )
             loaded_indices.add(ep_idx)
             ep = EpisodeBrowserRef(ep_idx, row)
             self.dataset_episodes[ep_idx] = ep
@@ -3094,7 +3214,7 @@ class RecorderApp:
                 "",
                 tk.END,
                 iid=str(ep_idx),
-                values=(ep_idx, status, int(row.get("length", 0)), self._task_text(row)),
+                values=(ep_idx, status, int(row.get("length", 0)), self._task_text(row), row.get("capture_position", "未标注")),
             )
 
     @staticmethod
@@ -3214,6 +3334,7 @@ class RecorderApp:
             self.episode_tree.selection_set(str(episode_index))
 
     def _write_episode_task(self, dataset_root: Path, episode_index: int, new_task: str) -> None:
+        positions = load_episode_positions(dataset_root)
         info_path = dataset_root / "meta" / "info.json"
         info = json.loads(info_path.read_text())
         task_index = self._ensure_task_index(dataset_root, info, new_task)
@@ -3242,6 +3363,8 @@ class RecorderApp:
             raise ValueError(f"episode {episode_index} has no frame rows in {data_path}")
         data_df.loc[data_mask, "task_index"] = int(task_index)
         data_df.to_parquet(data_path, index=False)
+        if episode_index in positions:
+            save_episode_position(dataset_root, {**positions[episode_index], "task": new_task})
 
     @staticmethod
     def _ensure_task_index(dataset_root: Path, info: dict[str, Any], task: str) -> int:
@@ -3366,6 +3489,7 @@ class RecorderApp:
             self.side_video_title.set("Aux preview: no depth/side video")
             self.side_preview_label.configure(image="")
             self.side_preview_image = None
+            self.side_preview_frame = None
             return
         cap = self.open_dataset_capture(side_key)
         if cap is None:
@@ -3376,11 +3500,8 @@ class RecorderApp:
             self.side_video_title.set(f"Aux preview: no frame from {side_key}")
             return
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        image = Image.fromarray(np.ascontiguousarray(frame_rgb))
-        image.thumbnail(self._side_preview_size(self.preview_zoom.get()), Image.Resampling.LANCZOS)
-        self.side_preview_image = ImageTk.PhotoImage(image=image)
-        self.side_preview_label.configure(image=self.side_preview_image)
-        self.side_video_title.set(f"Aux preview: {side_key} | zoom {self.preview_zoom.get():.2f}x")
+        self._show_side_frame(frame_rgb)
+        self.side_video_title.set(f"Aux preview: {side_key} | zoom {self.side_preview_zoom.get():.2f}x")
 
     @staticmethod
     def _find_dataset_root(path: Path) -> Path:
@@ -3565,6 +3686,86 @@ class RecorderApp:
         self.recorder = BimanualRecorder(settings, self.status_queue, self.preview_queue, self.state_queue)
         self.last_connect_settings = settings
         self.recorder.start()
+        if self.device_settings_visible:
+            self.toggle_device_settings()
+        self.episode_browser_visible.set(False)
+        self.toggle_episode_browser()
+
+    def _selected_position(self) -> dict[str, Any]:
+        try:
+            rows = int(self.vars["grid_rows"].get())
+            cols = int(self.vars["grid_cols"].get())
+        except ValueError as exc:
+            raise ValueError("网格行数和列数必须为整数。") from exc
+        return grid_position(rows, cols, self.vars["grid_cell"].get())
+
+    def _refresh_position_cells(self, *_args: Any) -> None:
+        # A different grid changes the meaning of a cell, so require a fresh selection.
+        self.vars["grid_cell"].set("")
+        try:
+            rows = int(self.vars["grid_rows"].get())
+            cols = int(self.vars["grid_cols"].get())
+            grid_position(rows, cols, "(0,0)")
+        except ValueError:
+            self.position_combo["values"] = ()
+            return
+        self.position_combo["values"] = tuple(f"({x},{y})" for y in range(rows) for x in range(cols))
+
+    def show_position_statistics(self) -> None:
+        root = self.active_dataset_root or Path(self.vars["dataset_root"].get()).expanduser()
+        try:
+            records = load_episode_positions(root)
+            info_path = root / "meta" / "info.json"
+            total = int(json.loads(info_path.read_text()).get("total_episodes", 0)) if info_path.exists() else 0
+            if self.recorder is not None and self.recorder.dataset is not None:
+                total = self.recorder.dataset.num_episodes
+            records = {index: record for index, record in records.items() if index < total}
+            counts = position_counts(records)
+        except (OSError, ValueError, KeyError) as exc:
+            self.status.set(f"无法读取位置统计：{exc}")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("采集位置统计")
+        dialog.geometry("900x520")
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(
+            frame, text=f"共 {total} 条示范；已标注 {len(records)} 条；未标注 {total - len(records)} 条。",
+            wraplength=850,
+        ).pack(anchor=tk.W)
+        ttk.Label(frame, text=str(root), wraplength=850).pack(anchor=tk.W, pady=(4, 8))
+        tree_frame = ttk.Frame(frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        tree = ttk.Treeview(
+            tree_frame, columns=("task", "grid", "cell", "count"), show="headings", style="Episode.Treeview"
+        )
+        for key, title, width in (
+            ("task", "任务", 140), ("grid", "网格（行×列）", 210),
+            ("cell", "初始位置 (x,y)", 260), ("count", "示范数量", 170),
+        ):
+            tree.heading(key, text=title)
+            tree.column(key, width=width, anchor=tk.CENTER)
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        for row in counts:
+            tree.insert("", tk.END, values=(row["task"], f"{row['grid_rows']}×{row['grid_cols']}", row["grid_cell"], row["episodes"]))
+
+        def export() -> None:
+            filename = filedialog.asksaveasfilename(
+                parent=dialog, title="导出位置统计", defaultextension=".csv",
+                initialfile="position_counts.csv", filetypes=(("CSV", "*.csv"),),
+            )
+            if filename:
+                try:
+                    export_position_counts(Path(filename), records)
+                    self.status.set(f"位置统计已导出：{filename}")
+                except OSError as exc:
+                    messagebox.showerror("导出失败", str(exc), parent=dialog)
+
+        ttk.Button(frame, text="导出 CSV", command=export).pack(anchor=tk.E, pady=(10, 0))
 
     def record(self) -> None:
         if self.recorder is None:
@@ -3580,11 +3781,16 @@ class RecorderApp:
         if task not in TASK_CHOICES:
             self.status.set(f"Choose a valid task before recording: {', '.join(TASK_CHOICES)}")
             return
+        try:
+            position = self._selected_position()
+        except ValueError as exc:
+            self.status.set(str(exc))
+            return
         episode = self.episode_text.get().split(":", 1)[-1].strip()
         if episode.isdigit():
             self.episode_text.set(f"Recording: {episode}")
         self.progress_text.set("Record requested...")
-        self.recorder.request_record(task)
+        self.recorder.request_record(task, position)
 
     def end_episode(self) -> None:
         if self.recorder is not None:
@@ -3606,6 +3812,8 @@ class RecorderApp:
         self._set_active_dataset_root(None)
         self.video_mode = "dataset"
         self._load_episode_browser(Path(self.vars["dataset_root"].get()).expanduser())
+        self.episode_browser_visible.set(True)
+        self.toggle_episode_browser()
 
     def disconnect_recorder(self) -> None:
         if self.recorder is None and self.camera_preview is None:
@@ -3819,11 +4027,122 @@ class RecorderApp:
         state = tk.DISABLED if self.episode_save_active else tk.NORMAL
         self.record_button.configure(state=state)
 
-    def adjust_preview_zoom(self, factor: float) -> None:
-        self.preview_zoom.set(min(4.0, max(0.25, self.preview_zoom.get() * factor)))
+    def adjust_preview_zoom(self, factor: float, *, side: bool = False) -> None:
+        zoom = self.side_preview_zoom if side else self.preview_zoom
+        zoom.set(min(4.0, max(0.25, zoom.get() * factor)))
+        self._redraw_previews()
 
-    def reset_preview_zoom(self) -> None:
-        self.preview_zoom.set(1.0)
+    def toggle_device_settings(self) -> None:
+        self.device_settings_visible = not self.device_settings_visible
+        if self.device_settings_visible:
+            self.device_settings_frame.pack(fill=tk.X, after=self.device_settings_frame.master.winfo_children()[0])
+            self.camera_options_frame.pack(fill=tk.X, pady=(8, 0), before=self.record_button.master)
+            self.settings_toggle_text.set("收起设置")
+        else:
+            self.device_settings_frame.pack_forget()
+            self.camera_options_frame.pack_forget()
+            self.settings_toggle_text.set("展开设置")
+        self.root.update_idletasks()
+        self._redraw_previews()
+
+    def toggle_episode_browser(self) -> None:
+        if self.episode_browser_visible.get():
+            self.episode_browser_panel.grid()
+        else:
+            self.episode_browser_panel.grid_remove()
+        self.root.update_idletasks()
+        self._redraw_previews()
+
+    def _apply_preview_layout(self, _event: tk.Event | None = None, *, redraw: bool = True) -> None:
+        horizontal = self.preview_layout.get() == "左右"
+        self.preview_area.columnconfigure(0, weight=1, uniform="camera_columns" if horizontal else "")
+        self.preview_area.columnconfigure(1, weight=int(horizontal), uniform="camera_columns" if horizontal else "")
+        self.preview_area.rowconfigure(0, weight=1, uniform="camera_rows" if not horizontal else "")
+        self.preview_area.rowconfigure(1, weight=int(not horizontal), uniform="camera_rows" if not horizontal else "")
+        self.main_preview_card.grid(row=0, column=0, sticky=tk.NSEW)
+        self.side_preview_card.grid(row=int(not horizontal), column=int(horizontal), sticky=tk.NSEW)
+        if redraw:
+            self.root.update_idletasks()
+            self._redraw_previews()
+
+    def reset_preview_zoom(self, *, side: bool = False) -> None:
+        zoom = self.side_preview_zoom if side else self.preview_zoom
+        zoom.set(1.0)
+        self._redraw_previews()
+
+    def _build_preview_zoom_controls(self, card: ttk.Frame, *, side: bool) -> None:
+        toolbar = ttk.Frame(card)
+        toolbar.grid(row=1, column=0, sticky=tk.EW, pady=(4, 0))
+        zoom = self.side_preview_zoom if side else self.preview_zoom
+        ttk.Label(toolbar, text="Zoom", font=("TkDefaultFont", 10)).pack(side=tk.LEFT)
+        ttk.Button(
+            toolbar, text="-", width=2, style="Preview.TButton",
+            command=lambda: self.adjust_preview_zoom(0.8, side=side),
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(toolbar, textvariable=zoom, width=3, anchor=tk.CENTER, font=("TkDefaultFont", 10)).pack(
+            side=tk.LEFT, padx=4
+        )
+        ttk.Button(
+            toolbar, text="+", width=2, style="Preview.TButton",
+            command=lambda: self.adjust_preview_zoom(1.25, side=side),
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            toolbar, text="Fit", width=3, style="Preview.TButton", command=lambda: self.reset_preview_zoom(side=side),
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+    def _build_preview_viewport(self, parent: ttk.Frame, row: int) -> tuple[ttk.Label, tk.Canvas, int]:
+        viewport = ttk.Frame(parent)
+        viewport.grid(row=row, column=0, sticky=tk.NSEW, pady=(4, 0))
+        # Images must never increase the layout's requested width or height.
+        viewport.grid_propagate(False)
+        viewport.rowconfigure(0, weight=1)
+        viewport.columnconfigure(0, weight=1)
+        canvas = tk.Canvas(viewport, width=1, height=1, highlightthickness=0, background="#181b1f")
+        canvas.grid(row=0, column=0, sticky=tk.NSEW)
+        horizontal = ttk.Scrollbar(viewport, orient=tk.HORIZONTAL, command=canvas.xview)
+        vertical = ttk.Scrollbar(viewport, orient=tk.VERTICAL, command=canvas.yview)
+        horizontal.grid(row=1, column=0, sticky=tk.EW)
+        vertical.grid(row=0, column=1, sticky=tk.NS)
+        canvas.configure(xscrollcommand=horizontal.set, yscrollcommand=vertical.set)
+        label = ttk.Label(canvas, anchor=tk.CENTER, padding=0, borderwidth=0)
+        window = canvas.create_window(0, 0, window=label, anchor=tk.NW)
+        canvas.bind("<Configure>", self._schedule_preview_redraw)
+        return label, canvas, window
+
+    def _schedule_preview_redraw(self, _event: tk.Event) -> None:
+        if self.preview_resize_after is None:
+            self.preview_resize_after = self.root.after(60, self._redraw_previews)
+
+    def _redraw_previews(self) -> None:
+        if self.preview_resize_after is not None:
+            self.root.after_cancel(self.preview_resize_after)
+            self.preview_resize_after = None
+        self.preview_title_label.configure(wraplength=max(100, self.preview_canvas.winfo_width()))
+        self.side_preview_title_label.configure(wraplength=max(100, self.side_preview_canvas.winfo_width()))
+        if self.main_preview_frame is not None:
+            self._show_frame(self.main_preview_frame)
+        if self.side_preview_frame is not None:
+            self._show_side_frame(self.side_preview_frame)
+
+    def _render_preview(
+        self, frame: np.ndarray, label: ttk.Label, canvas: tk.Canvas, window: int, zoom: float
+    ) -> ImageTk.PhotoImage:
+        width, height = max(1, canvas.winfo_width()), max(1, canvas.winfo_height())
+        zoom = min(4.0, max(0.25, zoom))
+        image = Image.fromarray(np.ascontiguousarray(frame))
+        scale = min(width / image.width, height / image.height) * zoom
+        size = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
+        # Explicit resizing permits preview zoom even when the source is only 640×360.
+        image = image.resize(size, Image.Resampling.BILINEAR if scale > 1 else Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(image=image)
+        label.configure(image=photo)
+        canvas.coords(window, max(0, (width - image.width) // 2), max(0, (height - image.height) // 2))
+        canvas.configure(scrollregion=(0, 0, max(width, image.width), max(height, image.height)))
+        if image.width <= width:
+            canvas.xview_moveto(0)
+        if image.height <= height:
+            canvas.yview_moveto(0)
+        return photo
 
     @staticmethod
     def _zoomed_preview_size(zoom: float) -> tuple[int, int]:
@@ -3841,16 +4160,16 @@ class RecorderApp:
         return CAMERA_WIDTH, CAMERA_HEIGHT
 
     def _show_frame(self, frame: np.ndarray) -> None:
-        image = Image.fromarray(np.ascontiguousarray(frame))
-        image.thumbnail(self._zoomed_preview_size(self.preview_zoom.get()), Image.Resampling.LANCZOS)
-        self.current_image = ImageTk.PhotoImage(image=image)
-        self.preview_label.configure(image=self.current_image)
+        self.main_preview_frame = frame
+        self.current_image = self._render_preview(
+            frame, self.preview_label, self.preview_canvas, self.preview_window, self.preview_zoom.get()
+        )
 
     def _show_side_frame(self, frame: np.ndarray) -> None:
-        image = Image.fromarray(np.ascontiguousarray(frame))
-        image.thumbnail(self._side_preview_size(self.preview_zoom.get()), Image.Resampling.LANCZOS)
-        self.side_preview_image = ImageTk.PhotoImage(image=image)
-        self.side_preview_label.configure(image=self.side_preview_image)
+        self.side_preview_frame = frame
+        self.side_preview_image = self._render_preview(
+            frame, self.side_preview_label, self.side_preview_canvas, self.side_preview_window, self.side_preview_zoom.get()
+        )
 
     def _show_side_live_preview(self) -> None:
         side_key = self._side_preview_key()
@@ -3858,11 +4177,12 @@ class RecorderApp:
             self.side_video_title.set("Aux preview: no depth/side frame")
             self.side_preview_label.configure(image="")
             self.side_preview_image = None
+            self.side_preview_frame = None
             return
 
         width, height, fps = self.live_frame_stats.get(side_key, (0, 0, 0.0))
         self.side_video_title.set(
-            f"Aux preview: {side_key} | {width}x{height} | {fps:.1f} fps | zoom {self.preview_zoom.get():.2f}x"
+            f"Aux preview: {side_key} | {width}x{height} | {fps:.1f} fps | zoom {self.side_preview_zoom.get():.2f}x"
         )
         self._show_side_frame(self.latest_frames[side_key])
 
@@ -3891,10 +4211,8 @@ class RecorderApp:
 
     def _show_bgr_frame(self, frame_bgr: np.ndarray) -> None:
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        image = Image.fromarray(np.ascontiguousarray(frame_rgb))
-        image.thumbnail(self._zoomed_preview_size(self.preview_zoom.get()), Image.Resampling.LANCZOS)
-        self.dataset_image = ImageTk.PhotoImage(image=image)
-        self.preview_label.configure(image=self.dataset_image)
+        self._show_frame(frame_rgb)
+        self.dataset_image = self.current_image
 
     def _show_state(self, state: dict[str, float]) -> None:
         items = sorted(state.items())[:18]
