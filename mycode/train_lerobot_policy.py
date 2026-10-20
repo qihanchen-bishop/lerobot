@@ -77,6 +77,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--policy-type", default="act", help="Policy type, e.g. act or diffusion.")
     parser.add_argument("--image-keys", nargs="*", default=DEFAULT_IMAGE_KEYS)
+    parser.add_argument(
+        "--image-normalization", choices=["imagenet", "dataset"], default="imagenet",
+        help="RGB mean/std source. Dataset matches the final semantic ACT runs; legacy default is ImageNet.",
+    )
     parser.add_argument("--state-keys", nargs="*", default=DEFAULT_STATE_KEYS)
     parser.add_argument(
         "--no-gripper",
@@ -832,7 +836,10 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     policy_cfg = build_policy_config(args.policy_type, meta, args)
 
     cfg = TrainPipelineConfig(
-        dataset=DatasetConfig(repo_id=args.repo_id, root=str(filtered_root), video_backend=args.video_backend),
+        dataset=DatasetConfig(
+            repo_id=args.repo_id, root=str(filtered_root), video_backend=args.video_backend,
+            use_imagenet_stats=getattr(args, "image_normalization", "imagenet") == "imagenet",
+        ),
         policy=policy_cfg,
         output_dir=args.output_dir,
         job_name=args.job_name,
@@ -847,6 +854,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     )
 
     print(f"Training dataset view: {filtered_root}")
+    print(f"RGB normalization statistics: {'ImageNet' if cfg.dataset.use_imagenet_stats else 'dataset'}")
     print(f"Input features: {list(policy_cfg.input_features)}")
     print(f"Output features: {list(policy_cfg.output_features)}")
     if args.policy_type == "act":

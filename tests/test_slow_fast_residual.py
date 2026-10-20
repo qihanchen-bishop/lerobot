@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from mycode.slow_fast_residual import (
+    RESIDUAL_VARIANTS,
     ActionPlan,
     MultiRateExecutor,
     OnlineWindow,
@@ -19,7 +20,7 @@ def plan(i=0, time=0):
     return ActionPlan(i, time, time, torch.arange(120).reshape(60, 2).float(), 30)
 
 
-@pytest.mark.parametrize("variant", ["act", "unet", "qtoken"])
+@pytest.mark.parametrize("variant", RESIDUAL_VARIANTS)
 def test_config(variant):
     assert ResidualConfig(variant=variant).history == 8
     with pytest.raises(ValueError):
@@ -30,7 +31,7 @@ def test_config(variant):
         ResidualConfig(correction_steps=1)
 
 
-@pytest.mark.parametrize("variant", ["act", "unet", "qtoken"])
+@pytest.mark.parametrize("variant", RESIDUAL_VARIANTS)
 def test_stride6_delay3_horizon9(variant):
     cfg = ResidualConfig(
         variant=variant,

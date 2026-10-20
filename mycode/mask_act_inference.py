@@ -216,7 +216,12 @@ def load_mask_act_for_inference(
         *FROZEN_SEMANTIC_EXPERIMENTS,
         *ACTIONSEM_EXPERIMENTS,
     }:
-        if str(args.experiment).upper() in VIEW_SPECIFIC_PRETRAINED_SEGMENTER_EXPERIMENTS:
+        if str(args.experiment).upper() in {"FINAL-VIEWQTOKEN", "FINAL-SEM-FS-NOQ"}:
+            configured = [run_dir / "segmentation_models" / view / "model.ts" for view in ("front", "side")]
+            if any(not path.is_file() for path in configured):
+                raise FileNotFoundError("final-ViewQtoken requires the run's segmentation_models/front and side bundles.")
+            args.pretrained_segmentation_checkpoints = [str(path) for path in configured]
+        elif str(args.experiment).upper() in VIEW_SPECIFIC_PRETRAINED_SEGMENTER_EXPERIMENTS:
             configured = [
                 Path(path).expanduser()
                 for path in getattr(args, "pretrained_segmentation_checkpoints", []) or []

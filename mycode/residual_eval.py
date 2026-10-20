@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import torch
 
 from mycode.slow_fast_residual import (
+    QUERY_CONTEXT_VARIANTS, SEMANTIC_BASE_EXPERIMENTS,
     ActionPlan, MultiRateExecutor, OnlineWindow, ResidualConfig, ResidualCorrector,
     context_record, observation_valid, validate_joints,
 )
@@ -45,7 +46,7 @@ class ACTResidualRuntime:
         saved = torch.load(path, map_location="cpu", weights_only=False)
         spec, contract = saved["spec"], saved["contract"]
         cfg = ResidualConfig(**spec["cfg"])
-        expected_experiment = {"unet": "UNET-SEM-V5-FS", "qtoken": "UNET-SEM-V5-FS-QTOKEN"}
+        expected_experiment = SEMANTIC_BASE_EXPERIMENTS
         experiment = getattr(policy, "experiment", None)
         if mode != spec["mode"] or (
             cfg.variant == "act" and experiment is not None
@@ -80,7 +81,7 @@ class ACTResidualRuntime:
         self.adapter.pre, self.adapter.post, self.adapter.keys = pre, post, keys
         self.adapter.query_capture = None
         self.adapter.latest_plan_features = None
-        if cfg.variant == "qtoken":
+        if cfg.variant in QUERY_CONTEXT_VARIANTS:
             from mycode.slow_fast_semantic import QueryCapture
             self.adapter.query_capture = QueryCapture(self.adapter.act.model)
         self.plan_features = None
@@ -124,7 +125,7 @@ class ACTResidualRuntime:
     def _infer_fast(self, rgbs, q, context, stamp):
         with torch.inference_mode():
             feature = self.adapter.features(rgbs, q[None])[0]
-            if self.cfg.variant == "qtoken":
+            if self.cfg.variant in QUERY_CONTEXT_VARIANTS:
                 if self.plan_features is None:
                     raise RuntimeError("Current plan has no Qtoken descriptor")
                 feature = torch.cat((feature, self.plan_features[0].to(feature.device)))

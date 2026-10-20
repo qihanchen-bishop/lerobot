@@ -17,6 +17,17 @@ from torch.nn import functional as F  # noqa: N812
 from torch.utils.data import Dataset
 
 
+SEMANTIC_BASE_EXPERIMENTS = {
+    "unet": "UNET-SEM-V5-FS",
+    "qtoken": "UNET-SEM-V5-FS-QTOKEN",
+    "viewqtoken_rgb": "FINAL-VIEWQTOKEN",
+    "viewqtoken_semquery": "FINAL-VIEWQTOKEN",
+}
+RESIDUAL_VARIANTS = ("act", *SEMANTIC_BASE_EXPERIMENTS)
+QUERY_CONTEXT_VARIANTS = frozenset({"qtoken", "viewqtoken_semquery"})
+SEMANTIC_FEATURE_VARIANTS = frozenset({"unet", "viewqtoken_semquery"})
+
+
 @dataclass(frozen=True)
 class ResidualConfig:
     variant: str = "act"
@@ -39,7 +50,7 @@ class ResidualConfig:
     seed: int = 1000
 
     def __post_init__(self):
-        if self.variant not in {"act", "unet", "qtoken"}:
+        if self.variant not in RESIDUAL_VARIANTS:
             raise ValueError("Unknown residual variant")
         for name in (
             "fps",

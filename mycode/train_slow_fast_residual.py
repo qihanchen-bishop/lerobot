@@ -25,6 +25,10 @@ from torch.nn import functional as F  # noqa: N812
 from torch.utils.data import DataLoader, Subset
 
 from mycode.slow_fast_residual import (
+    QUERY_CONTEXT_VARIANTS,
+    RESIDUAL_VARIANTS,
+    SEMANTIC_BASE_EXPERIMENTS,
+    SEMANTIC_FEATURE_VARIANTS,
     ActionPlan,
     MultiRateExecutor,
     OnlineWindow,
@@ -94,7 +98,7 @@ class BasePolicyAdapter:
             config = self.policy.config
             if str(config.device) != device:
                 raise ValueError("Semantic adapter device must match the existing inference loader")
-            expected = "UNET-SEM-V5-FS" if cfg.variant == "unet" else "UNET-SEM-V5-FS-QTOKEN"
+            expected = SEMANTIC_BASE_EXPERIMENTS[cfg.variant]
             if self.details["experiment"].upper() != expected:
                 raise ValueError(f"Expected {expected}, got {self.details['experiment']}")
             self.act = self.policy.act_policy
@@ -107,7 +111,7 @@ class BasePolicyAdapter:
             raise ValueError("Chunk too short for configured delay and replanning interval")
         self.query_capture = None
         self.latest_plan_features = None
-        if cfg.variant == "qtoken":
+        if cfg.variant in QUERY_CONTEXT_VARIANTS:
             from mycode.slow_fast_semantic import QueryCapture
 
             self.query_capture = QueryCapture(self.act.model)
@@ -138,7 +142,7 @@ class BasePolicyAdapter:
             )
             feature = self.act.model.backbone(small)["feature_map"]
             pooled.append(F.adaptive_avg_pool2d(feature, (2, 3)).flatten(1))
-        if self.cfg.variant == "unet":
+        if self.cfg.variant in SEMANTIC_FEATURE_VARIANTS:
             from mycode.slow_fast_semantic import semantic_descriptor
 
             # Exactly the existing segmenter preprocessing; no ground-truth masks.
@@ -235,6 +239,14 @@ def fingerprint(args, cfg, info):
             payload[filename] = sha(checkpoint / filename)
     if cfg.variant != "act":
         payload["run_config"] = sha(checkpoint.parent / "mask_act_run_config.json")
+    if cfg.variant in {"viewqtoken_rgb", "viewqtoken_semquery"}:
+        # Both ablations use U-Net in the frozen base plan, even without fast semantic inputs.
+        bundle = checkpoint.parent / "segmentation_models"
+        payload["segmentation_bundle"] = {
+            f"{view}/{name}": sha(bundle / view / name)
+            for view in ("front", "side")
+            for name in ("model.ts", "model_config.json", "filter_policy.json")
+        }
     payload["id"] = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     return payload
 
@@ -867,7 +879,7 @@ def audit(args, cfg):
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("command", choices=["cache", "train", "shadow", "audit"])
-    p.add_argument("--variant", choices=["act", "unet", "qtoken"], default="act")
+    p.add_argument("--variant", choices=RESIDUAL_VARIANTS, default="act")
     p.add_argument("--root", required=True)
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--cache", required=True)

@@ -1,0 +1,39 @@
+{
+  "dataset_dir": "/data/qihan/sam2/segdata/temp/finaldata/iterunet/iter_r1/round3/dataset_c7d51755",
+  "dataset_sha256": "33322446caf1d1ce5fcb086f5932235a4c19b26208a16d5a6d44efc83469399d",
+  "model_dir": "/data/qihan/sam2/segdata/temp/finaldata/iterunet/iter_r1/round3/model_ef323abe",
+  "encoder": "resnet18",
+  "device": "cuda:0",
+  "pretrained": true,
+  "amp": true,
+  "epochs": 100,
+  "batch_size": 8,
+  "workers": 4,
+  "patience": 12,
+  "min_epochs": 25,
+  "seed": 42,
+  "lr": 0.0003,
+  "weight_decay": 0.0001,
+  "dice_weight": 1.0,
+  "teacher_model_dirs": [
+    "/data/qihan/sam2/segdata/temp/finaldata/iterunet/iter_r1/round1/model_50687a43",
+    "/data/qihan/sam2/segdata/temp/finaldata/iterunet/iter_r1/round2/model_f09960be",
+    "/data/qihan/sam2/segdata/temp/finaldata/manual_seed/models/unet_resnet18_r1"
+  ],
+  "benchmark_id": "3a74801d89465f0478ab5ae439eba716128ca1ab1b620f3314d8185b9302f267",
+  "labels": [
+    "background",
+    "occluder",
+    "object",
+    "region",
+    "tool",
+    "leftarm",
+    "rightarm"
+  ],
+  "image_size": [
+    640,
+    360
+  ],
+  "split_warning": "内部固定哈希随机按帧划分，邻帧泄漏；不代表未见视频泛化。",
+  "horizontal_flip": false
+}

@@ -98,6 +98,14 @@ from pretrained_semantic_segmenter import (
     ActionSupervisedTinyUNetSegmenter,
     FrozenTinyUNetSegmenter,
 )
+from view_qtoken import (
+    EXPERIMENTS as FINAL_EXPERIMENTS,
+    QUERY_EXPERIMENTS as FINAL_QUERY_EXPERIMENTS,
+    HARD_SEMANTIC_EXPERIMENTS as FINAL_HARD_SEMANTIC_EXPERIMENTS,
+    SEM_ONLY_EXPERIMENT, RGB_QUERY_EXPERIMENT,
+    FrozenExportedUNet, ViewHeads, ViewQueryStore,
+    forward_training as forward_view_query_training,
+)
 from semantic_servo import (
     ActionConditionedSemanticDynamics,
     PhaseHistoryModel,
@@ -155,11 +163,13 @@ SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS = (
 )
 SIMPLE_STAGE_NAMES = ("expose", "separate", "transport", "restore")
 UNET_SEM_V5_QUERY_EXPERIMENTS = {
+    *FINAL_QUERY_EXPERIMENTS,
     "UNET-SEM-V5-F-QTOKEN",
     "UNET-SEM-V5-FS-QTOKEN",
 }
 UNET_SEM_V5_FRONT_EXPERIMENTS = {"UNET-SEM-V5-F", "UNET-SEM-V5-F-QTOKEN"}
 UNET_SEM_V5_ONLY_EXPERIMENTS = {
+    SEM_ONLY_EXPERIMENT,
     "UNET-SEM-V5",
     "UNET-SEM-V5-FS",
     *UNET_SEM_V5_FRONT_EXPERIMENTS,
@@ -181,13 +191,14 @@ FROZEN_SEMANTIC_EXPERIMENTS = {
     "UNET-SEM",
     "UNET-SEM-V3-F-NOEMB",
     *UNET_SEM_V5_EXPERIMENTS,
-}
+} - {RGB_QUERY_EXPERIMENT}
 IDENTITY_EMBEDDED_FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM"}
 FRONT_ONLY_FROZEN_SEMANTIC_EXPERIMENTS = {"UNET-SEM-V3-F-NOEMB"}
 ASYMMETRIC_SEMANTIC_EXPERIMENTS = {*UNET_SEM_V5_EXPERIMENTS, *ACTIONSEM_EXPERIMENTS}
 VIEWFUS_FUSED_FRONT_KEY = "observation.images.front_fused_semantic"
 SEMANTIC_FEATURE_FUSION_EXPERIMENTS = {"SEM-1-V2", "SSACT-3"}
 SEMANTIC_EXPERIMENTS = {
+    RGB_QUERY_EXPERIMENT,
     "SEM-1",
     "SEM-1-N",
     "SEM-1-V2",
@@ -1357,6 +1368,10 @@ class MaskACTPolicy(nn.Module):
             raise ValueError(
                 f"Unknown experiment '{experiment}'. Choose one of {sorted(valid_experiments)}."
             )
+        if self.experiment in FINAL_EXPERIMENTS and self.rgb_keys != [
+            "observation.images.front", "observation.images.side"
+        ]:
+            raise ValueError("Final experiments require front then side, matching the cached supervision.")
         if self.semantic_temperature <= 0:
             raise ValueError(f"semantic_temperature must be positive, got {self.semantic_temperature}.")
         if self.semantic_fusion_warmup_steps < 0 or self.semantic_fusion_ramp_steps < 0:
@@ -1430,7 +1445,9 @@ class MaskACTPolicy(nn.Module):
         )
         self.pretrained_segmenter = None
         self.pretrained_segmenters = None
-        if self.experiment in ACTIONSEM_EXPERIMENTS:
+        if self.experiment == RGB_QUERY_EXPERIMENT:
+            self.seg_net = None
+        elif self.experiment in ACTIONSEM_EXPERIMENTS:
             if not pretrained_segmentation_checkpoints:
                 raise ValueError(
                     f"{self.experiment} requires one pretrained segmentation checkpoint per RGB view."
@@ -1467,7 +1484,7 @@ class MaskACTPolicy(nn.Module):
                     )
                 self.pretrained_segmenters = nn.ModuleList(
                     [
-                        FrozenTinyUNetSegmenter(
+                        (FrozenExportedUNet if self.experiment in FINAL_HARD_SEMANTIC_EXPERIMENTS else FrozenTinyUNetSegmenter)(
                             checkpoint,
                             expected_labels=("background", *suffixes),
                         )
@@ -1536,6 +1553,8 @@ class MaskACTPolicy(nn.Module):
                 view_palette = [palette_by_class["background"]]
                 view_palette.extend(palette_by_class[suffix] for suffix in suffixes)
                 self.register_buffer(name, torch.tensor(view_palette, dtype=torch.float32))
+                if self.experiment in FINAL_HARD_SEMANTIC_EXPERIMENTS:
+                    getattr(self, name).copy_(self.pretrained_segmenters[view_idx].palette)
                 self._semantic_palette_buffer_names.append(name)
                 weight_name = f"semantic_class_weights_view_{view_idx}"
                 view_weights = [SEMANTIC_CLASS_WEIGHT_BY_NAME["background"]]
@@ -1545,6 +1564,10 @@ class MaskACTPolicy(nn.Module):
             self.register_buffer("semantic_class_weights", torch.tensor(class_weights, dtype=torch.float32))
             self.register_buffer("semantic_visual_mean", torch.tensor(IMAGENET_VISUAL_MEAN).view(1, 3, 1, 1))
             self.register_buffer("semantic_visual_std", torch.tensor(IMAGENET_VISUAL_STD).view(1, 3, 1, 1))
+        if self.experiment in FINAL_QUERY_EXPERIMENTS:
+            self.act_policy.model.metric_heads = nn.ModuleList(
+                [ViewHeads(self.config.dim_model, width) for width in (1, 2, 1)]
+            )
         self.semantic_net = (
             SemanticLatentNet(
                 num_masks=len(self.mask_suffixes),
@@ -1829,6 +1852,8 @@ class MaskACTPolicy(nn.Module):
     @torch.no_grad()
     def _prepare_inference_batch(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         self.eval()
+        if self.experiment == RGB_QUERY_EXPERIMENT:
+            return dict(batch)
         self._prepared_inference_semantic_input = {}
         rgbs = self._get_rgb_inputs(batch, denormalize=self.act_uses_raw_rgb_images())
         act_batch = dict(batch)
@@ -2087,6 +2112,7 @@ class MaskACTPolicy(nn.Module):
 
     def act_uses_raw_rgb_images(self) -> bool:
         return self.experiment in {
+            RGB_QUERY_EXPERIMENT,
             "2C",
             "SEM-1",
             "SEM-1-N",
@@ -2250,6 +2276,9 @@ class MaskACTPolicy(nn.Module):
         return self.apply_semantic_state_reliability(targets), valid
 
     def semantic_probabilities(self, logits_by_view: list[Tensor]) -> list[Tensor]:
+        if self.experiment in FINAL_HARD_SEMANTIC_EXPERIMENTS:
+            return [F.one_hot(logits.argmax(1), logits.shape[1]).permute(0, 3, 1, 2).float()
+                    for logits in logits_by_view]
         return [
             torch.softmax(logits / self.semantic_temperature, dim=1)
             for logits in logits_by_view
@@ -2629,6 +2658,8 @@ class MaskACTPolicy(nn.Module):
         return torch.stack([object_exposure, distance.clamp(0.0, 1.0)], dim=-1)
 
     def forward(self, batch: dict[str, Tensor], raw_batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, float]]:
+        if self.experiment in FINAL_EXPERIMENTS:
+            return forward_view_query_training(self, batch, raw_batch)
         device = batch["action"].device
         mask_targets = None
         if not self.uses_frozen_semantic_segmenter() and not self.uses_semantic_maps():
@@ -3404,6 +3435,7 @@ def parse_args() -> argparse.Namespace:
             "UNET-SEM-V5-FS",
             "UNET-SEM-V5-F-QTOKEN",
             "UNET-SEM-V5-FS-QTOKEN",
+            *FINAL_EXPERIMENTS,
             "STAGE-V5-F-RGB",
             "STAGE-V5-FS-RGB",
             "STAGE-V5-F-UNETSEM",
@@ -3416,6 +3448,8 @@ def parse_args() -> argparse.Namespace:
         required=True,
     )
     parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
+    parser.add_argument("--view-query-cache", type=Path, default=None,
+                        help="final-ViewQtoken targets.npz from prepare_view_qtoken.py.")
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--rgb-key", default=DEFAULT_RGB_KEY)
     parser.add_argument(
@@ -3805,6 +3839,8 @@ def reshape_visual_stats_for_channel_first(
 
 def act_image_keys_for_experiment(args: argparse.Namespace) -> list[str]:
     experiment = args.experiment.upper()
+    if experiment == RGB_QUERY_EXPERIMENT:
+        return list(args.rgb_keys)
     semantic_keys = [semantic_image_key(rgb_key) for rgb_key in args.rgb_keys]
     if experiment in {*STAGE_V5_RGB_ONLY_EXPERIMENTS, *SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS}:
         return list(args.rgb_keys)
@@ -3880,6 +3916,8 @@ def act_metric_dim(experiment: str) -> int:
 
 
 def act_metric_token_output_dims(experiment: str) -> list[int] | None:
+    if experiment.upper() in FINAL_QUERY_EXPERIMENTS:
+        return [2, 4, 2]
     if experiment.upper() in UNET_SEM_V5_QUERY_EXPERIMENTS:
         return list(FRONT_QUERY_TOKEN_OUTPUT_DIMS)
     return None
@@ -4139,6 +4177,20 @@ def save_run_config(
         payload["dataset_view_image_keys"] = image_keys_in_view
         payload["action_stats"] = action_stats
         payload["act_image_keys"] = act_image_keys_for_experiment(args)
+        if args.experiment.upper() in FINAL_EXPERIMENTS:
+            payload["final_ablation"] = {
+                "semantic_input": args.experiment.upper() in FINAL_HARD_SEMANTIC_EXPERIMENTS,
+                "supervised_queries": args.experiment.upper() in FINAL_QUERY_EXPERIMENTS,
+            }
+        if args.experiment.upper() in FINAL_QUERY_EXPERIMENTS:
+            payload["view_query_cache"] = str(args.view_query_cache)
+            payload["view_query"] = {
+                "names": ["visibility", "tool_object", "object_region"],
+                "views": ["front", "side"], "head_dims": [[1, 1], [2, 2], [1, 1]],
+                "quality": "filtered score times geometry validity times not-anomalous",
+                "normalization": "mean per coordinate, view and task; not divided by sum of quality weights",
+                "cache_metadata": json.loads((args.view_query_cache.parent / "manifest.json").read_text()),
+            }
         if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS:
             payload["view_fusion"] = {
                 "version": "ViewFus-v1",
@@ -4165,7 +4217,7 @@ def save_run_config(
                 "learned_stage_model": False,
                 "temporal_state_machine": False,
             }
-        if args.experiment.upper() in UNET_SEM_V5_QUERY_EXPERIMENTS:
+        if args.experiment.upper() in UNET_SEM_V5_QUERY_EXPERIMENTS and args.experiment.upper() not in FINAL_QUERY_EXPERIMENTS:
             payload["front_query_tokens"] = {
                 "source_view": "observation.images.front",
                 "names": list(FRONT_QUERY_TOKEN_NAMES),
@@ -4203,6 +4255,8 @@ def save_run_config(
                 ),
                 "segmentation_trainable": False,
                 "representation": (
+                    "dataset_filtered_hard_labels_train__frozen_unet_argmax_filter_inference"
+                    if args.experiment.upper() in FINAL_HARD_SEMANTIC_EXPERIMENTS else
                     "phase_only_no_semantic_image"
                     if args.experiment.upper() in SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS
                     else "view_specific_softmax_to_semantic_rgb"
@@ -4415,6 +4469,8 @@ def make_labeled_tile(image: Tensor, label: str, size: tuple[int, int] = (192, 1
 
 @torch.no_grad()
 def save_mask_preview(checkpoint_dir: Path, step: int, model: MaskACTPolicy, raw_batch: dict[str, Tensor]) -> None:
+    if model.experiment == RGB_QUERY_EXPERIMENT:
+        return
     if model.uses_semantic_latents():
         return
 
@@ -4423,8 +4479,13 @@ def save_mask_preview(checkpoint_dir: Path, step: int, model: MaskACTPolicy, raw
     device = next(model.parameters()).device
     if model.uses_semantic_maps():
         rgbs = model._get_rgb_inputs(raw_batch, device=device)
-        logits_by_view, _ = model.predict_view_logits_and_latent_from_rgbs(rgbs)
-        probabilities_by_view = model.semantic_probabilities(logits_by_view)
+        if model.experiment in FINAL_HARD_SEMANTIC_EXPERIMENTS:
+            probabilities_by_view = [F.one_hot(target, len(suffixes) + 1).permute(0, 3, 1, 2).float()
+                                     for target, suffixes in zip(model.build_semantic_targets(raw_batch, device=device),
+                                                                 model.view_mask_suffixes, strict=True)]
+        else:
+            logits_by_view, _ = model.predict_view_logits_and_latent_from_rgbs(rgbs)
+            probabilities_by_view = model.semantic_probabilities(logits_by_view)
         soft_maps = model.semantic_rgb_maps(probabilities_by_view)
         targets_by_view = None
         if not model.uses_frozen_semantic_segmenter():
@@ -4612,6 +4673,22 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         torch.cuda.manual_seed_all(args.seed)
     source_root = args.root.resolve()
     normalize_dataset_keys(args, source_root)
+    view_query_store = None
+    if args.experiment in FINAL_EXPERIMENTS:
+        if args.output_dir.exists() and any(args.output_dir.iterdir()) and not (
+            args.resume_checkpoint is not None or args.overwrite_output
+        ):
+            raise FileExistsError("Final experiment output exists; explicitly resume or choose a new output directory.")
+        if args.image_size is not None:
+            raise ValueError("Final experiments use original full-resolution images; omit --image-size.")
+    if args.experiment == SEM_ONLY_EXPERIMENT:
+        if args.metric_loss_weight != 0 or args.view_query_cache is not None:
+            raise ValueError("final-SEM-FS-NoQ requires --metric-loss-weight 0 and no --view-query-cache.")
+    if args.experiment in FINAL_QUERY_EXPERIMENTS:
+        if args.view_query_cache is None:
+            raise ValueError("Supervised final queries require --view-query-cache from prepare_view_qtoken.py.")
+        args.view_query_cache = args.view_query_cache.expanduser().resolve()
+        view_query_store = ViewQueryStore(args.view_query_cache, source_root)
     if args.experiment.upper() in FRONT_ONLY_FROZEN_SEMANTIC_EXPERIMENTS:
         if list(args.rgb_keys) != ["observation.images.front"]:
             raise ValueError(
@@ -4824,8 +4901,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             *args.rgb_keys,
             *(
                 []
-                if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS
-                and args.experiment.upper() not in UNET_SEM_V5_QUERY_EXPERIMENTS
+                if args.experiment.upper() == RGB_QUERY_EXPERIMENT or (
+                    args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS
+                    and args.experiment.upper() not in UNET_SEM_V5_QUERY_EXPERIMENTS
+                    and args.experiment.upper() not in FINAL_HARD_SEMANTIC_EXPERIMENTS
+                )
                 else args.mask_target_keys
             ),
             *(
@@ -4848,6 +4928,27 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     )
     with open(filtered_root / "meta" / "stats.json") as stats_file:
         filtered_action_stats = json.load(stats_file)["action"]
+    if args.experiment in FINAL_HARD_SEMANTIC_EXPERIMENTS:
+        from view_qtoken import sha256
+        manifest = json.loads((source_root / "segmentation_manifest.json").read_text())
+        bundled = []
+        for view, path in zip(("front", "side"), args.pretrained_segmentation_checkpoints, strict=True):
+            source_bundle = path.parent
+            if sha256(source_bundle / "model.ts") != manifest["views"][view]["model_sha256"]:
+                raise ValueError(f"{view} model differs from the model that generated dataset masks.")
+            policy = json.loads((source_bundle / "filter_policy.json").read_text())["policy"]
+            if policy != manifest["views"][view]["filter_policy"]:
+                raise ValueError(f"{view} filtering differs from the dataset export.")
+            destination = args.output_dir / "segmentation_models" / view
+            destination.mkdir(parents=True, exist_ok=True)
+            for name in ("model.ts", "model_config.json", "filter_policy.json"):
+                dst, src = destination / name, source_bundle / name
+                if dst.exists() and sha256(dst) != sha256(src):
+                    raise ValueError(f"Existing bundled model has changed: {dst}")
+                if not dst.exists():
+                    shutil.copy2(src, dst)
+            bundled.append(destination.resolve() / "model.ts")
+        args.pretrained_segmentation_checkpoints = bundled
     save_run_config(args, image_keys_in_view, action_stats=filtered_action_stats)
 
     meta = LeRobotDatasetMetadata(args.repo_id, root=filtered_root)
@@ -4866,7 +4967,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     )
 
     mask_quality_store = None
-    if args.mask_quality_dir is not None and semantic_state_store is None:
+    if args.mask_quality_dir is not None and semantic_state_store is None and view_query_store is None:
         quality_dir = args.mask_quality_dir.expanduser().resolve()
         mask_quality_store = MaskQualityStore(
             quality_dir,
@@ -4959,7 +5060,10 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             args.experiment, args.rgb_keys, args.mask_target_keys
         )
         print(f"Semantic classes: {['background', *semantic_suffixes]}")
-        if args.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
+        if args.experiment == RGB_QUERY_EXPERIMENT:
+            print("RGB-only inputs with quality-weighted task-query supervision; no segmentation model or segmentation loss.")
+            print("Identity embeddings: disabled (camera IDs=None, modality IDs=None).")
+        elif args.experiment in FROZEN_SEMANTIC_EXPERIMENTS:
             camera_ids, modality_ids = act_identity_ids_for_experiment(args)
             segmentation_sources = (
                 args.pretrained_segmentation_checkpoints
@@ -4967,6 +5071,9 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
                 else [args.pretrained_segmentation_checkpoint]
             )
             semantic_input_note = (
+                "Training reads dataset hard masks; inference uses frozen U-Net argmax and export filtering. "
+                "Hard semantic RGB maps and RGB share ACT ResNet18."
+                if args.experiment in FINAL_HARD_SEMANTIC_EXPERIMENTS else
                 "Semantic maps only compute the stage token; ACT receives RGB plus the four-way stage."
                 if args.experiment in SIMPLE_STAGE_V5_RGB_ONLY_EXPERIMENTS
                 else (
@@ -5085,6 +5192,8 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     try:
         for step in progress:
             raw_batch = next(dl_iter)
+            if view_query_store is not None:
+                raw_batch = view_query_store.add_batch(raw_batch)
             if semantic_state_store is not None:
                 raw_batch = semantic_state_store.add_batch_semantics(
                     raw_batch,
@@ -5105,8 +5214,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             resize_mask_keys = [
                 *(
                     []
-                    if args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS
-                    and args.experiment.upper() not in UNET_SEM_V5_QUERY_EXPERIMENTS
+                    if args.experiment.upper() == RGB_QUERY_EXPERIMENT or (
+                        args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS
+                        and args.experiment.upper() not in UNET_SEM_V5_QUERY_EXPERIMENTS
+                        and args.experiment.upper() not in FINAL_HARD_SEMANTIC_EXPERIMENTS
+                    )
                     else args.mask_target_keys
                 ),
                 *(

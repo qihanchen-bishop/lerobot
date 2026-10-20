@@ -1,0 +1,65 @@
+{
+  "architecture": "resnet18_unet",
+  "torchscript": "model.ts",
+  "labels": [
+    "background",
+    "occluder",
+    "object",
+    "region",
+    "tool",
+    "leftarm",
+    "rightarm"
+  ],
+  "input_size_wh": [
+    640,
+    360
+  ],
+  "normalization_mean": [
+    0.48500001430511475,
+    0.4560000002384186,
+    0.4059999883174896
+  ],
+  "normalization_std": [
+    0.2290000021457672,
+    0.2240000069141388,
+    0.22499999403953552
+  ],
+  "palette_rgb": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      64,
+      160,
+      255
+    ],
+    [
+      255,
+      105,
+      97
+    ],
+    [
+      119,
+      221,
+      119
+    ],
+    [
+      255,
+      209,
+      102
+    ],
+    [
+      234,
+      146,
+      199
+    ],
+    [
+      173,
+      214,
+      101
+    ]
+  ],
+  "best_checkpoint": "best.pt"
+}

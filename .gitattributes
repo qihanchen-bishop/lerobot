@@ -19,3 +19,7 @@
 *.json !text !filter !merge !diff
 tests/artifacts/cameras/*.png filter=lfs diff=lfs merge=lfs -text
 *.bag filter=lfs diff=lfs merge=lfs -text
+
+# Exported finaldata model weights and TorchScript archive.
+mycode/tool/finaldata_front_unet_r3/*.pt filter=lfs diff=lfs merge=lfs -text
+mycode/tool/finaldata_front_unet_r3/model.ts filter=lfs diff=lfs merge=lfs -text
