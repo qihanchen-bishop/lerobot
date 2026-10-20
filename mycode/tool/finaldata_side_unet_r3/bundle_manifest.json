@@ -1,0 +1,27 @@
+{
+  "format": "unet_portable_model_v1",
+  "view": "side",
+  "source_model_dir": "/data/qihan/sam2/segdata/temp/finaldata/iterunet/side/iter_r1/round3/unet_side_r3_62cf5542",
+  "source_run": "/data/qihan/sam2/segdata/temp/finaldata/fullunet/side_r3_20261017_105605",
+  "identity": {
+    "generation": 3,
+    "tag": "r3",
+    "iteration_run": "/data/qihan/sam2/segdata/temp/finaldata/iterunet/side/iter_r1",
+    "meaning": "第3代迭代模型"
+  },
+  "model_sha256": "040940e51ae2a8ac191f5938d8ad88284f24eda7c10a449da74b91c280013507",
+  "source_model_config_sha256": "96e406ed8c39bf34631bc338aed56403e224a9ac68f3ad67f350808e2d7d739b",
+  "files": {
+    "filter_policy.json": "39317055f069b0082fb96de9f6b0f323bb96fb8e1605539c82c2fc99bbb95f6b",
+    "requirements.json": "0716953f7e44921128d8a3ccbdcaf848934d194365c4f05095b8b4de709802a6",
+    "evaluation.json": "c0c7b7333f4adc3ec7e7423721e749186085e87b6b1bd2c7e08523ff1e984978",
+    "model.ts": "040940e51ae2a8ac191f5938d8ad88284f24eda7c10a449da74b91c280013507",
+    "best.pt": "16bbdf94b7f127e8105b40982f756d130bb7173ad5c2f093fbf51f91e9620f74",
+    "infer.py": "99df095f9796cca9f3eed1a8ddc10e02f601d8eb32f811485ba7d82d44103abb",
+    "training_provenance.json": "8b5c4dd2b879602ffa673d436fe25df132ab0033018bb410b6cee8bd187611af",
+    "training_config.json": "290c7ea63fd2aa08b120df1e8a76b2fe67c28438896a4c669021d5b9e2c1eecd",
+    "history.json": "76edc79045f0dc010ce5146793fbe22ce225b24442aa798ea6bbc34bf04861cb",
+    "README.md": "ca59925e2fd2bc486b028ef9584bf37aabc9ec31212f4f2795a0bf31c3dc10ff",
+    "model_config.json": "96e406ed8c39bf34631bc338aed56403e224a9ac68f3ad67f350808e2d7d739b"
+  }
+}

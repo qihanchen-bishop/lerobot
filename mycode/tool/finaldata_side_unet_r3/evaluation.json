@@ -1,0 +1,32 @@
+{
+  "best_epoch": 45,
+  "stopped_epoch": 45,
+  "early_stopped": true,
+  "warning": "内部固定哈希随机按帧划分，邻帧泄漏；不代表未见视频泛化。",
+  "validation": {
+    "loss": 0.0046076203380610225,
+    "foreground_miou": 0.9943000814700903,
+    "miou": 0.994673906242228,
+    "pixel_accuracy": 0.9986883487631272,
+    "per_class_iou": {
+      "background": 0.9969168548750532,
+      "occluder": 0.9988406007148017,
+      "object": 0.9866004960210842,
+      "region": 0.9975325582981045,
+      "tool": 0.9935554974011357,
+      "leftarm": 0.9977309752060518,
+      "rightarm": 0.9915403611793643
+    },
+    "ground_truth_pixels": {
+      "background": 778674199,
+      "occluder": 692002246,
+      "object": 5748396,
+      "region": 28813444,
+      "tool": 15912661,
+      "leftarm": 298770979,
+      "rightarm": 108295675
+    },
+    "absent_class_policy": "union=0 -> null; omitted from mIoU"
+  },
+  "test": null
+}

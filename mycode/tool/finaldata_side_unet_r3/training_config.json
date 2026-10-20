@@ -1,0 +1,42 @@
+{
+  "dataset_dir": "/data/qihan/sam2/segdata/temp/finaldata/iterunet/side/iter_r1/round3/side_r3_dataset_26567656",
+  "dataset_sha256": "9181525b8e9b9ca36b1aad61a1336163ca46626403915371621a6472467ab734",
+  "model_dir": "/data/qihan/sam2/segdata/temp/finaldata/iterunet/side/iter_r1/round3/unet_side_r3_62cf5542",
+  "encoder": "resnet18",
+  "device": "auto",
+  "pretrained": true,
+  "amp": true,
+  "epochs": 100,
+  "batch_size": 8,
+  "workers": 4,
+  "patience": 12,
+  "min_epochs": 25,
+  "seed": 42,
+  "lr": 0.0003,
+  "weight_decay": 0.0001,
+  "dice_weight": 1.0,
+  "teacher_model_dirs": [
+    "/data/qihan/sam2/segdata/temp/finaldata/iterunet/side/iter_r1/round1/unet_side_r1_0e040f91",
+    "/data/qihan/sam2/segdata/temp/finaldata/iterunet/side/iter_r1/round2/unet_side_r2_c65a86c5",
+    "/data/qihan/sam2/segdata/temp/finaldata/manual_seed/models/unet_side_seed_r0"
+  ],
+  "view": "side",
+  "generation": 3,
+  "model_kind": "pseudo_iteration",
+  "benchmark_id": "bf11735c03d9361144fb617b1fd486aa5e7eefbb4af7241ac9157021eaf8f4dc",
+  "labels": [
+    "background",
+    "occluder",
+    "object",
+    "region",
+    "tool",
+    "leftarm",
+    "rightarm"
+  ],
+  "image_size": [
+    640,
+    360
+  ],
+  "split_warning": "内部固定哈希随机按帧划分，邻帧泄漏；不代表未见视频泛化。",
+  "horizontal_flip": false
+}

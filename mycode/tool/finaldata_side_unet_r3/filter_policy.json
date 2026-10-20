@@ -1,0 +1,20 @@
+{
+  "view": "side",
+  "policy": {
+    "version": "manual_area_distance_contact_v1",
+    "min_area": 20,
+    "distance_gt_area": false,
+    "contact_only_two": false,
+    "tool_class": "tool",
+    "contact_distance": 3,
+    "component_limits": {
+      "occluder": 3,
+      "object": 2,
+      "region": 2,
+      "tool": 1,
+      "leftarm": 2,
+      "rightarm": 3
+    }
+  },
+  "note": "Saved inference script produces raw class IDs. The dataset uses these recorded postprocessing rules."
+}

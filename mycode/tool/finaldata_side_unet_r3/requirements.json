@@ -1,0 +1,8 @@
+{
+  "runtime": [
+    "torch",
+    "numpy",
+    "opencv-python"
+  ],
+  "note": "TorchScript inference requires no original repository or ImageNet download."
+}
