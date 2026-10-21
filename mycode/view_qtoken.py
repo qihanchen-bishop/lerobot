@@ -18,8 +18,11 @@ RGB_QUERY_EXPERIMENT = "FINAL-RGB-FS-QTOKEN"
 FRONT_QUERY_EXPERIMENT = "FINAL-FRONTQTOKEN-FS"
 FRONT_SYMMETRIC_EXPERIMENT = "FINAL-FRONTQTOKEN-FS-SEMMINUS1TO1"
 FRONT_QUERY_EXPERIMENTS = {FRONT_QUERY_EXPERIMENT, FRONT_SYMMETRIC_EXPERIMENT}
-QUERY_EXPERIMENTS = {EXPERIMENT, RGB_QUERY_EXPERIMENT, *FRONT_QUERY_EXPERIMENTS}
-HARD_SEMANTIC_EXPERIMENTS = {EXPERIMENT, SEM_ONLY_EXPERIMENT, *FRONT_QUERY_EXPERIMENTS}
+VIEW_V2 = "FINAL-VIEWQTOKEN-V2"
+VIEW_V3 = "FINAL-VIEWQTOKEN-V3"
+VIEW_REVISIONS = {VIEW_V2, VIEW_V3}
+QUERY_EXPERIMENTS = {EXPERIMENT, RGB_QUERY_EXPERIMENT, *FRONT_QUERY_EXPERIMENTS, *VIEW_REVISIONS}
+HARD_SEMANTIC_EXPERIMENTS = {EXPERIMENT, SEM_ONLY_EXPERIMENT, *FRONT_QUERY_EXPERIMENTS, *VIEW_REVISIONS}
 EXPERIMENTS = QUERY_EXPERIMENTS | HARD_SEMANTIC_EXPERIMENTS
 VIEWS = ("front", "side")
 CLASSES = ("occluder", "object", "region", "tool", "leftarm", "rightarm")
@@ -30,6 +33,70 @@ OUTPUT_DIMS = (2, 4, 2)
 CACHE_VERSION = 1
 FRONT_HEADS = ((0,), (1,), (2, 3))
 FRONT_HEAD_NAMES = ("visibility_front", "object_region_front", "tool_object_front")
+
+
+def revision_layout(experiment):
+    if experiment == VIEW_V2:
+        return (
+            ("visibility_front", "visibility_side", "tool_object_front", "object_region_front", "object_region_side"),
+            ((0,), (1,), (2, 3), (4,), (5,)),
+            ((0, 1), (2,), (3, 4)),
+        )
+    if experiment == VIEW_V3:
+        return (
+            ("visibility_front", "visibility_side", "tool_object_front", "tool_midpoint_object_front", "object_region_front", "object_region_side"),
+            HEADS,
+            ((0, 1), (2, 3), (4, 5)),
+        )
+    raise ValueError(f"Unknown ViewQtoken revision: {experiment}")
+
+
+class FrontToolHeads(nn.Module):
+    """Two front-view geometric readouts of the same tool-relation query."""
+
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self.left_endpoint = nn.Linear(hidden_dim, 2)
+        self.midpoint = nn.Linear(hidden_dim, 2)
+
+    def forward(self, token):
+        return torch.cat((self.left_endpoint(token), self.midpoint(token)), dim=-1)
+
+
+def revision_heads(hidden_dim, experiment):
+    tool = nn.Linear(hidden_dim, 2) if experiment == VIEW_V2 else FrontToolHeads(hidden_dim)
+    return nn.ModuleList([ViewHeads(hidden_dim, 1), tool, ViewHeads(hidden_dim, 1)])
+
+
+def tool_segment(points):
+    """PCA endpoints in normalized image coordinates; None for ambiguous axes."""
+    if len(points) < 2:
+        return None
+    center = points.mean(0)
+    centered = points - center
+    values, vectors = np.linalg.eigh(centered.T @ centered / len(points))
+    if values[-1] <= 1e-12 or values[-1] - values[0] <= 1e-12:
+        return None
+    axis = vectors[:, -1]
+    projection = centered @ axis
+    endpoints = center + np.array([projection.min(), projection.max()])[:, None] * axis
+    return endpoints[np.lexsort((endpoints[:, 1], endpoints[:, 0]))]
+
+
+def front_tool_vectors(object_mask, tool_mask):
+    """Left endpoint and segment midpoint to object centroid, in that order."""
+    h, w = object_mask.shape
+    oy, ox = np.nonzero(object_mask)
+    ty, tx = np.nonzero(tool_mask)
+    if not len(ox):
+        return np.zeros(4, np.float32), False
+    points = np.column_stack((tx / max(w - 1, 1), ty / max(h - 1, 1)))
+    endpoints = tool_segment(points)
+    if endpoints is None:
+        return np.zeros(4, np.float32), False
+    obj = np.array([ox.mean() / max(w - 1, 1), oy.mean() / max(h - 1, 1)])
+    references = np.stack((endpoints[0], endpoints.mean(0)))
+    return np.clip(obj - references, -1, 1).astype(np.float32).reshape(-1), True
 
 
 def sha256(path):
@@ -169,16 +236,10 @@ def view_geometry(object_mask, tool_mask, region_mask, distance_map, view):
     center = points.mean(0)
     reference = center
     if view == "front":
-        if len(points) < 2:
+        endpoints = tool_segment(points)
+        if endpoints is None:
             return target, valid
-        centered = points - center
-        values, vectors = np.linalg.eigh(centered.T @ centered / len(points))
-        if values[-1] <= 1e-12 or values[-1] - values[0] <= 1e-12:
-            return target, valid
-        axis = vectors[:, -1]
-        projection = centered @ axis
-        endpoints = center + np.array([projection.min(), projection.max()])[:, None] * axis
-        reference = endpoints[np.lexsort((endpoints[:, 1], endpoints[:, 0]))[0]]
+        reference = endpoints[0]
     elif view != "side":
         raise ValueError(f"Unknown view: {view}")
     target[1:3] = np.clip(object_point - reference, -1, 1)
@@ -199,6 +260,8 @@ def query_loss(pred, target, valid, weights, *, experiment=EXPERIMENT):
     error = F.smooth_l1_loss(pred, target, reduction="none", beta=0.01)
     losses, logs = [], {}
     names, heads = (FRONT_HEAD_NAMES, FRONT_HEADS) if experiment in FRONT_QUERY_EXPERIMENTS else (HEAD_NAMES, HEADS)
+    if experiment in VIEW_REVISIONS:
+        names, heads, groups = revision_layout(experiment)
     for name, indices in zip(names, heads, strict=True):
         idx = list(indices)
         # Do not divide by sum(weights): uniformly low quality must reduce supervision.
@@ -212,6 +275,10 @@ def query_loss(pred, target, valid, weights, *, experiment=EXPERIMENT):
             ((pred.detach()[:, idx] - target[:, idx]).abs() * weights[:, idx]).sum()
             / weights[:, idx].sum().clamp_min(1e-8)
         )
+    if experiment in VIEW_REVISIONS:
+        tasks = [torch.stack([losses[i] for i in group]).mean() for group in groups]
+        logs.update({f"query_task_{name}_loss": float(value.detach()) for name, value in zip(TASKS, tasks, strict=True)})
+        return torch.stack(tasks).mean(), logs
     return torch.stack(losses).mean(), logs
 
 
@@ -263,9 +330,13 @@ class ViewQueryStore:
         if sha256(path) != self.metadata["targets_sha256"]:
             raise ValueError("ViewQtoken target cache checksum mismatch.")
         front = experiment in FRONT_QUERY_EXPERIMENTS
+        cached_experiment = self.metadata.get("experiment")
+        if experiment in VIEW_REVISIONS or cached_experiment in VIEW_REVISIONS:
+            if experiment != cached_experiment:
+                raise ValueError("Query cache uses a different target definition.")
         if (self.metadata.get("experiment") == FRONT_QUERY_EXPERIMENT) != front:
             raise ValueError("Query cache uses a different target definition.")
-        dimensions = 4 if front else 8
+        dimensions = 4 if front else (6 if experiment == VIEW_V2 else 8)
         total = json.loads((Path(root) / "meta/info.json").read_text())["total_frames"]
         with np.load(path, allow_pickle=False) as arrays:
             self.data = {key: arrays[key].copy() for key in ("targets", "valid", "weights")}

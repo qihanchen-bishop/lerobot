@@ -103,6 +103,7 @@ from view_qtoken import (
     QUERY_EXPERIMENTS as FINAL_QUERY_EXPERIMENTS,
     HARD_SEMANTIC_EXPERIMENTS as FINAL_HARD_SEMANTIC_EXPERIMENTS,
     FRONT_QUERY_EXPERIMENTS, FRONT_SYMMETRIC_EXPERIMENT,
+    VIEW_V2, VIEW_V3, VIEW_REVISIONS, revision_heads, revision_layout,
     SemanticLabelStore, CLASSES as FINAL_MASK_CLASSES,
     SEM_ONLY_EXPERIMENT, RGB_QUERY_EXPERIMENT,
     FrozenExportedUNet, ViewHeads, ViewQueryStore,
@@ -1571,7 +1572,9 @@ class MaskACTPolicy(nn.Module):
             self.register_buffer("semantic_visual_std", torch.tensor(
                 (0.5, 0.5, 0.5) if symmetric else IMAGENET_VISUAL_STD
             ).view(1, 3, 1, 1))
-        if self.experiment in FINAL_QUERY_EXPERIMENTS and self.experiment not in FRONT_QUERY_EXPERIMENTS:
+        if self.experiment in VIEW_REVISIONS:
+            self.act_policy.model.metric_heads = revision_heads(self.config.dim_model, self.experiment)
+        elif self.experiment in FINAL_QUERY_EXPERIMENTS and self.experiment not in FRONT_QUERY_EXPERIMENTS:
             self.act_policy.model.metric_heads = nn.ModuleList(
                 [ViewHeads(self.config.dim_model, width) for width in (1, 2, 1)]
             )
@@ -3941,6 +3944,8 @@ def act_metric_dim(experiment: str) -> int:
 
 
 def act_metric_token_output_dims(experiment: str) -> list[int] | None:
+    if experiment.upper() == VIEW_V2:
+        return [2, 2, 2]
     if experiment.upper() in FRONT_QUERY_EXPERIMENTS:
         return list(FRONT_QUERY_TOKEN_OUTPUT_DIMS)
     if experiment.upper() in FINAL_QUERY_EXPERIMENTS:
@@ -4232,6 +4237,16 @@ def save_run_config(
                     names=["visibility", "object_region", "tool_object"],
                     views=["front"], head_dims=[[1], [1], [2]],
                     geometry="legacy front_query_metric_targets: occupancy, centroid distance, PCA left endpoint vector",
+                )
+            if args.experiment.upper() in VIEW_REVISIONS:
+                v3 = args.experiment.upper() == VIEW_V3
+                names, _, groups = revision_layout(args.experiment.upper())
+                payload["view_query"].update(
+                    head_dims=[[1, 1], [2, 2] if v3 else [2], [1, 1]],
+                    head_names=list(names), task_head_groups=[list(g) for g in groups],
+                    head_views=[["front", "side"], ["front", "front"] if v3 else ["front"], ["front", "side"]],
+                    geometry="normalized-image PCA left endpoint" + (" and segment midpoint" if v3 else "") + " to object centroid; original dual-view occupancy and fixed-ROI max outside distance",
+                    normalization="equal task means; equal heads within each task; geometry-valid coordinate denominator, not quality sum",
                 )
         if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS:
             payload["view_fusion"] = {

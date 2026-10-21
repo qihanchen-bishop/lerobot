@@ -517,3 +517,111 @@ bash run_final_gru_dp.sh
 ACT/DP 的日志分别位于 `outputs/logs/<实验名>.log`，模型输出在
 `outputs/train/act/ACT-finaldata-seg-FS-DatasetNorm` 和
 `outputs/train/diffusion/DP-1F-Full-finaldata-seg-FS-DatasetNorm`。
+
+## final-ViewQtoken-v2 / v3
+
+以原始 `final-ViewQtoken` 为基线，不继承 FrontQtoken 的 centroid 入区指标或 SemMinus1To1 标准化。
+两版均输入双视角 RGB + 硬语义彩色图，共享 ResNet18，不加 camera/modality embedding。
+RGB/state/action 沿用数据集统计；语义图沿用 ImageNet mean/std。动作仍监督数据集 action，不是 follower delta。
+
+| Query | v2 | v3 |
+|---|---|---|
+| visibility | front/side 的 object 面积占比 | 相同 |
+| tool-object | front PCA 左端点到 object 质心向量 | 同一 Query 再增加 front PCA 线段中点到 object 质心向量 |
+| object-region | front/side object 像素到固定 ROI 的最大外部距离，完全入区为零 | 相同 |
+
+v2 共6标量，v3 共8标量；中点是两个 PCA 端点的平均，不是 tool 像素质心。
+PCA 沿用归一化图像坐标。两个版本都没有 side tool-object 监督。
+每个头的 SmoothL1(beta=0.01) 用原质量分数加权、原异常门控；
+分母为几何有效坐标数量，不以质量权重和归一化。
+先在各任务内部平均各头，再平均三个任务，v3 不因多一个工具头增大工具任务总权重。
+目标可靠不可见时面积监督零，向量/区域距离不监督；质量只影响辅助损失。
+
+### 一次性准备
+
+复用已校验的原版目标及无损语义 class-ID 缓存，不重复解码12路 mask 视频、不改变标签。
+v3 全帧校验新 PCA 左端点与原监督一致，随后添加中点向量。
+缓存按实验定义和源数据指纹严格校验；已有完整缓存复用，不覆盖旧文件。
+
+```bash
+cd /data/qihan/lerobot
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 /home/qihan/miniconda3/envs/lerobot/bin/python mycode/prepare_view_qtoken_revisions.py \
+  --root data/finaldata_seg \
+  --base-cache outputs/cache/final-ViewQtoken-v1 \
+  --semantic-label-cache outputs/cache/final-FrontQtoken-FS-v1 \
+  --output-parent outputs/cache --workers 8
+```
+
+两次训练均从头训练100000步，seed=1000，batch=8，chunk=60，学习率沿用默认1e-5，保存间隔20000步。
+两个 tmux 会话独立并行，输出目录互不覆盖。
+
+### v2（task1）
+
+```bash
+cd /data/qihan/lerobot
+/home/qihan/miniconda3/envs/lerobot/bin/python mycode/train_mask_act_policy.py \
+    --experiment final-ViewQtoken-v2 \
+    --root /data/qihan/lerobot/data/finaldata_seg \
+    --repo-id finaldata_seg \
+    --rgb-keys observation.images.front observation.images.side \
+    --state-keys observation.state \
+    --mask-target-keys observation.images.front_occluder observation.images.front_object observation.images.front_region observation.images.front_tool observation.images.front_leftarm observation.images.front_rightarm observation.images.side_occluder observation.images.side_object observation.images.side_region observation.images.side_tool observation.images.side_leftarm observation.images.side_rightarm \
+    --pretrained-segmentation-checkpoints /data/qihan/lerobot/data/finaldata_seg/models/unet_front/model.ts /data/qihan/lerobot/data/finaldata_seg/models/unet_side/model.ts \
+    --view-query-cache /data/qihan/lerobot/outputs/cache/final-ViewQtoken-v2/targets.npz \
+    --semantic-label-cache /data/qihan/lerobot/outputs/cache/final-FrontQtoken-FS-v1 \
+    --log-freq 200 \
+    --save-freq 20000 \
+    --metric-loss-weight 1.0 \
+    --action-loss-weight 1.0 \
+    --output-dir outputs/train/semantic/final-ViewQtoken-v2 \
+    --steps 100000 \
+    --seed 1000 \
+    --batch-size 8 \
+    --chunk-size 60 \
+    --n-action-steps 60 \
+    --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 \
+    --device cuda \
+    --num-workers 16 \
+    --video-backend pyav \
+    --rebuild-view
+```
+
+### v3（task2）
+
+```bash
+cd /data/qihan/lerobot
+/home/qihan/miniconda3/envs/lerobot/bin/python mycode/train_mask_act_policy.py \
+    --experiment final-ViewQtoken-v3 \
+    --root /data/qihan/lerobot/data/finaldata_seg \
+    --repo-id finaldata_seg \
+    --rgb-keys observation.images.front observation.images.side \
+    --state-keys observation.state \
+    --mask-target-keys observation.images.front_occluder observation.images.front_object observation.images.front_region observation.images.front_tool observation.images.front_leftarm observation.images.front_rightarm observation.images.side_occluder observation.images.side_object observation.images.side_region observation.images.side_tool observation.images.side_leftarm observation.images.side_rightarm \
+    --pretrained-segmentation-checkpoints /data/qihan/lerobot/data/finaldata_seg/models/unet_front/model.ts /data/qihan/lerobot/data/finaldata_seg/models/unet_side/model.ts \
+    --view-query-cache /data/qihan/lerobot/outputs/cache/final-ViewQtoken-v3/targets.npz \
+    --semantic-label-cache /data/qihan/lerobot/outputs/cache/final-FrontQtoken-FS-v1 \
+    --log-freq 200 \
+    --save-freq 20000 \
+    --metric-loss-weight 1.0 \
+    --action-loss-weight 1.0 \
+    --output-dir outputs/train/semantic/final-ViewQtoken-v3 \
+    --steps 100000 \
+    --seed 1000 \
+    --batch-size 8 \
+    --chunk-size 60 \
+    --n-action-steps 60 \
+    --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 \
+    --device cuda \
+    --num-workers 16 \
+    --video-backend pyav \
+    --rebuild-view
+```
+
+### 验证与查看
+
+- 全量数据检查：`outputs/temp/viewqtoken-revisions-preflight.json`，108条轨迹、61,740帧，双视角无标签重叠，加载通过。
+- 两版短程训练与 checkpoint 重载：`outputs/temp/final-ViewQtoken-v2-smoke`、`outputs/temp/final-ViewQtoken-v3-smoke`。
+- 测试覆盖三任务等权、前视中点几何、质量加权、缓存定义隔离、缓存与原 mask 的损失/梯度一致性及 RGB-only 推理。
+- 正式训练实时指标：`outputs/train/semantic/final-ViewQtoken-v{2,3}/metrics/train_metrics.jsonl`。
+- 查看会话：`tmux attach -t task1` / `tmux attach -t task2`。此次分别使用 GPU 0 / GPU 1，不影响上述命令自行选择 CUDA 环境。
+- 运行期间控制台日志暂存于 `outputs/train/semantic/.final-ViewQtoken-v{2,3}.train.log.tmp`；正常结束后移动到各输出目录的 `logs/train.log`。
