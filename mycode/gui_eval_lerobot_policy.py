@@ -4102,8 +4102,9 @@ class EvalPolicyApp:
                 policy_state_names,
             )
         sensor_dataset_features = dataset_features
+        from view_qtoken import HARD_SEMANTIC_EXPERIMENTS, QUERY_EXPERIMENTS
         qtoken_recorder = None
-        if mask_act_checkpoint and details["experiment"].upper() in {"FINAL-VIEWQTOKEN", "FINAL-RGB-FS-QTOKEN"}:
+        if mask_act_checkpoint and details["experiment"].upper() in QUERY_EXPERIMENTS:
             from qtoken_eval import QTokenRecorder, recording_features
             run_config = json.loads((Path(details["run_dir"]) / "mask_act_run_config.json").read_text())
             qtoken_recorder = QTokenRecorder(
@@ -4113,7 +4114,7 @@ class EvalPolicyApp:
                 run_dataset_root,
             )
             self.active_eval_metadata["qtoken_recording"] = {"enabled": True, **qtoken_recorder.metadata}
-            dataset_features = {**dataset_features, **recording_features()}
+            dataset_features = {**dataset_features, **recording_features(qtoken_recorder.metric_names)}
         else:
             self.active_eval_metadata["qtoken_recording"] = {"enabled": False, "reason": "policy has no supervised Qtoken head"}
             self.log_queue.put("__QTOKEN__|" + json.dumps({"enabled": False}))
@@ -4148,9 +4149,7 @@ class EvalPolicyApp:
             if full_semantic_recording_features else None
         )
         self.semantic_recorder = semantic_recorder
-        hard_semantic_input = mask_act_checkpoint and details["experiment"].upper() in {
-            "FINAL-VIEWQTOKEN", "FINAL-SEM-FS-NOQ",
-        }
+        hard_semantic_input = mask_act_checkpoint and details["experiment"].upper() in HARD_SEMANTIC_EXPERIMENTS
         auxiliary_recording_features = {
             **decision_recording_features,
             **segmentation_recording_features,

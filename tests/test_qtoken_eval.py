@@ -11,7 +11,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "mycode"))
 
-from qtoken_eval import METRIC_NAMES, PREFIX, QTokenRecorder, recording_features
+from qtoken_eval import FRONT_METRIC_NAMES, METRIC_NAMES, PREFIX, QTokenRecorder, recording_features
+from view_qtoken import FRONT_QUERY_EXPERIMENTS
 from lerobot.policies.act.modeling_act import ACTPolicy
 
 
@@ -48,6 +49,39 @@ def run_config():
 
 
 class QTokenEvaluationTest(unittest.TestCase):
+    def test_front_queries_use_centroid_geometry_and_four_outputs_for_both_variants(self):
+        for experiment in FRONT_QUERY_EXPERIMENTS:
+            with self.subTest(experiment=experiment), TemporaryDirectory() as folder:
+                policy = StubQueryPolicy()
+                policy.experiment = experiment
+                policy.predicted = torch.tensor([[-2., .3, .5, -.3]])
+                config = {"view_query": {"cache_metadata": {"output_order": list(FRONT_METRIC_NAMES)}}}
+                recorder = QTokenRecorder(policy, config, ["front/model.ts", "side/model.ts"], folder)
+                self.assertEqual(recorder.frame(0)[PREFIX + "measured"].shape, (4,))
+                report = self.capture(recorder)
+                self.assertEqual(report["metric_names"], list(FRONT_METRIC_NAMES))
+                # Object is inside the region, but away from its remaining mask centroid.
+                ry, rx = np.nonzero(policy.ids == 3)
+                distance = np.hypot(7 - rx.mean(), 5 - ry.mean()) / np.hypot(9, 9)
+                np.testing.assert_allclose(list(report["measured"].values()),
+                                           [.01, distance, 6 / 9, -2 / 9], atol=1e-7)
+                self.assertGreater(report["measured"]["centroid_region_front"], 0)
+                self.assertEqual(report["predicted"]["visibility_front"], -2.)
+                self.assertEqual(set(report["segmentation_hw"]), {"front"})
+                self.assertEqual(recorder.metadata["supervised_views"], ["front"])
+                recorder.activate(report)
+                self.assertEqual(recorder.frame(.1)[PREFIX + "predicted"].shape, (4,))
+                features = recording_features(recorder.metric_names)
+                self.assertEqual(features[PREFIX + "predicted"]["names"], list(FRONT_METRIC_NAMES))
+                self.assertEqual(features[PREFIX + "predicted"]["shape"], (4,))
+                policy.ids[policy.ids == 2] = 0
+                policy.predicted[0, 1] = float("nan")
+                missing = self.capture(recorder, step=30)
+                self.assertEqual(missing["measured_valid"], [True, False, False, False])
+                self.assertIsNone(missing["predicted"]["centroid_region_front"])
+                self.assertEqual(missing["measured"]["visibility_front"], 0.)
+                self.assertEqual(len((Path(folder) / "qtoken_predictions.jsonl").read_text().splitlines()), 2)
+
     def capture(self, recorder, step=0):
         return recorder.capture({}, source_control_step=step, source_timestamp_s=step / 30,
                                 inference_started_s=step / 30, ready_timestamp_s=step / 30 + .01)

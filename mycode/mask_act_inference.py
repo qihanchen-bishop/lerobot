@@ -319,9 +319,7 @@ def load_mask_act_for_inference(
     state = torch.load(checkpoint_dir / "training_state.pt", map_location="cpu", weights_only=False)
     initialized_derived_buffers = _load_mask_act_state_dict_compatibly(model, state["model"])
     runtime_segmentation = []
-    if segmentation_model_paths is not None and str(args.experiment).upper() in {
-        "FINAL-VIEWQTOKEN", "FINAL-SEM-FS-NOQ",
-    }:
+    if segmentation_model_paths is not None and str(args.experiment).upper() in FINAL_HARD_SEMANTIC_EXPERIMENTS:
         # Replace AFTER loading the ACT checkpoint: its state_dict also contains
         # the original frozen segmenter weights and would overwrite an earlier override.
         from view_qtoken import FrozenExportedUNet

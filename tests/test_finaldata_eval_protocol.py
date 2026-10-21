@@ -137,12 +137,13 @@ class FinaldataEvalProtocolTest(unittest.TestCase):
     @unittest.skipUnless(CONFIG_DIR.is_dir(), "Local evaluation presets are not synced")
     def test_local_finaldata_presets(self):
         presets = EvalPolicyApp._config_presets_in_folder(CONFIG_DIR)
-        self.assertEqual(len(presets), 7)
+        self.assertEqual(len(presets), 9)
         for path in presets.values():
             config = json.loads(path.read_text())
             self.assertTrue((ROOT / config["checkpoint_path"]).is_dir())
             self.assertEqual(config["episode_time_s"], 40)
             self.assertEqual(config["occluder_complete_ratio"], .32)
+            self.assertEqual(config["n_action_steps"], 30)
 
     def test_exported_preview_matches_policy_filtered_hard_semantics(self):
         import torch
