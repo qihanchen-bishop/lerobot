@@ -18,6 +18,7 @@ from lerobot.policies.factory import make_pre_post_processors
 from train_mask_act_policy import (
     ACTIONSEM_EXPERIMENTS,
     FROZEN_SEMANTIC_EXPERIMENTS,
+    FINAL_HARD_SEMANTIC_EXPERIMENTS,
     MaskACTPolicy,
     SEMANTIC_EXPERIMENTS,
     VIEW_FUSION_EXPERIMENTS,
@@ -216,7 +217,7 @@ def load_mask_act_for_inference(
         *FROZEN_SEMANTIC_EXPERIMENTS,
         *ACTIONSEM_EXPERIMENTS,
     }:
-        if str(args.experiment).upper() in {"FINAL-VIEWQTOKEN", "FINAL-SEM-FS-NOQ"}:
+        if str(args.experiment).upper() in FINAL_HARD_SEMANTIC_EXPERIMENTS:
             configured = [run_dir / "segmentation_models" / view / "model.ts" for view in ("front", "side")]
             if any(not path.is_file() for path in configured):
                 raise FileNotFoundError("final-ViewQtoken requires the run's segmentation_models/front and side bundles.")

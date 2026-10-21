@@ -102,6 +102,8 @@ from view_qtoken import (
     EXPERIMENTS as FINAL_EXPERIMENTS,
     QUERY_EXPERIMENTS as FINAL_QUERY_EXPERIMENTS,
     HARD_SEMANTIC_EXPERIMENTS as FINAL_HARD_SEMANTIC_EXPERIMENTS,
+    FRONT_QUERY_EXPERIMENTS, FRONT_SYMMETRIC_EXPERIMENT,
+    SemanticLabelStore, CLASSES as FINAL_MASK_CLASSES,
     SEM_ONLY_EXPERIMENT, RGB_QUERY_EXPERIMENT,
     FrozenExportedUNet, ViewHeads, ViewQueryStore,
     forward_training as forward_view_query_training,
@@ -1562,9 +1564,14 @@ class MaskACTPolicy(nn.Module):
                 self.register_buffer(weight_name, torch.tensor(view_weights, dtype=torch.float32))
                 self._semantic_class_weight_buffer_names.append(weight_name)
             self.register_buffer("semantic_class_weights", torch.tensor(class_weights, dtype=torch.float32))
-            self.register_buffer("semantic_visual_mean", torch.tensor(IMAGENET_VISUAL_MEAN).view(1, 3, 1, 1))
-            self.register_buffer("semantic_visual_std", torch.tensor(IMAGENET_VISUAL_STD).view(1, 3, 1, 1))
-        if self.experiment in FINAL_QUERY_EXPERIMENTS:
+            symmetric = self.experiment == FRONT_SYMMETRIC_EXPERIMENT
+            self.register_buffer("semantic_visual_mean", torch.tensor(
+                (0.5, 0.5, 0.5) if symmetric else IMAGENET_VISUAL_MEAN
+            ).view(1, 3, 1, 1))
+            self.register_buffer("semantic_visual_std", torch.tensor(
+                (0.5, 0.5, 0.5) if symmetric else IMAGENET_VISUAL_STD
+            ).view(1, 3, 1, 1))
+        if self.experiment in FINAL_QUERY_EXPERIMENTS and self.experiment not in FRONT_QUERY_EXPERIMENTS:
             self.act_policy.model.metric_heads = nn.ModuleList(
                 [ViewHeads(self.config.dim_model, width) for width in (1, 2, 1)]
             )
@@ -2153,6 +2160,12 @@ class MaskACTPolicy(nn.Module):
         raw_batch: dict[str, Tensor],
         device: torch.device,
     ) -> list[Tensor]:
+        if self.experiment in FINAL_HARD_SEMANTIC_EXPERIMENTS and "semantic_class_ids" in raw_batch:
+            labels = raw_batch["semantic_class_ids"]
+            if labels.ndim != 4 or labels.shape[1] != len(self.rgb_keys) or labels.dtype != torch.uint8:
+                raise ValueError("Expected uint8 semantic cache shaped (B, views, H, W).")
+            labels = labels.to(device=device, dtype=torch.long)
+            return list(labels.unbind(dim=1))
         targets_by_view = []
         for view_idx in range(len(self.rgb_keys)):
             masks = []
@@ -3450,6 +3463,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
     parser.add_argument("--view-query-cache", type=Path, default=None,
                         help="final-ViewQtoken targets.npz from prepare_view_qtoken.py.")
+    parser.add_argument("--semantic-label-cache", type=Path, default=None,
+                        help="Verified lossless class-ID cache; replaces binary-mask video decoding.")
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--rgb-key", default=DEFAULT_RGB_KEY)
     parser.add_argument(
@@ -3916,6 +3931,8 @@ def act_metric_dim(experiment: str) -> int:
 
 
 def act_metric_token_output_dims(experiment: str) -> list[int] | None:
+    if experiment.upper() in FRONT_QUERY_EXPERIMENTS:
+        return list(FRONT_QUERY_TOKEN_OUTPUT_DIMS)
     if experiment.upper() in FINAL_QUERY_EXPERIMENTS:
         return [2, 4, 2]
     if experiment.upper() in UNET_SEM_V5_QUERY_EXPERIMENTS:
@@ -4178,6 +4195,15 @@ def save_run_config(
         payload["action_stats"] = action_stats
         payload["act_image_keys"] = act_image_keys_for_experiment(args)
         if args.experiment.upper() in FINAL_EXPERIMENTS:
+            symmetric = args.experiment.upper() == FRONT_SYMMETRIC_EXPERIMENT
+            payload["semantic_input_normalization"] = {
+                "mode": "minus_one_to_one" if symmetric else "imagenet",
+                "mean": [0.5] * 3 if symmetric else list(IMAGENET_VISUAL_MEAN),
+                "std": [0.5] * 3 if symmetric else list(IMAGENET_VISUAL_STD),
+            }
+            payload["semantic_label_cache"] = (
+                str(args.semantic_label_cache) if getattr(args, "semantic_label_cache", None) else None
+            )
             payload["final_ablation"] = {
                 "semantic_input": args.experiment.upper() in FINAL_HARD_SEMANTIC_EXPERIMENTS,
                 "supervised_queries": args.experiment.upper() in FINAL_QUERY_EXPERIMENTS,
@@ -4191,6 +4217,12 @@ def save_run_config(
                 "normalization": "mean per coordinate, view and task; not divided by sum of quality weights",
                 "cache_metadata": json.loads((args.view_query_cache.parent / "manifest.json").read_text()),
             }
+            if args.experiment.upper() in FRONT_QUERY_EXPERIMENTS:
+                payload["view_query"].update(
+                    names=["visibility", "object_region", "tool_object"],
+                    views=["front"], head_dims=[[1], [1], [2]],
+                    geometry="legacy front_query_metric_targets: occupancy, centroid distance, PCA left endpoint vector",
+                )
         if args.experiment.upper() in VIEW_FUSION_EXPERIMENTS:
             payload["view_fusion"] = {
                 "version": "ViewFus-v1",
@@ -4674,6 +4706,17 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     source_root = args.root.resolve()
     normalize_dataset_keys(args, source_root)
     view_query_store = None
+    semantic_label_store = None
+    if getattr(args, "semantic_label_cache", None) is not None:
+        if args.experiment not in FINAL_HARD_SEMANTIC_EXPERIMENTS:
+            raise ValueError("--semantic-label-cache requires a final hard-semantic experiment.")
+        if args.rgb_keys != ["observation.images.front", "observation.images.side"] or any(
+            tuple(suffixes) != FINAL_MASK_CLASSES
+            for suffixes in semantic_suffixes_by_view(args.rgb_keys, args.mask_target_keys)
+        ):
+            raise ValueError("Semantic cache requires front/side and the exported six-class order.")
+        args.semantic_label_cache = args.semantic_label_cache.expanduser().resolve()
+        semantic_label_store = SemanticLabelStore(args.semantic_label_cache, source_root)
     if args.experiment in FINAL_EXPERIMENTS:
         if args.output_dir.exists() and any(args.output_dir.iterdir()) and not (
             args.resume_checkpoint is not None or args.overwrite_output
@@ -4688,7 +4731,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
         if args.view_query_cache is None:
             raise ValueError("Supervised final queries require --view-query-cache from prepare_view_qtoken.py.")
         args.view_query_cache = args.view_query_cache.expanduser().resolve()
-        view_query_store = ViewQueryStore(args.view_query_cache, source_root)
+        view_query_store = ViewQueryStore(args.view_query_cache, source_root, experiment=args.experiment)
     if args.experiment.upper() in FRONT_ONLY_FROZEN_SEMANTIC_EXPERIMENTS:
         if list(args.rgb_keys) != ["observation.images.front"]:
             raise ValueError(
@@ -4901,7 +4944,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             *args.rgb_keys,
             *(
                 []
-                if args.experiment.upper() == RGB_QUERY_EXPERIMENT or (
+                if semantic_label_store is not None or args.experiment.upper() == RGB_QUERY_EXPERIMENT or (
                     args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS
                     and args.experiment.upper() not in UNET_SEM_V5_QUERY_EXPERIMENTS
                     and args.experiment.upper() not in FINAL_HARD_SEMANTIC_EXPERIMENTS
@@ -5018,6 +5061,14 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     print(f"RGB keys: {args.rgb_keys}")
     print(f"ACT image keys: {act_image_keys_for_experiment(args)}")
     print(f"Mask supervision keys: {args.mask_target_keys}")
+    if semantic_label_store is not None:
+        print(f"Lossless semantic cache: {args.semantic_label_cache}; binary mask video decoding disabled.")
+    if args.experiment in FRONT_QUERY_EXPERIMENTS:
+        print("Front query targets: object occupancy, object-region centroid distance, tool-left-to-object vector.")
+        print("Semantic input normalization: " + (
+            "2*S-1, fixed [-1,1] mapping (mean=std=0.5)."
+            if args.experiment == FRONT_SYMMETRIC_EXPERIMENT else "ImageNet mean/std."
+        ))
     print(f"Training image size: {args.image_size or 'dataset native resolution'}")
     print(f"Random seed: {args.seed}")
     print(
@@ -5192,6 +5243,8 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     try:
         for step in progress:
             raw_batch = next(dl_iter)
+            if semantic_label_store is not None:
+                raw_batch = semantic_label_store.add_batch(raw_batch)
             if view_query_store is not None:
                 raw_batch = view_query_store.add_batch(raw_batch)
             if semantic_state_store is not None:
@@ -5214,7 +5267,7 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
             resize_mask_keys = [
                 *(
                     []
-                    if args.experiment.upper() == RGB_QUERY_EXPERIMENT or (
+                    if semantic_label_store is not None or args.experiment.upper() == RGB_QUERY_EXPERIMENT or (
                         args.experiment.upper() in FROZEN_SEMANTIC_EXPERIMENTS
                         and args.experiment.upper() not in UNET_SEM_V5_QUERY_EXPERIMENTS
                         and args.experiment.upper() not in FINAL_HARD_SEMANTIC_EXPERIMENTS

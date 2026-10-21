@@ -82,6 +82,136 @@ cd /home/qihan/data/lerobot
 - 未添加 `--overwrite-output`；若输出目录已经存在，应确认续训或改名，不要直接覆盖。
 - 副本一致性已验证；本次没有执行完整视频解码、图像统计修复或正式训练。
 
+## final-FrontQtoken-FS
+
+恢复旧版 front-only Qtoken 监督，视觉输入仍为 front/side RGB + front/side 硬语义图。
+三个查询的输出维数为 `[1, 1, 2]`，共 4 个标量：
+
+- object 像素占整幅 front 图像的比例；可靠的不可见帧监督为 0。
+- object 与 region 质心的欧氏距离 / 图像对角线长度。恢复旧定义，进入区域不强制置零。
+- front tool 的 PCA 线段左端点到 object 质心的二维向量，按图像宽高归一化。
+
+沿用 final 数据的质量机制：相关类别异常时不监督；有效描述量按类别质量分数加权，
+涉及两个类别时取最小质量分数。每个查询内部平均坐标，再平均三个查询；
+不除以质量权重之和，低质量会降低监督强度。不是旧版权重归一化的复刻。
+与 final-ViewQtoken 同时存在监督视角和区域距离定义两处差异，不应称为纯视角消融。
+
+### 一次性缓存准备
+
+将原始 12 路二值 mask 无损保存为双视角 uint8 类别图，并调用旧几何函数计算前视监督。
+约占 26.5 GiB；原始数据不修改，不使用有损语义视频。
+已有完整缓存时只校验并复用。缓存过期或不完整时应使用新的目录，避免覆盖已有工作。
+
+```bash
+cd /home/qihan/data/lerobot
+/home/qihan/miniconda3/envs/lerobot/bin/python mycode/prepare_front_qtoken.py \
+    --root data/finaldata_seg \
+    --output-dir outputs/cache/final-FrontQtoken-FS-v1 \
+    --workers 8
+```
+
+### 训练
+
+```bash
+cd /home/qihan/data/lerobot
+/home/qihan/miniconda3/envs/lerobot/bin/python mycode/train_mask_act_policy.py \
+    --experiment final-FrontQtoken-FS \
+    --root /home/qihan/data/lerobot/data/finaldata_seg \
+    --repo-id finaldata_seg \
+    --rgb-keys observation.images.front observation.images.side \
+    --state-keys observation.state \
+    --mask-target-keys \
+      observation.images.front_occluder observation.images.front_object \
+      observation.images.front_region observation.images.front_tool \
+      observation.images.front_leftarm observation.images.front_rightarm \
+      observation.images.side_occluder observation.images.side_object \
+      observation.images.side_region observation.images.side_tool \
+      observation.images.side_leftarm observation.images.side_rightarm \
+    --pretrained-segmentation-checkpoints \
+      /home/qihan/data/lerobot/data/finaldata_seg/models/unet_front/model.ts \
+      /home/qihan/data/lerobot/data/finaldata_seg/models/unet_side/model.ts \
+    --view-query-cache /home/qihan/data/lerobot/outputs/cache/final-FrontQtoken-FS-v1/targets.npz \
+    --semantic-label-cache /home/qihan/data/lerobot/outputs/cache/final-FrontQtoken-FS-v1 \
+    --metric-loss-weight 1.0 --action-loss-weight 1.0 \
+    --output-dir outputs/train/semantic/final-FrontQtoken-FS \
+    --steps 100000 --seed 1000 --batch-size 8 \
+    --chunk-size 60 --n-action-steps 60 \
+    --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 \
+    --device cuda --num-workers 16 --video-backend pyav \
+    --log-freq 200 --save-freq 20000 --rebuild-view
+```
+
+不改变数据集 RGB/action/state mean/std、学习率、精度模式、分辨率、动作监督或训练预算。
+去掉 `--semantic-label-cache` 即回到原始二值 mask 解码路径；查询监督缓存仍须保留。
+该类别图缓存也可用于 final-ViewQtoken / final-SEM-FS-NoQ，但各实验仍使用自身的查询监督配置。
+训练不运行 U-Net；推理仍使用运行目录内复制的两套 U-Net，并保持 argmax + 导出过滤规则。
+保存和部署时保留整个运行目录，包括 `mask_act_run_config.json` 和 `segmentation_models`。
+
+### 本地验证（2026-10-20）
+
+- 缓存已生成，108 episodes、61,740 帧；完整解码检查双视角 mask，无尺寸或重叠错误。
+- 抽样 8 帧、双视角类别图与 PyAV 原始读取逐像素一致，旧几何函数的监督一致。
+- 固定权重与随机种子时，缓存/原始路径的 loss、Query 和视觉投影梯度通过一致性检查；
+  checkpoint 仅输入 RGB/state 即可输出 `[2, 60, 10]` 动作。
+- 相关测试 44 passed、2 skipped（两个与本实验无关的可选残差测试）。
+- RGB/state/action 的 mean/std 与源数据完全一致。
+
+两次串行短训练各 200 步，batch=8、workers=16、原分辨率、同一 seed，排除前 20 步：
+
+| 输入读取方式 | 平均秒/步 |
+|---|---:|
+| 原始 12 路二值 mask 视频 | 0.3135 |
+| 无损 uint8 类别图缓存 | 0.09355 |
+
+该次短测约快 3.35 倍；不是完整训练耗时承诺，也不是策略性能对比。
+记录位于 `outputs/temp/frontq-cache-benchmark-20261020/timing.json`，两组目录中保留日志和
+200 步 checkpoint。正式的 100,000 步训练尚未启动，不要将短测 checkpoint 当作训练完成模型。
+
+## final-FrontQtoken-FS-SemMinus1To1
+
+语义图归一化消融，不是新增损失正则项。与 `final-FrontQtoken-FS` 的唯一算法差异：
+将送入共享 ResNet 的三通道语义颜色图从 ImageNet 标准化改为 `2*S-1`，
+即固定 `mean=std=[0.5,0.5,0.5]`，输入颜色 `[0,1]` 映射到 `[-1,1]`。
+双视角 RGB 的数据集 mean/std、state/action 标准化、U-Net 自身输入预处理、
+颜色表、三个前视监督目标、质量权重、网络结构和训练超参数全部不变。
+归一化参数保存在模型 buffer 与运行配置中，加载推理时保持一致。
+复用 `final-FrontQtoken-FS-v1` 缓存，不需要重新生成标签或缓存，从头训练，不续训已有模型。
+
+```bash
+cd /home/qihan/data/lerobot
+/home/qihan/miniconda3/envs/lerobot/bin/python mycode/train_mask_act_policy.py \
+    --experiment final-FrontQtoken-FS-SemMinus1To1 \
+    --root /home/qihan/data/lerobot/data/finaldata_seg \
+    --repo-id finaldata_seg \
+    --rgb-keys observation.images.front observation.images.side \
+    --state-keys observation.state \
+    --mask-target-keys \
+      observation.images.front_occluder observation.images.front_object \
+      observation.images.front_region observation.images.front_tool \
+      observation.images.front_leftarm observation.images.front_rightarm \
+      observation.images.side_occluder observation.images.side_object \
+      observation.images.side_region observation.images.side_tool \
+      observation.images.side_leftarm observation.images.side_rightarm \
+    --pretrained-segmentation-checkpoints \
+      /home/qihan/data/lerobot/data/finaldata_seg/models/unet_front/model.ts \
+      /home/qihan/data/lerobot/data/finaldata_seg/models/unet_side/model.ts \
+    --view-query-cache /home/qihan/data/lerobot/outputs/cache/final-FrontQtoken-FS-v1/targets.npz \
+    --semantic-label-cache /home/qihan/data/lerobot/outputs/cache/final-FrontQtoken-FS-v1 \
+    --metric-loss-weight 1.0 --action-loss-weight 1.0 \
+    --output-dir outputs/train/semantic/final-FrontQtoken-FS-SemMinus1To1 \
+    --steps 100000 --seed 1000 --batch-size 8 \
+    --chunk-size 60 --n-action-steps 60 \
+    --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 \
+    --device cuda --num-workers 16 --video-backend pyav \
+    --log-freq 200 --save-freq 20000 --rebuild-view
+```
+
+验证（2026-10-20）：47 项测试通过，2 项可选残差测试跳过。
+相同随机种子下两版模型初始化仅 `semantic_visual_mean/std` 不同；
+4 步短训练、缓存一致性、梯度检查、checkpoint 重载与无标签推理均通过。
+短测目录：`outputs/temp/frontq-sem-minus1to1-smoke-20261020`。
+正式命令与对照组仅实验名称及输出目录不同，启动位置为 tmux `task2`（GPU 1）。
+
 ## final-ViewQtoken
 
 数据：`finaldata_seg`；双视角 RGB + 已导出的 filtered 硬语义彩色图，共享 ACT 视觉编码器。

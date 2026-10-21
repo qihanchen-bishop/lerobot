@@ -15,8 +15,11 @@ from torch.nn import functional as F
 EXPERIMENT = "FINAL-VIEWQTOKEN"
 SEM_ONLY_EXPERIMENT = "FINAL-SEM-FS-NOQ"
 RGB_QUERY_EXPERIMENT = "FINAL-RGB-FS-QTOKEN"
-QUERY_EXPERIMENTS = {EXPERIMENT, RGB_QUERY_EXPERIMENT}
-HARD_SEMANTIC_EXPERIMENTS = {EXPERIMENT, SEM_ONLY_EXPERIMENT}
+FRONT_QUERY_EXPERIMENT = "FINAL-FRONTQTOKEN-FS"
+FRONT_SYMMETRIC_EXPERIMENT = "FINAL-FRONTQTOKEN-FS-SEMMINUS1TO1"
+FRONT_QUERY_EXPERIMENTS = {FRONT_QUERY_EXPERIMENT, FRONT_SYMMETRIC_EXPERIMENT}
+QUERY_EXPERIMENTS = {EXPERIMENT, RGB_QUERY_EXPERIMENT, *FRONT_QUERY_EXPERIMENTS}
+HARD_SEMANTIC_EXPERIMENTS = {EXPERIMENT, SEM_ONLY_EXPERIMENT, *FRONT_QUERY_EXPERIMENTS}
 EXPERIMENTS = QUERY_EXPERIMENTS | HARD_SEMANTIC_EXPERIMENTS
 VIEWS = ("front", "side")
 CLASSES = ("occluder", "object", "region", "tool", "leftarm", "rightarm")
@@ -25,10 +28,16 @@ HEADS = ((0,), (1,), (2, 3), (4, 5), (6,), (7,))
 HEAD_NAMES = tuple(f"{task}_{view}" for task in TASKS for view in VIEWS)
 OUTPUT_DIMS = (2, 4, 2)
 CACHE_VERSION = 1
+FRONT_HEADS = ((0,), (1,), (2, 3))
+FRONT_HEAD_NAMES = ("visibility_front", "object_region_front", "tool_object_front")
 
 
 def sha256(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 class ViewHeads(nn.Module):
@@ -165,10 +174,11 @@ def quality_weights(valid, scores, anomalies):
     return valid.astype(np.float32) * (~bad) * q
 
 
-def query_loss(pred, target, valid, weights):
+def query_loss(pred, target, valid, weights, *, experiment=EXPERIMENT):
     error = F.smooth_l1_loss(pred, target, reduction="none", beta=0.01)
     losses, logs = [], {}
-    for name, indices in zip(HEAD_NAMES, HEADS, strict=True):
+    names, heads = (FRONT_HEAD_NAMES, FRONT_HEADS) if experiment in FRONT_QUERY_EXPERIMENTS else (HEAD_NAMES, HEADS)
+    for name, indices in zip(names, heads, strict=True):
         idx = list(indices)
         # Do not divide by sum(weights): uniformly low quality must reduce supervision.
         denominator = valid[:, idx].float().sum().clamp_min(1)
@@ -202,6 +212,7 @@ def forward_training(model, batch, raw_batch):
     metric_loss, metric_logs = query_loss(
         pred, raw_batch["view_query_targets"].to(device),
         raw_batch["view_query_valid"].to(device), raw_batch["view_query_weights"].to(device),
+        experiment=model.experiment,
     )
     loss = model.action_loss_weight * action_loss + model.metric_loss_weight * metric_loss
     logs.update(metric_logs)
@@ -223,18 +234,22 @@ def dataset_signature(root):
 
 
 class ViewQueryStore:
-    def __init__(self, path, root):
+    def __init__(self, path, root, *, experiment=EXPERIMENT):
         path = Path(path)
         self.metadata = json.loads((path.parent / "manifest.json").read_text())
         if self.metadata["version"] != CACHE_VERSION or self.metadata["source_signature"] != dataset_signature(root):
             raise ValueError("ViewQtoken cache is stale; prepare a new cache for this dataset.")
         if sha256(path) != self.metadata["targets_sha256"]:
             raise ValueError("ViewQtoken target cache checksum mismatch.")
+        front = experiment in FRONT_QUERY_EXPERIMENTS
+        if (self.metadata.get("experiment") == FRONT_QUERY_EXPERIMENT) != front:
+            raise ValueError("Query cache uses a different target definition.")
+        dimensions = 4 if front else 8
         total = json.loads((Path(root) / "meta/info.json").read_text())["total_frames"]
         with np.load(path, allow_pickle=False) as arrays:
             self.data = {key: arrays[key].copy() for key in ("targets", "valid", "weights")}
         for key, value in self.data.items():
-            if value.shape != (total, 8) or not np.isfinite(value).all():
+            if value.shape != (total, dimensions) or not np.isfinite(value).all():
                 raise ValueError(f"Invalid ViewQtoken {key} array.")
         if ((self.data["weights"] < 0) | (self.data["weights"] > 1)).any():
             raise ValueError("ViewQtoken weights must be in [0,1].")
@@ -248,4 +263,36 @@ class ViewQueryStore:
             raise IndexError("ViewQtoken batch indices outside cache.")
         for key, values in self.data.items():
             batch[f"view_query_{key}"] = torch.from_numpy(values[indices])
+        return batch
+
+
+class SemanticLabelStore:
+    """Lossless uint8 labels avoid decoding twelve binary mask videos per batch."""
+
+    def __init__(self, path, root):
+        path, root = Path(path), Path(root)
+        metadata = json.loads((path / "manifest.json").read_text())
+        if metadata["version"] != CACHE_VERSION or metadata["source_signature"] != dataset_signature(root):
+            raise ValueError("Semantic cache is stale; prepare a new cache.")
+        labels = metadata["semantic_labels"]
+        if labels["views"] != list(VIEWS) or labels["classes"] != list(CLASSES):
+            raise ValueError("Semantic cache view/class order mismatch.")
+        info = json.loads((root / "meta/info.json").read_text())
+        shapes = [info["features"][f"observation.images.{view}"]["shape"][:2] for view in VIEWS]
+        if shapes[0] != shapes[1]:
+            raise ValueError("Packed semantic cache requires matching view resolutions.")
+        expected_shape = (info["total_frames"], len(VIEWS), *shapes[0])
+        file = path / labels["file"]
+        if sha256(file) != labels["sha256"]:
+            raise ValueError("Semantic cache checksum mismatch.")
+        self.data = np.load(file, mmap_mode="r", allow_pickle=False)
+        if self.data.shape != expected_shape or self.data.dtype != np.uint8:
+            raise ValueError("Semantic cache shape/dtype mismatch.")
+
+    def add_batch(self, raw_batch):
+        batch = dict(raw_batch)
+        indices = batch["index"].cpu().numpy()
+        if (indices < 0).any() or (indices >= len(self.data)).any():
+            raise IndexError("Semantic batch indices outside cache.")
+        batch["semantic_class_ids"] = torch.from_numpy(self.data[indices])
         return batch
