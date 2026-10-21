@@ -1,0 +1,200 @@
+from collections import deque
+from pathlib import Path
+import queue
+import sys
+from tempfile import TemporaryDirectory
+import threading
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock
+
+import numpy as np
+import torch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "mycode"))
+from eval_preview import AsyncSegmentationPreview
+from gui_eval_lerobot_policy import EvalPolicyApp
+from train_mask_act_policy import MaskACTPolicy
+
+
+class Variable:
+    def __init__(self, value):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+
+
+class EvalPreviewPerformanceTest(unittest.TestCase):
+    def app(self):
+        app = object.__new__(EvalPolicyApp)
+        app.vars = {key: Variable(value) for key, value in {
+            "task": "cube", "segmentation_model_path": "front", "segmentation_side_model_path": "side",
+            "segmentation_device": "auto",
+        }.items()}
+        app.enable_segmentation_preview = Variable(False)
+        app.eval_running = app.eval_finishing = app.saving_result = False
+        app.started_at = None
+        app.segmentation_worker = Mock()
+        app.segmentation_loaded_logged = set()
+        app.segmentation_error_logged = False
+        app.segmentation_eval_metrics = app._new_segmentation_eval_metrics()
+        app.model_mask_signature = None
+        app.model_mask_cache = ({}, {})
+        for field in ("preview_labels", "current_images", "current_segmentation_images",
+                      "segmentation_preview_labels", "segmentation_summary_labels",
+                      "current_model_mask_images", "model_mask_preview_labels", "model_mask_summary_labels"):
+            setattr(app, field, {})
+        app.log_text = Mock()
+        app._append_log = Mock()
+        return app
+
+    def test_feed_only_while_evaluating_or_manually_previewing(self):
+        app = self.app()
+        for running, preview, saving, finishing, expected in (
+            (False, False, False, False, 0), (False, True, False, False, 1),
+            (True, False, False, False, 1), (True, True, True, False, 0),
+            (True, True, False, True, 0),
+        ):
+            app.eval_running, app.saving_result, app.eval_finishing = running, saving, finishing
+            app.enable_segmentation_preview.set(preview)
+            app.segmentation_worker.submit.reset_mock()
+            app._update_preview({"front": np.zeros((2, 2, 3), np.uint8)}, {}, 30., "", {})
+            self.assertEqual(app.segmentation_worker.submit.call_count, expected)
+
+    def test_continuous_camera_producer_cannot_trap_gui_in_preview_loop(self):
+        app = self.app()
+        app.preview_queue = queue.Queue(maxsize=1)
+        item = ({}, {}, 30., "", {})
+        app.preview_queue.put(item)
+        def render(*_args):
+            app.preview_queue.put(item)  # a producer replaces the frame during rendering
+        app._update_preview = Mock(side_effect=render)
+        app._consume_preview()
+        self.assertEqual(app._update_preview.call_count, 1)
+        self.assertEqual(app.preview_queue.qsize(), 1)
+
+    def test_live_segmentation_receives_the_recorded_rgb_source_identity(self):
+        app = self.app()
+        app.eval_running = True
+        app.started_at = 7.
+        app.semantic_recorder = object()
+        source = {"run_token": 7., "frame_index": 12, "timestamp_s": .4}
+        images = {"front": np.zeros((2, 2, 3), np.uint8), "_semantic_source": source}
+        app._update_preview(images, {}, 30., "", {})
+        self.assertIs(app.segmentation_worker.submit.call_args.kwargs["source"], source)
+        self.assertIs(app.segmentation_worker.submit.call_args.kwargs["recorder"], app.semantic_recorder)
+
+    def test_worker_is_bounded_and_runs_outside_the_gui_thread(self):
+        entered, release = threading.Event(), threading.Event()
+        threads = []
+        class Model:
+            loaded_device = "cpu"
+            def __init__(self, path, device):
+                pass
+            def predict(self, images):
+                threads.append(threading.get_ident())
+                entered.set()
+                release.wait(2)
+                return {}, {}, {"front": {"valid": True}}
+        worker = AsyncSegmentationPreview(Model, interval_s=0)
+        try:
+            self.assertTrue(worker.submit({"front": object()}, {"front": "path"}, "cpu", 1.))
+            self.assertTrue(entered.wait(2))
+            self.assertNotEqual(threads[0], threading.get_ident())
+            self.assertFalse(worker.submit({"front": object()}, {"front": "path"}, "cpu", 1.))
+            self.assertIsNone(worker.poll())
+            release.set()
+            worker.future.result(timeout=2)
+            self.assertIsNotNone(worker.poll())
+        finally:
+            release.set()
+            worker.close()
+
+    def test_stale_configuration_results_are_dropped_and_models_stay_loaded(self):
+        created = []
+        class Model:
+            loaded_device = "cpu"
+            def __init__(self, path, device):
+                created.append(path)
+            def predict(self, images):
+                return {}, {}, {}
+        worker = AsyncSegmentationPreview(Model, interval_s=0)
+        try:
+            worker.submit({"front": 1}, {"front": "path"}, "cpu", 1.)
+            worker.future.result(timeout=2)
+            worker.reset()
+            self.assertIsNone(worker.poll())
+            worker.submit({"front": 2}, {"front": "path"}, "cpu", 2.)
+            worker.future.result(timeout=2)
+            self.assertIsNotNone(worker.poll())
+            self.assertEqual(created, ["path"])
+        finally:
+            worker.close()
+
+    def test_measurements_from_an_earlier_trial_cannot_change_current_stage(self):
+        app = self.app()
+        app.eval_running, app.started_at = True, 2.
+        app._update_segmentation_eval_metrics = Mock()
+        result = ({}, {}, {"front": {"valid": True}}, {})
+        app.segmentation_worker.poll.return_value = ((0, 1., 1.5), result)
+        app._poll_segmentation_preview()
+        app._update_segmentation_eval_metrics.assert_not_called()
+        app.segmentation_worker.poll.return_value = ((0, 2., 2.5), result)
+        app._poll_segmentation_preview()
+        app._update_segmentation_eval_metrics.assert_called_once_with(result[2], sampled_at=2.5)
+
+    def test_cached_mask_act_action_does_not_repeat_segmentation_or_forward(self):
+        policy = object.__new__(MaskACTPolicy)
+        torch.nn.Module.__init__(policy)
+        policy.experiment = "FINAL-VIEWQTOKEN"
+        first, second = torch.tensor([1.]), torch.tensor([2.])
+        policy.act_policy = SimpleNamespace(_action_queue=deque([first, second]),
+                                            config=SimpleNamespace(temporal_ensemble_coeff=None))
+        policy._prepare_inference_batch = Mock(side_effect=AssertionError("unexpected segmentation"))
+        self.assertIs(policy.select_action({}), first)
+        self.assertIs(policy.select_action({}), second)
+        policy._prepare_inference_batch.assert_not_called()
+
+    def test_confirmed_video_encoding_preserves_all_streams_frames_and_metadata(self):
+        import av
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "episode"
+            keys = [f"observation.images.{view}" for view in ("front", "side", "front_policy_input", "side_policy_input")]
+            features = {"action": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+                        "observation.state": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]}}
+            features.update({key: {"dtype": "video", "shape": (24, 32, 3), "names": ["height", "width", "channels"]} for key in keys})
+            dataset = LeRobotDataset.create("local/encoding-test", 30, root=root, features=features,
+                                           use_videos=True, batch_encoding_size=1000000, image_writer_threads=2)
+            try:
+                for index in range(5):
+                    image = np.full((24, 32, 3), index * 30, np.uint8)
+                    dataset.add_frame({"action": np.zeros(2, np.float32), "observation.state": np.zeros(2, np.float32),
+                                       **{key: image for key in keys}, "task": "test"})
+                dataset.save_episode()
+            finally:
+                dataset.finalize()
+            app = self.app()
+            app.log_queue = queue.Queue()
+            record = {"save_video": True, "dataset_root": str(root), "dataset_repo_id": "local/encoding-test"}
+            app._encode_confirmed_run_videos(record)
+            meta = LeRobotDatasetMetadata("local/encoding-test", root=root)
+            for key in keys:
+                path = root / meta.get_video_file_path(0, key)
+                with av.open(str(path)) as video:
+                    frames = list(video.decode(video=0))
+                    self.assertEqual(len(frames), 5)
+                    self.assertEqual((frames[0].height, frames[0].width), (24, 32))
+            self.assertFalse(list(root.rglob("frame-*.png")))
+            self.assertEqual(record["video_encoding"]["parallel_streams"], 2)
+            # An already committed episode must be safe to confirm a second time.
+            app._encode_confirmed_run_videos(record)
+
+
+if __name__ == "__main__":
+    unittest.main()

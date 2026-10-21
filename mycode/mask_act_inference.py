@@ -201,6 +201,7 @@ def _inject_viewfusion_inference_metadata(
 def load_mask_act_for_inference(
     checkpoint_path: str | Path,
     project_root: str | Path,
+    segmentation_model_paths: list[str | Path] | None = None,
 ) -> tuple[MaskACTPolicy, Any, Any, dict[str, Any]]:
     checkpoint_dir, run_dir = resolve_mask_act_checkpoint(checkpoint_path)
     run_cfg = json.loads((run_dir / "mask_act_run_config.json").read_text())
@@ -316,6 +317,25 @@ def load_mask_act_for_inference(
     model = make_policy(args, meta, stats=stats)
     state = torch.load(checkpoint_dir / "training_state.pt", map_location="cpu", weights_only=False)
     initialized_derived_buffers = _load_mask_act_state_dict_compatibly(model, state["model"])
+    runtime_segmentation = []
+    if segmentation_model_paths is not None and str(args.experiment).upper() in {
+        "FINAL-VIEWQTOKEN", "FINAL-SEM-FS-NOQ",
+    }:
+        # Replace AFTER loading the ACT checkpoint: its state_dict also contains
+        # the original frozen segmenter weights and would overwrite an earlier override.
+        from view_qtoken import FrozenExportedUNet
+
+        if len(segmentation_model_paths) != len(args.rgb_keys):
+            raise ValueError("Runtime segmentation requires one bundle per RGB view.")
+        model.pretrained_segmenters = torch.nn.ModuleList([
+            FrozenExportedUNet(path, expected_labels=("background", *suffixes))
+            for path, suffixes in zip(segmentation_model_paths, model.view_mask_suffixes, strict=True)
+        ])
+        runtime_segmentation = [
+            {"path": segmenter.checkpoint_path, "model_sha256": segmenter.model_sha256,
+             "filter_policy": segmenter.filter_policy}
+            for segmenter in model.pretrained_segmenters
+        ]
     model.inference_image_size = args.image_size
     model.to(torch.device(model.config.device))
     model.eval()
@@ -334,5 +354,6 @@ def load_mask_act_for_inference(
         "rgb_keys": list(args.rgb_keys),
         "viewfusion_stats_source": viewfusion_stats_source,
         "initialized_derived_state_buffers": initialized_derived_buffers,
+        "runtime_segmentation": runtime_segmentation,
     }
     return model, preprocessor, postprocessor, details

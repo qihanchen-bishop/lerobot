@@ -1786,16 +1786,22 @@ class MaskACTPolicy(nn.Module):
     def latest_inference_mask_preview(self) -> dict[str, Tensor]:
         """Return the latest inference masks as CPU uint8 probability maps.
 
-        Multiclass semantic experiments also expose each view's background
-        probability so consumers can reconstruct the exact five-class soft map.
+        Multiclass semantic experiments also expose each view's background.
+        Final semantic policies return filtered hard labels as 0/255 channels;
+        older experiments may return quantized class probabilities.
         """
         return dict(self._latest_inference_mask_preview)
 
+    def latest_inference_metrics(self) -> Tensor | None:
+        """Expose ACT's raw Qtoken predictions without another network forward pass."""
+        return self.act_policy.latest_inference_metrics()
+
     def latest_inference_semantic_input(self) -> dict[str, Tensor]:
-        """Return soft semantic RGB images used for the latest ACT chunk inference.
+        """Return semantic RGB images used for the latest ACT chunk inference.
 
         Images are CPU uint8 HWC tensors before ACT input normalization. The
-        class-probability mixture is retained in their palette-weighted colors.
+        Final semantic policies use fixed palette colors from hard labels;
+        older soft experiments retain their class-probability color mixture.
         """
         return dict(self._latest_inference_semantic_input)
 
@@ -2030,6 +2036,10 @@ class MaskACTPolicy(nn.Module):
         action_queue = getattr(self.act_policy, "_action_queue", None)
         temporal_ensemble = getattr(self.act_policy.config, "temporal_ensemble_coeff", None)
         predicts_new_chunk = temporal_ensemble is not None or action_queue is None or len(action_queue) == 0
+        if not predicts_new_chunk and self.experiment in FINAL_EXPERIMENTS:
+            # Match ACT's cached-action path: the input segmentation belongs to
+            # the planning frame and need not be recomputed at every control tick.
+            return action_queue.popleft()
         action = self.act_policy.select_action(self._prepare_inference_batch(batch))
         if predicts_new_chunk:
             self._latest_inference_semantic_input = dict(self._prepared_inference_semantic_input)

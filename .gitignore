@@ -176,6 +176,8 @@ wandb/
 /sample/
 /datanew/
 /calibration/
+# Machine-local evaluation presets and dataset calibration reports
+/mycode/eval_configs/
 # Translations
 *.mo
 *.pot

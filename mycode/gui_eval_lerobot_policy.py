@@ -25,14 +25,21 @@ from pathlib import Path
 from typing import Any
 from tkinter import filedialog, ttk
 
+from eval_preview import AsyncSegmentationPreview
+
+from eval_protocol import (CONFIG_DIR, CALIBRATION_PATH, DEVIATIONS, deviation_records,
+                           load_calibration, stage_from_metrics)
+
+EVAL_CALIBRATION = load_calibration()
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "train"
 DEFAULT_EVAL_ROOT = PROJECT_ROOT / "eval" / "neweval"
 DEFAULT_CALIBRATION_DIR = Path(__file__).resolve().parents[1] / "calibration" / "robots" / "so_follower"
-DEFAULT_POLICY_PATH = DEFAULT_OUTPUT_ROOT / "1A_3object" / "checkpoint_step_100000"
+DEFAULT_POLICY_PATH = DEFAULT_OUTPUT_ROOT / "finaldata" / "viewQtoken" / "checkpoint_step_100000"
 DEFAULT_POLICY_TYPE = "mask_act"
-MAX_EPISODE_TIME_S = 30
+MAX_EPISODE_TIME_S = EVAL_CALIBRATION["recommended_episode_time_s"]
 DEFAULT_EPISODE_TIME_S = MAX_EPISODE_TIME_S
 DEFAULT_ACT_REPLAN_STEPS = 30
 AUTO_REPLAN_CALIBRATION_PATH = Path(__file__).resolve().parent / "auto_replan_bettersetup.json"
@@ -47,14 +54,14 @@ DEFAULT_DIFFUSION_FUSION_HISTORY_WEIGHT = 0.0
 DEFAULT_DIFFUSION_OBSERVATION_WARMUP_FRAMES = 1
 DEFAULT_DIFFUSION_EXECUTION_MODE = "asynchronous"
 DEFAULT_CAMERA_READ_MODE = "wait_new_frame"
-SEGMENTATION_FRONT_V4_R1_MODEL_PATH = (
-    Path(__file__).resolve().parent / "tool" / "unet_front_v4_r1" / "best.pt"
+SEGMENTATION_FRONT_MODEL_PATH = (
+    Path(__file__).resolve().parent / "tool" / "finaldata_front_unet_r3" / "model.ts"
 )
-SEGMENTATION_SIDE_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "unet_side" / "best.pt"
-DEFAULT_SEGMENTATION_MODEL_PATH = SEGMENTATION_FRONT_V4_R1_MODEL_PATH
+SEGMENTATION_SIDE_MODEL_PATH = Path(__file__).resolve().parent / "tool" / "finaldata_side_unet_r3" / "model.ts"
+DEFAULT_SEGMENTATION_MODEL_PATH = SEGMENTATION_FRONT_MODEL_PATH
 SEGMENTATION_OBJECT_PRESENT_MIN_RATIO = 0.001
 SEGMENTATION_SCREW_OBJECT_PRESENT_MIN_RATIO = 0.0008
-SEGMENTATION_OCCLUDER_COMPLETE_RATIO = 0.50
+SEGMENTATION_OCCLUDER_COMPLETE_RATIO = EVAL_CALIBRATION["recommended_occluder_complete_ratio"]
 SEGMENTATION_VOTE_WINDOW = 7
 SEGMENTATION_VOTE_REQUIRED = 4
 RESULTS_FILENAME = "eval_results.jsonl"
@@ -73,7 +80,7 @@ V4L2_SERIAL_PREFIX = "v4l2-serial://"
 def segmentation_model_paths_for_policy(checkpoint_path: str | Path) -> tuple[Path, Path]:
     """Return the fixed latest segmenter for each camera view."""
     del checkpoint_path
-    return SEGMENTATION_FRONT_V4_R1_MODEL_PATH, SEGMENTATION_SIDE_MODEL_PATH
+    return SEGMENTATION_FRONT_MODEL_PATH, SEGMENTATION_SIDE_MODEL_PATH
 
 
 def segmentation_model_path_for_policy(checkpoint_path: str | Path) -> Path:
@@ -449,6 +456,7 @@ class SegmentationPreviewModel:
         self.device_name = device_name
         self.model = None
         self.labels: list[str] = []
+        self.latest_class_ids: dict[str, Any] = {}
         self.image_size: tuple[int, int] = (320, 180)
         self.device = None
 
@@ -458,6 +466,19 @@ class SegmentationPreviewModel:
         import torch
         import torch.nn as nn
         import torch.nn.functional as F
+
+        bundle_dir = self.checkpoint_path if self.checkpoint_path.is_dir() else self.checkpoint_path.parent
+        if ((bundle_dir / "model_config.json").is_file()
+                and (bundle_dir / "filter_policy.json").is_file()):
+            from view_qtoken import FrozenExportedUNet
+            config = json.loads((bundle_dir / "model_config.json").read_text())
+            self.labels = list(config["labels"])
+            self.image_size = tuple(config["input_size_wh"])
+            name = self.device_name.strip() or "auto"
+            self.device = torch.device(("cuda" if torch.cuda.is_available() else "cpu") if name == "auto" else name)
+            self.model = FrozenExportedUNet(bundle_dir / config["torchscript"], expected_labels=self.labels).to(self.device).eval()
+            self.exported_bundle = True
+            return
 
         class SeparableConv(nn.Module):
             def __init__(self, in_ch: int, out_ch: int, stride: int = 1) -> None:
@@ -535,6 +556,7 @@ class SegmentationPreviewModel:
 
     def predict(self, images: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str], dict[str, Any]]:
         self._load()
+        self.latest_class_ids = {}
         import cv2
         import numpy as np
         import torch
@@ -553,8 +575,11 @@ class SegmentationPreviewModel:
             rgb = np.asarray(image)
             if rgb.dtype != np.uint8:
                 rgb = np.clip(rgb, 0, 255).astype(np.uint8)
-            resized = cv2.resize(rgb, self.image_size, interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
-            resized = (resized - mean) / std
+            if getattr(self, "exported_bundle", False):
+                resized = rgb.astype(np.float32) / 255.0
+            else:
+                resized = cv2.resize(rgb, self.image_size, interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+                resized = (resized - mean) / std
             tensors.append(torch.from_numpy(resized.transpose(2, 0, 1)))
             originals[key] = rgb
             keys.append(key)
@@ -567,6 +592,8 @@ class SegmentationPreviewModel:
             preds = logits.argmax(dim=1).cpu().numpy().astype(np.uint8)
 
         palette_values = SEGMENTATION_PALETTE_V3 if len(self.labels) == 7 else SEGMENTATION_PALETTE
+        if getattr(self, "exported_bundle", False):
+            palette_values = self.model.bundle_config["palette_rgb"]
         palette = np.asarray(palette_values, dtype=np.uint8)
         overlays: dict[str, Any] = {}
         summaries: dict[str, str] = {}
@@ -574,6 +601,7 @@ class SegmentationPreviewModel:
         for key, pred_small in zip(keys, preds):
             image = originals[key]
             pred = cv2.resize(pred_small, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+            self.latest_class_ids[key] = pred.copy()
             color = palette[np.clip(pred, 0, len(palette) - 1)]
             parts = []
             total = max(pred.size, 1)
@@ -693,7 +721,15 @@ class EvalPolicyApp:
         window_height = min(920, max(self.root.winfo_screenheight() - 80, 600))
         self.root.geometry(f"{window_width}x{window_height}")
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.deviation_selected = {code: tk.BooleanVar(value=False)
+                                   for _, _, choices in DEVIATIONS for code, _ in choices}
+        self.deviation_recovered = {code: tk.StringVar(value="请选择")
+                                    for _, _, choices in DEVIATIONS for code, _ in choices}
         self._configure_style()
+        import cv2
+        import torch
+        torch.set_num_threads(min(4, os.cpu_count() or 1))
+        cv2.setNumThreads(1)
 
         self.process: subprocess.Popen[str] | None = None
         self.started_at: float | None = None
@@ -712,7 +748,6 @@ class EvalPolicyApp:
         self.preview_queue: queue.Queue[
             tuple[dict[str, Any], dict[str, Any], float, str, dict[str, Any]]
         ] = queue.Queue(maxsize=1)
-        self.ssact_status_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
         self.checkpoint_options: list[CheckpointOption] = []
         self.robot: Any | None = None
         self.robot_lock = threading.RLock()
@@ -733,6 +768,11 @@ class EvalPolicyApp:
         self.model_mask_preview_labels: dict[str, ttk.Label] = {}
         self.model_mask_summary_labels: dict[str, ttk.Label] = {}
         self.segmentation_models: dict[str, SegmentationPreviewModel] = {}
+        self.segmentation_worker = AsyncSegmentationPreview(SegmentationPreviewModel)
+        self.eval_finishing = False
+        self.model_mask_signature = None
+        self.model_mask_cache = ({}, {})
+        self.model_mask_sources = {}
         self.segmentation_loaded_logged: set[str] = set()
         self.segmentation_error_logged = False
         self.segmentation_eval_metrics = self._new_segmentation_eval_metrics()
@@ -745,6 +785,9 @@ class EvalPolicyApp:
 
         self.vars = {
             "config_preset": tk.StringVar(value=""),
+            "config_folder": tk.StringVar(value=str(CONFIG_DIR)),
+            "occluder_complete_ratio": tk.StringVar(value=str(SEGMENTATION_OCCLUDER_COMPLETE_RATIO)),
+            "evaluation_stage": tk.StringVar(value="未暴露"),
             "policy_type": tk.StringVar(value=DEFAULT_POLICY_TYPE),
             "checkpoint": tk.StringVar(value=""),
             "checkpoint_path": tk.StringVar(value=str(DEFAULT_POLICY_PATH)),
@@ -775,6 +818,8 @@ class EvalPolicyApp:
             "episode_time_s": tk.StringVar(value=str(DEFAULT_EPISODE_TIME_S)),
             "fps": tk.StringVar(value="30"),
             "model_chunk_size": tk.StringVar(value="N/A"),
+            "qtoken_status": tk.StringVar(value="No Qtoken decision yet"),
+            "qtoken_values": tk.StringVar(value="Measured / network values will appear here"),
             "model_parameter_stats": tk.StringVar(value="Not loaded"),
             "inference_latency_stats": tk.StringVar(value="No inference yet"),
             "auto_replan_status": tk.StringVar(value="Off"),
@@ -789,14 +834,6 @@ class EvalPolicyApp:
             "segmentation_device": tk.StringVar(value="auto"),
             "fusion_steps": tk.StringVar(value="0"),
             "fusion_history_weight": tk.StringVar(value="0"),
-            "ssact_servo_mode": tk.StringVar(value="off"),
-            "ssact_min_execution_steps": tk.StringVar(value="1"),
-            "ssact_max_execution_steps": tk.StringVar(value="4"),
-            "ssact_max_action_residual": tk.StringVar(value="0.015"),
-            "ssact_phase": tk.StringVar(value="SSACT inactive"),
-            "ssact_phase_probabilities": tk.StringVar(value="U -- | E -- | T -- | R -- | D --"),
-            "ssact_control_status": tk.StringVar(value="No semantic control report."),
-            "ssact_validation_status": tk.StringVar(value="phase OFF | dynamics OFF | hazard OFF | CLF OFF"),
             "grid_rows": tk.StringVar(value="3"),
             "grid_cols": tk.StringVar(value="4"),
             "grid_cell": tk.StringVar(value="(0,0)"),
@@ -821,8 +858,7 @@ class EvalPolicyApp:
         self.lock_grippers = tk.BooleanVar(value=True)
         self.save_video = tk.BooleanVar(value=True)
         self.use_amp = tk.BooleanVar(value=True)
-        self.enable_segmentation_preview = tk.BooleanVar(value=True)
-        self.enable_ssact_adaptive_horizon = tk.BooleanVar(value=False)
+        self.enable_segmentation_preview = tk.BooleanVar(value=False)
         self.enable_auto_replan = tk.BooleanVar(value=False)
         self.camera_options: dict[str, tuple[str, str]] = {}
 
@@ -855,20 +891,30 @@ class EvalPolicyApp:
         self._on_result_changed()
         self.refresh_config_presets()
         self.refresh_checkpoints()
-        self.root.after(200, self._tick)
+        self.load_selected_config_preset()
+        self.root.after(50, self._tick)
 
     def _configure_style(self) -> None:
         default_font = tkfont.nametofont("TkDefaultFont")
         default_font.configure(size=12)
         text_font = tkfont.nametofont("TkTextFont")
         text_font.configure(size=12)
+        available_fonts = {family.casefold(): family for family in tkfont.families(self.root)}
+        # Some Tk builds expose X11 fonts rather than the system Fontconfig fonts.
+        for family in ("Noto Sans CJK SC", "WenQuanYi Micro Hei", "Droid Sans Fallback",
+                       "Song Ti", "Fangsong Ti"):
+            if family.casefold() in available_fonts:
+                selected_family = available_fonts[family.casefold()]
+                default_font.configure(family=selected_family)
+                text_font.configure(family=selected_family)
+                break
         self.root.option_add("*Font", default_font)
 
         style = ttk.Style(self.root)
-        style.configure("TButton", font=("TkDefaultFont", 12), padding=(14, 8))
-        style.configure("TLabel", font=("TkDefaultFont", 12))
-        style.configure("TEntry", font=("TkTextFont", 12), padding=(4, 4))
-        style.configure("TCombobox", font=("TkTextFont", 12), padding=(4, 4))
+        style.configure("TButton", font=default_font, padding=(14, 8))
+        style.configure("TLabel", font=default_font)
+        style.configure("TEntry", font=text_font, padding=(4, 4))
+        style.configure("TCombobox", font=text_font, padding=(4, 4))
 
     def _confirm(
         self,
@@ -1077,6 +1123,11 @@ class EvalPolicyApp:
         top.columnconfigure(3, weight=1)
 
         row = 0
+        ttk.Label(top, text="Config folder").grid(row=row, column=0, sticky=tk.W)
+        ttk.Entry(top, textvariable=self.vars["config_folder"], state="readonly").grid(
+            row=row, column=1, columnspan=2, sticky=tk.EW)
+        ttk.Button(top, text="Browse Folder", command=self._browse_config_folder).grid(row=row, column=3)
+        row += 1
         ttk.Label(top, text="Config preset").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
         self.config_preset_combo = ttk.Combobox(
             top,
@@ -1382,7 +1433,7 @@ class EvalPolicyApp:
         row += 1
         ttk.Checkbutton(
             top,
-            text="Front segmentation",
+            text="preview_seg",
             variable=self.enable_segmentation_preview,
         ).grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
         ttk.Entry(top, textvariable=self.vars["segmentation_model_path"], state="readonly").grid(
@@ -1392,6 +1443,11 @@ class EvalPolicyApp:
             row=row, column=3, sticky=tk.W, pady=5
         )
 
+        row += 1
+        ttk.Label(top, text="Recovery coverage (0,1]").grid(row=row, column=0, sticky=tk.W)
+        ttk.Entry(top, textvariable=self.vars["occluder_complete_ratio"], width=12).grid(
+            row=row, column=1, sticky=tk.W)
+        ttk.Label(top, textvariable=self.vars["evaluation_stage"]).grid(row=row, column=2, sticky=tk.W)
         row += 1
         ttk.Label(top, text="Side segmentation").grid(
             row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
@@ -1427,39 +1483,6 @@ class EvalPolicyApp:
         ttk.Entry(top, textvariable=self.vars["residual_path"]).grid(
             row=row, column=1, columnspan=2, sticky=tk.EW)
         ttk.Button(top, text="Browse", command=self._browse_residual).grid(row=row, column=3, sticky=tk.W)
-
-        row += 1
-        ttk.Label(top, text="SSACT semantic servo").grid(
-            row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
-        )
-        ttk.Combobox(
-            top,
-            textvariable=self.vars["ssact_servo_mode"],
-            values=("off", "shadow", "active"),
-            state="readonly",
-            width=12,
-        ).grid(row=row, column=1, sticky=tk.W)
-        ttk.Checkbutton(
-            top,
-            text="Adaptive execution length",
-            variable=self.enable_ssact_adaptive_horizon,
-        ).grid(row=row, column=2, columnspan=2, sticky=tk.W, padx=(16, 0))
-
-        row += 1
-        ttk.Label(top, text="SSACT min / max steps").grid(
-            row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
-        )
-        ssact_steps = ttk.Frame(top)
-        ssact_steps.grid(row=row, column=1, sticky=tk.W)
-        ttk.Entry(ssact_steps, textvariable=self.vars["ssact_min_execution_steps"], width=5).pack(side=tk.LEFT)
-        ttk.Label(ssact_steps, text="/").pack(side=tk.LEFT, padx=4)
-        ttk.Entry(ssact_steps, textvariable=self.vars["ssact_max_execution_steps"], width=5).pack(side=tk.LEFT)
-        ttk.Label(top, text="Max normalized action correction").grid(
-            row=row, column=2, sticky=tk.W, padx=(16, 8), pady=5
-        )
-        ttk.Entry(top, textvariable=self.vars["ssact_max_action_residual"], width=12).grid(
-            row=row, column=3, sticky=tk.W
-        )
 
         row += 1
         ttk.Checkbutton(top, text="Auto reset after run", variable=self.auto_reset_after_policy).grid(
@@ -1584,24 +1607,10 @@ class EvalPolicyApp:
 
         right_log = ttk.Frame(log_frame)
         right_log.grid(row=0, column=1, sticky=tk.NS)
-        ssact_runtime = ttk.LabelFrame(right_log, text="SSACT Runtime", padding=8)
-        ssact_runtime.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(ssact_runtime, textvariable=self.vars["ssact_phase"]).pack(anchor=tk.W)
-        ttk.Label(
-            ssact_runtime,
-            textvariable=self.vars["ssact_phase_probabilities"],
-            wraplength=360,
-        ).pack(anchor=tk.W)
-        ttk.Label(
-            ssact_runtime,
-            textvariable=self.vars["ssact_control_status"],
-            wraplength=360,
-        ).pack(anchor=tk.W)
-        ttk.Label(
-            ssact_runtime,
-            textvariable=self.vars["ssact_validation_status"],
-            wraplength=360,
-        ).pack(anchor=tk.W)
+        query_frame = ttk.LabelFrame(right_log, text="Qtoken: measured / network", padding=8)
+        query_frame.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(query_frame, textvariable=self.vars["qtoken_status"], wraplength=340).pack(anchor=tk.W)
+        ttk.Label(query_frame, textvariable=self.vars["qtoken_values"], justify=tk.LEFT).pack(anchor=tk.W)
         ttk.Label(right_log, text="Log / Action").pack(anchor=tk.W)
         self.log_text = tk.Text(right_log, wrap=tk.WORD, width=24, height=14)
         scrollbar = ttk.Scrollbar(right_log, orient=tk.VERTICAL, command=self.log_text.yview)
@@ -1611,6 +1620,7 @@ class EvalPolicyApp:
 
     def _reset_segmentation_preview_model(self, *_args: Any) -> None:
         self.segmentation_models.clear()
+        self.segmentation_worker.reset()
         self.segmentation_loaded_logged.clear()
         self.segmentation_error_logged = False
 
@@ -1691,8 +1701,8 @@ class EvalPolicyApp:
             changed = True
         if changed:
             self._append_log(
-                f"[SEG] Auto-selected front={front_path.parent.name}/best.pt, "
-                f"side={side_path.parent.name}/best.pt for "
+                f"[SEG] Auto-selected front={front_path.parent.name}/{front_path.name}, "
+                f"side={side_path.parent.name}/{side_path.name} for "
                 f"{self.vars['checkpoint_path'].get()}"
             )
         return front_path
@@ -1707,12 +1717,22 @@ class EvalPolicyApp:
             return SEGMENTATION_SCREW_OBJECT_PRESENT_MIN_RATIO
         return SEGMENTATION_OBJECT_PRESENT_MIN_RATIO
 
+    def _coverage_threshold(self) -> float:
+        variables = getattr(self, "vars", {})
+        variable = variables.get("occluder_complete_ratio")
+        return float(variable.get()) if variable is not None else SEGMENTATION_OCCLUDER_COMPLETE_RATIO
+
     def _new_segmentation_eval_metrics(self) -> dict[str, Any]:
         return {
-            "segmentation_enabled": self.enable_segmentation_preview.get() if hasattr(self, "enable_segmentation_preview") else True,
+            "segmentation_enabled": True,
+            "segmentation_preview_enabled": self.enable_segmentation_preview.get() if hasattr(self, "enable_segmentation_preview") else True,
             "segmentation_frames": 0,
             "segmentation_object_present_min_ratio": self._segmentation_object_present_min_ratio(),
-            "segmentation_occluder_complete_threshold": SEGMENTATION_OCCLUDER_COMPLETE_RATIO,
+            "segmentation_occluder_complete_threshold": self._coverage_threshold(),
+            "evaluation_stage": "unexposed",
+            "evaluation_stage_label": "未暴露",
+            "evaluation_stage_history": [],
+            "evaluation_calibration": EVAL_CALIBRATION,
             "segmentation_side_fallback_enabled": False,
             "segmentation_side_diagnostic_only": True,
             "segmentation_vote_window": SEGMENTATION_VOTE_WINDOW,
@@ -1779,13 +1799,14 @@ class EvalPolicyApp:
             "last_bboxes": {},
         }
 
-    def _update_segmentation_eval_metrics(self, measurements: dict[str, Any]) -> None:
+    def _update_segmentation_eval_metrics(self, measurements: dict[str, Any], sampled_at: float | None = None) -> None:
         if not self.eval_running or self.started_at is None:
             return
         metrics = self.segmentation_eval_metrics
-        metrics["segmentation_enabled"] = self.enable_segmentation_preview.get()
+        metrics["segmentation_enabled"] = True
+        metrics["segmentation_preview_enabled"] = self.enable_segmentation_preview.get()
         metrics["segmentation_frames"] += 1
-        elapsed_s = round(time.monotonic() - self.started_at, 3)
+        elapsed_s = round(max(0., (sampled_at if sampled_at is not None else time.monotonic()) - self.started_at), 3)
         view_metrics = metrics["segmentation_views"]
         object_min_ratio = float(
             metrics.get("segmentation_object_present_min_ratio", SEGMENTATION_OBJECT_PRESENT_MIN_RATIO)
@@ -1838,8 +1859,8 @@ class EvalPolicyApp:
         side_object_in_region = bool(side_view.get("last_object_in_region"))
         front_object_ratio = float(front_view.get("last_object_ratio", 0.0))
         side_object_ratio = float(side_view.get("last_object_ratio", 0.0))
-        front_object_detected = front_object_ratio >= object_min_ratio
-        front_object_confident = front_object_ratio >= SEGMENTATION_OBJECT_PRESENT_MIN_RATIO
+        front_object_detected = "front" in measurements and front_object_ratio >= object_min_ratio
+        front_object_confident = "front" in measurements and front_object_ratio >= SEGMENTATION_OBJECT_PRESENT_MIN_RATIO
         side_object_detected = side_object_ratio >= object_min_ratio
         metrics["last_front_object_separated"] = front_object_separated
         metrics["last_side_object_separated"] = side_object_separated
@@ -1869,8 +1890,10 @@ class EvalPolicyApp:
         metrics["last_decision_source"] = decision_source
         front_occluder_ratio = float(front_measurement.get("class_ratios", {}).get("occluder", 0.0))
         metrics["last_front_occluder_coverage"] = front_occluder_ratio
-        frame_front_coverage = front_occluder_ratio >= SEGMENTATION_OCCLUDER_COMPLETE_RATIO
-        frame_task_success = effective_object_in_region and frame_front_coverage
+        coverage_threshold = float(metrics["segmentation_occluder_complete_threshold"])
+        frame_front_coverage = "front" in measurements and front_occluder_ratio >= coverage_threshold
+        frame_task_success = (effective_object_exposed and effective_object_separated
+                              and effective_object_in_region and frame_front_coverage)
         vote_history = metrics["recent_segmentation_votes"]
         vote_history.append(
             {
@@ -1932,7 +1955,7 @@ class EvalPolicyApp:
                 if (
                     view == "front"
                     and front_object_in_region
-                    and occluder_ratio >= SEGMENTATION_OCCLUDER_COMPLETE_RATIO
+                    and occluder_ratio >= coverage_threshold
                 ):
                     view_record["task_complete_seen"] = True
             if metrics["final_front_coverage"] and not metrics["auto_final_front_coverage"]:
@@ -1948,6 +1971,13 @@ class EvalPolicyApp:
                     f"votes={metrics['recent_success_votes']}/{SEGMENTATION_VOTE_WINDOW}, "
                     f"source={decision_source}; stopping policy."
                 )
+        stage, label = stage_from_metrics(metrics)
+        if metrics["evaluation_stage"] != stage:
+            metrics["evaluation_stage_history"].append({"stage": stage, "label": label, "elapsed_s": elapsed_s})
+        metrics["evaluation_stage"] = stage
+        metrics["evaluation_stage_label"] = label
+        if "evaluation_stage" in self.vars:
+            self.vars["evaluation_stage"].set(label)
         metrics["final_failure_reason"] = self._segmentation_final_failure_reason(metrics)
         metrics["last_failure_reason"] = metrics["final_failure_reason"]
 
@@ -1955,6 +1985,8 @@ class EvalPolicyApp:
         metrics = self.segmentation_eval_metrics
         return {
             "segmentation_auto_metrics": metrics,
+            "evaluation_stage": metrics["evaluation_stage"],
+            "evaluation_stage_label": metrics["evaluation_stage_label"],
             "final_object_exposed": bool(metrics["final_object_exposed"]),
             "final_object_separated": bool(metrics["final_object_separated"]),
             "final_object_reached_region": bool(metrics["final_object_reached_region"]),
@@ -1992,7 +2024,7 @@ class EvalPolicyApp:
     def _auto_result_summary_text(self) -> str:
         metrics = self.segmentation_eval_metrics
         return (
-            "Auto segmentation: "
+            f"阶段：{metrics.get('evaluation_stage_label', '未暴露')} | Auto segmentation: "
             f"final exposed={'yes' if metrics['final_object_exposed'] else 'no'}, "
             f"final separated(voted)={'yes' if metrics['final_object_separated'] else 'no'}, "
             f"final in_region(voted)={'yes' if metrics['final_object_reached_region'] else 'no'}, "
@@ -2053,11 +2085,11 @@ class EvalPolicyApp:
         if not metrics.get("auto_object_exposed"):
             return "timeout_no_object_exposed"
         if not metrics.get("auto_object_separated"):
-            return "timeout_exposed_not_separated_in_any_view"
+            return "timeout_exposed_not_separated_front"
         if not metrics.get("auto_object_reached_region"):
             return "timeout_separated_not_reached_region"
         if not metrics.get("auto_final_front_coverage"):
-            return "timeout_region_reached_front_coverage_below_50"
+            return "timeout_region_reached_front_coverage_below_threshold"
         return "timeout_unknown"
 
     @staticmethod
@@ -2071,13 +2103,13 @@ class EvalPolicyApp:
         if not metrics.get("final_object_separated"):
             if metrics.get("auto_object_separated"):
                 return "final_not_separated_after_prior_separation"
-            return "timeout_exposed_not_separated_in_any_view"
+            return "timeout_exposed_not_separated_front"
         if not metrics.get("final_object_reached_region"):
             if metrics.get("auto_object_reached_region"):
                 return "final_object_left_region_after_prior_region_reached"
             return "timeout_separated_not_reached_region"
         if not metrics.get("final_front_coverage"):
-            return "final_region_reached_front_coverage_below_50"
+            return "final_region_reached_front_coverage_below_threshold"
         return "timeout_unknown"
 
     def _scroll_main_view(self, event: tk.Event) -> str | None:
@@ -2146,14 +2178,44 @@ class EvalPolicyApp:
                 presets[label] = path
         return presets
 
+    @staticmethod
+    def _config_presets_in_folder(config_dir: Path) -> dict[str, Path]:
+        presets = {}
+        for path in sorted(config_dir.glob("*.json")):
+            try:
+                config = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(config, dict) or config.get("policy_type") not in POLICY_TYPES:
+                continue
+            if not isinstance(config.get("checkpoint_path"), str) or not config["checkpoint_path"].strip():
+                continue
+            label = str(config.get("preset_name") or path.stem).strip()
+            if label in presets:
+                label = f"{label} ({path.name})"
+            presets[label] = path
+        return presets
+
+    def _browse_config_folder(self) -> None:
+        selected = filedialog.askdirectory(title="Select evaluation config folder", initialdir=self.vars["config_folder"].get())
+        if selected:
+            self.vars["config_folder"].set(selected)
+            self.refresh_config_presets()
+            self.refresh_checkpoints()
+            if self.config_preset_paths:
+                self.load_selected_config_preset()
+
     def refresh_config_presets(self) -> None:
-        self.config_preset_paths = self._newsetup_config_presets(Path(__file__).resolve().parent)
+        self.config_preset_paths = self._config_presets_in_folder(
+            Path(self.vars["config_folder"].get()).expanduser())
         values = list(self.config_preset_paths)
         if hasattr(self, "config_preset_combo"):
             self.config_preset_combo.configure(values=values)
+        if not values:
+            self.vars["config_preset"].set("")
         current = self.vars["config_preset"].get()
         if values and current not in self.config_preset_paths:
-            default_name = DEFAULT_POLICY_TYPE.upper()
+            default_name = "viewQtoken"
             self.vars["config_preset"].set(default_name if default_name in self.config_preset_paths else values[0])
 
     def load_selected_config_preset(self, _event: tk.Event | None = None) -> None:
@@ -2208,6 +2270,7 @@ class EvalPolicyApp:
         self.vars["residual_status"].set("Selected; loads at Start")
 
     def _apply_config_preset(self, config: dict[str, Any]) -> None:
+        self.enable_segmentation_preview.set(bool(config.get("preview_seg", False)))
         self.vars["residual_mode"].set(config.get("residual_mode", "off"))
         self.vars["residual_path"].set(config.get("residual_path", ""))
         # Older presets predate this opt-in feature and must continue to use fixed replanning.
@@ -2220,6 +2283,7 @@ class EvalPolicyApp:
             "save_subfolder",
             "task",
             "episode_time_s",
+            "occluder_complete_ratio",
             "fps",
             "grid_rows",
             "grid_cols",
@@ -2248,10 +2312,6 @@ class EvalPolicyApp:
             "noise_scheduler_type",
             "fusion_steps",
             "fusion_history_weight",
-            "ssact_servo_mode",
-            "ssact_min_execution_steps",
-            "ssact_max_execution_steps",
-            "ssact_max_action_residual",
             "segmentation_device",
             "reset_time_s",
             "extra_args",
@@ -2261,18 +2321,19 @@ class EvalPolicyApp:
             if key not in config or key not in self.vars:
                 continue
             value = config[key]
+            if key in {"checkpoint_path", "dataset_root", "calibration_dir"} and value and not Path(str(value)).is_absolute():
+                value = str(PROJECT_ROOT / str(value))
             self.vars[key].set("" if value is None else str(value))
 
         bool_targets = {
             "include_side_camera": self.include_side_camera,
             "low_resolution": self.low_resolution,
-            "enable_segmentation_preview": self.enable_segmentation_preview,
+            "preview_seg": self.enable_segmentation_preview,
             "use_amp": self.use_amp,
             "auto_reset_after_policy": self.auto_reset_after_policy,
             "lock_grippers": self.lock_grippers,
             "save_video": self.save_video,
             "enable_realsense": self.enable_realsense,
-            "enable_ssact_adaptive_horizon": self.enable_ssact_adaptive_horizon,
             "enable_auto_replan": self.enable_auto_replan,
         }
         for key, var in bool_targets.items():
@@ -2317,29 +2378,19 @@ class EvalPolicyApp:
 
     def refresh_checkpoints(self) -> None:
         options: list[CheckpointOption] = []
-        for path in sorted(DEFAULT_OUTPUT_ROOT.glob("**/pretrained_model")):
-            if not path.is_dir() or self._visible_newsetup_run_name(path) is None:
+        folder = Path(self.vars["config_folder"].get()).expanduser()
+        seen = set()
+        for preset in self._config_presets_in_folder(folder).values():
+            config = json.loads(preset.read_text(encoding="utf-8"))
+            path = Path(config["checkpoint_path"]).expanduser()
+            if not path.is_absolute():
+                path = PROJECT_ROOT / path
+            if not path.exists() or path.resolve() in seen:
                 continue
-            policy_type = self._infer_policy_type(path)
-            try:
-                rel = path.relative_to(PROJECT_ROOT)
-            except ValueError:
-                rel = path
-            policy_variant = self._act_variant_from_checkpoint(path) if policy_type == "act" else None
-            policy_label = f"{policy_type}/{policy_variant}" if policy_variant else policy_type
-            options.append(CheckpointOption(f"{policy_label}: {rel}", path, policy_type))
-
-        for state_path in sorted(DEFAULT_OUTPUT_ROOT.glob("**/checkpoint_step_*/training_state.pt")):
-            checkpoint_dir = state_path.parent
-            if self._visible_newsetup_run_name(checkpoint_dir) is None:
-                continue
-            try:
-                rel = checkpoint_dir.relative_to(PROJECT_ROOT)
-            except ValueError:
-                rel = checkpoint_dir
-            experiment = self._mask_act_experiment_from_checkpoint(checkpoint_dir)
-            policy_label = f"mask_act/{experiment}" if experiment else "mask_act"
-            options.append(CheckpointOption(f"{policy_label}: {rel}", checkpoint_dir, "mask_act"))
+            seen.add(path.resolve())
+            policy_type = config["policy_type"]
+            label = str(config.get("preset_name") or preset.stem)
+            options.append(CheckpointOption(f"{policy_type}: {label}", path, policy_type))
 
         self.checkpoint_options = options
         values = [option.label for option in options]
@@ -2352,7 +2403,7 @@ class EvalPolicyApp:
             )
             self.vars["checkpoint"].set(selected_option.label)
             self.on_checkpoint_selected()
-        self._append_log(f"Found {len(options)} checkpoint(s) under {DEFAULT_OUTPUT_ROOT}")
+        self._append_log(f"Found {len(options)} checkpoint(s) in presets from {folder}")
 
     def _infer_policy_type(self, path: Path) -> str:
         if (path / "training_state.pt").is_file() or (path / "mask_act_run_config.json").is_file():
@@ -2716,11 +2767,6 @@ class EvalPolicyApp:
             "fusion_steps": int(self.vars["fusion_steps"].get()),
             "fusion_history_weight": float(self.vars["fusion_history_weight"].get()),
             "use_amp": bool(self.use_amp.get()),
-            "ssact_servo_mode": self.vars["ssact_servo_mode"].get().strip(),
-            "ssact_adaptive_horizon": bool(self.enable_ssact_adaptive_horizon.get()),
-            "ssact_min_execution_steps": int(self.vars["ssact_min_execution_steps"].get()),
-            "ssact_max_execution_steps": int(self.vars["ssact_max_execution_steps"].get()),
-            "ssact_max_action_residual": float(self.vars["ssact_max_action_residual"].get()),
             "lock_grippers": bool(self.lock_grippers.get()),
             "residual_mode": self.vars["residual_mode"].get(),
             "residual_path": self.vars["residual_path"].get().strip(),
@@ -2751,13 +2797,6 @@ class EvalPolicyApp:
             from residual_eval import checkpoint_identity
             identity = checkpoint_identity(configuration["residual_path"])[:12]
             parts.append(f"residual-{configuration['residual_mode']}-{identity}")
-        if configuration.get("ssact_servo_mode") != "off" or configuration.get("ssact_adaptive_horizon"):
-            parts.append(f"servo-{configuration.get('ssact_servo_mode', 'off')}")
-            if configuration.get("ssact_adaptive_horizon"):
-                parts.append(
-                    f"adaptive-{configuration.get('ssact_min_execution_steps')}-"
-                    f"{configuration.get('ssact_max_execution_steps')}"
-                )
         return "__".join(parts)
 
     def _policy_layout_root(self, policy_type: str) -> Path:
@@ -3794,9 +3833,13 @@ class EvalPolicyApp:
         self.started_at_iso = datetime.now().isoformat(timespec="seconds")
         self.stop_requested = False
         self.stop_policy_requested = False
+        self.eval_finishing = False
         self.last_run = {}
         self.result_saved = True
         self.segmentation_eval_metrics = self._new_segmentation_eval_metrics()
+        self.vars["evaluation_stage"].set("未暴露")
+        self.vars["qtoken_status"].set("Waiting for first decision")
+        self.vars["qtoken_values"].set("")
         self.vars["model_parameter_stats"].set("Loading...")
         self.vars["inference_latency_stats"].set("Waiting for first chunk")
         self.vars["auto_replan_status"].set(
@@ -3839,13 +3882,6 @@ class EvalPolicyApp:
             "locked_gripper_observation_baseline": self.lock_grippers.get(),
             "fusion_steps": int(self.vars["fusion_steps"].get()),
             "fusion_history_weight": float(self.vars["fusion_history_weight"].get()),
-            "ssact_servo_mode": self.vars["ssact_servo_mode"].get(),
-            "ssact_adaptive_horizon": self.enable_ssact_adaptive_horizon.get(),
-            "ssact_min_execution_steps": int(self.vars["ssact_min_execution_steps"].get()),
-            "ssact_max_execution_steps": int(self.vars["ssact_max_execution_steps"].get()),
-            "ssact_max_action_residual": float(self.vars["ssact_max_action_residual"].get()),
-            "ssact_clf_certified": False,
-            "ssact_learned_hazard": False,
             "observation_warmup_frames": (
                 DEFAULT_DIFFUSION_OBSERVATION_WARMUP_FRAMES
                 if self.vars["policy_type"].get().strip() == "diffusion"
@@ -3864,8 +3900,13 @@ class EvalPolicyApp:
             "dataset_repo_id": self.vars["dataset_repo_id"].get().strip(),
             "task": self.vars["task"].get().strip(),
             "episode_time_s": float(self.vars["episode_time_s"].get()),
+            "evaluation_calibration_path": str(CALIBRATION_PATH),
+            "evaluation_config_folder": self.vars["config_folder"].get(),
+            "evaluation_config_preset": self.vars["config_preset"].get(),
+            "occluder_complete_ratio": self._coverage_threshold(),
             "segmentation_model_path": self.vars["segmentation_model_path"].get().strip(),
             "segmentation_side_model_path": self.vars["segmentation_side_model_path"].get().strip(),
+            "segmentation_device": self.vars["segmentation_device"].get().strip() or "auto",
         }
         self.runtime_mismatch_warning_shown = False
         self.connect_button.configure(state=tk.DISABLED)
@@ -3992,7 +4033,12 @@ class EvalPolicyApp:
             policy, preprocessor, postprocessor, details = load_mask_act_for_inference(
                 checkpoint,
                 PROJECT_ROOT,
+                segmentation_model_paths=[
+                    self.active_eval_metadata["segmentation_model_path"],
+                    self.active_eval_metadata["segmentation_side_model_path"],
+                ],
             )
+            self.active_eval_metadata["runtime_segmentation"] = details.get("runtime_segmentation", [])
             policy_cfg = policy.config
             self.log_queue.put(
                 "[Mask-ACT] "
@@ -4003,24 +4049,6 @@ class EvalPolicyApp:
                 self.log_queue.put(
                     "[Mask-ACT] Initialized derived compatibility buffer(s) from run config: "
                     + ", ".join(details["initialized_derived_state_buffers"])
-                )
-            if details["experiment"].upper() == "SSACT-1":
-                ssact_runtime_config = {
-                    "mode": runtime_configuration["ssact_servo_mode"],
-                    "adaptive_horizon": runtime_configuration["ssact_adaptive_horizon"],
-                    "minimum_execution_steps": runtime_configuration["ssact_min_execution_steps"],
-                    "maximum_execution_steps": runtime_configuration["ssact_max_execution_steps"],
-                    "maximum_action_residual": runtime_configuration["ssact_max_action_residual"],
-                }
-                policy.configure_ssact_runtime(ssact_runtime_config)
-                self.log_queue.put(
-                    "[SSACT] Runtime enabled: "
-                    f"servo={ssact_runtime_config['mode']}, "
-                    f"adaptive_horizon={ssact_runtime_config['adaptive_horizon']}, "
-                    f"steps={ssact_runtime_config['minimum_execution_steps']}.."
-                    f"{ssact_runtime_config['maximum_execution_steps']}, "
-                    f"max_residual={ssact_runtime_config['maximum_action_residual']:.4f}. "
-                    "Phase and dynamics are learned; hazard is not trained; CLF margins are uncalibrated."
                 )
         else:
             policy_cfg = PreTrainedConfig.from_pretrained(checkpoint)
@@ -4044,37 +4072,6 @@ class EvalPolicyApp:
                 "the policy converts normalized deltas to an absolute action chunk before GUI postprocessing."
             )
         self._apply_action_step_override(policy_cfg)
-        if mask_act_checkpoint and details["experiment"].upper() == "SSACT-1":
-            policy_device = next(policy.parameters()).device
-            warmup_batch = {
-                OBS_STATE: torch.zeros(
-                    (1, *policy.config.input_features[OBS_STATE].shape),
-                    device=policy_device,
-                ),
-                **{
-                    key: torch.zeros(
-                        (1, *policy.config.input_features[key].shape),
-                        device=policy_device,
-                    )
-                    for key in details["rgb_keys"]
-                },
-            }
-            warmup_started = time.perf_counter()
-            policy.set_inference_control_step(0)
-            with (
-                torch.no_grad(),
-                torch.autocast(device_type=policy_device.type)
-                if policy_device.type == "cuda" and policy.config.use_amp
-                else nullcontext(),
-            ):
-                policy.predict_action_chunk(warmup_batch)
-            if policy_device.type == "cuda":
-                torch.cuda.synchronize(policy_device)
-            policy.reset()
-            self.log_queue.put(
-                f"[SSACT] CUDA/model warmup completed in "
-                f"{(time.perf_counter() - warmup_started) * 1000.0:.1f} ms; runtime state reset."
-            )
         _teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
         dataset_features = combine_feature_dicts(
@@ -4105,6 +4102,21 @@ class EvalPolicyApp:
                 policy_state_names,
             )
         sensor_dataset_features = dataset_features
+        qtoken_recorder = None
+        if mask_act_checkpoint and details["experiment"].upper() in {"FINAL-VIEWQTOKEN", "FINAL-RGB-FS-QTOKEN"}:
+            from qtoken_eval import QTokenRecorder, recording_features
+            run_config = json.loads((Path(details["run_dir"]) / "mask_act_run_config.json").read_text())
+            qtoken_recorder = QTokenRecorder(
+                policy, run_config,
+                [self.active_eval_metadata["segmentation_model_path"],
+                 self.active_eval_metadata["segmentation_side_model_path"]],
+                run_dataset_root,
+            )
+            self.active_eval_metadata["qtoken_recording"] = {"enabled": True, **qtoken_recorder.metadata}
+            dataset_features = {**dataset_features, **recording_features()}
+        else:
+            self.active_eval_metadata["qtoken_recording"] = {"enabled": False, "reason": "policy has no supervised Qtoken head"}
+            self.log_queue.put("__QTOKEN__|" + json.dumps({"enabled": False}))
         policy_rgb_keys = (
             list(details["rgb_keys"])
             if mask_act_checkpoint
@@ -4127,13 +4139,27 @@ class EvalPolicyApp:
             sensor_dataset_features,
             policy_cfg.input_features,
         )
+        from eval_semantic_video import LiveSemanticRecorder, full_semantic_features, semantic_source_features
+        full_semantic_recording_features = (
+            full_semantic_features(sensor_dataset_features, policy_rgb_keys) if mask_act_checkpoint else {}
+        )
+        semantic_recorder = (
+            LiveSemanticRecorder(full_semantic_recording_features, self.started_at)
+            if full_semantic_recording_features else None
+        )
+        self.semantic_recorder = semantic_recorder
+        hard_semantic_input = mask_act_checkpoint and details["experiment"].upper() in {
+            "FINAL-VIEWQTOKEN", "FINAL-SEM-FS-NOQ",
+        }
         auxiliary_recording_features = {
             **decision_recording_features,
             **segmentation_recording_features,
             **semantic_recording_features,
+            **full_semantic_recording_features,
+            **semantic_source_features(full_semantic_recording_features),
         }
         if auxiliary_recording_features:
-            dataset_features = {**sensor_dataset_features, **auxiliary_recording_features}
+            dataset_features = {**dataset_features, **auxiliary_recording_features}
         if decision_recording_features:
             decision_keys = sorted(decision_recording_features)
             self.active_eval_metadata.update(
@@ -4151,26 +4177,46 @@ class EvalPolicyApp:
                 {
                     "policy_segmentation_recording_keys": segmentation_keys,
                     "policy_segmentation_alignment": "latest_chunk_segmentation_held_until_next_chunk_inference",
-                    "policy_segmentation_representation": "palette_rgb_from_model_probability_maps",
+                    "policy_segmentation_representation": (
+                        "palette_rgb_from_filtered_hard_labels"
+                        if hard_semantic_input else "palette_rgb_from_model_probability_maps"
+                    ),
                 }
             )
             self.log_queue.put(
                 "[RECORD] Saving policy segmentation generated at chunk inference: "
                 + ", ".join(segmentation_keys)
             )
-        if semantic_recording_features:
+        if semantic_recording_features and not full_semantic_recording_features:
             semantic_keys = sorted(semantic_recording_features)
             self.active_eval_metadata.update(
                 {
                     "policy_semantic_recording_keys": semantic_keys,
                     "policy_semantic_recording_format": "video" if save_video else "image_frames",
-                    "policy_semantic_representation": "soft_palette_rgb_before_act_normalization",
+                    "policy_semantic_representation": (
+                        "hard_palette_rgb_before_act_normalization"
+                        if hard_semantic_input else "soft_palette_rgb_before_act_normalization"
+                    ),
                     "policy_semantic_alignment": "latest_act_chunk_input_held_until_next_chunk_inference",
                 }
             )
             self.log_queue.put(
-                "[RECORD] Saving the soft semantic RGB actually used for ACT chunk inference: "
+                "[RECORD] Saving the semantic RGB actually used for ACT chunk inference: "
                 + ", ".join(semantic_keys)
+            )
+        if full_semantic_recording_features:
+            semantic_keys = sorted(full_semantic_recording_features)
+            self.active_eval_metadata.update({
+                "full_semantic_recording_keys": semantic_keys,
+                "full_semantic_recording_format": "video" if save_video else "image_frames",
+                "full_semantic_alignment": "latest_completed_live_result_held_between_updates",
+                "full_semantic_representation": "filtered_hard_label_palette_rgb",
+                "full_semantic_recording": {"status": "pending"},
+            })
+            self.log_queue.put(
+                "[RECORD] Reusing live segmentation for full-duration semantic streams: "
+                + ", ".join(semantic_keys)
+                + "; chunk input masks remain in *_policy_segmentation."
             )
         obs_features = sorted(key for key in dataset_features if key.startswith("observation."))
         self.log_queue.put(f"Raw robot observation features: {sorted(robot.observation_features)}")
@@ -4372,6 +4418,20 @@ class EvalPolicyApp:
                     self.active_eval_metadata["inference_latency_statistics"] = statistics
                     self.log_queue.put("__INFERENCE_STATS__|" + json.dumps(statistics))
 
+                def capture_qtoken(observation, source_step, source_time, pipeline_started):
+                    if qtoken_recorder is None:
+                        return None
+                    return qtoken_recorder.capture(
+                        observation, source_control_step=source_step, source_timestamp_s=source_time,
+                        inference_started_s=pipeline_started - start_t,
+                        ready_timestamp_s=time.perf_counter() - start_t,
+                    )
+
+                def activate_qtoken(report):
+                    if qtoken_recorder is not None and report is not None:
+                        qtoken_recorder.activate(report)
+                        self.log_queue.put("__QTOKEN__|" + json.dumps({"enabled": True, **report}))
+
                 def record_decision_observation(observation: dict[str, Any]) -> None:
                     import numpy as np
 
@@ -4473,7 +4533,7 @@ class EvalPolicyApp:
                         f"{len(observation_history)} real frame(s)."
                     )
                 pending_replan: tuple[
-                    Future[tuple[torch.Tensor, float]],
+                    Future[tuple[torch.Tensor, float, dict[str, Any] | None]],
                     int,
                     float,
                     float,
@@ -4488,23 +4548,17 @@ class EvalPolicyApp:
                         observations.insert(0, copy(observations[0]))
                     return observations
 
-                def predict_chunk_async(observations: list[dict[str, Any]]) -> tuple[torch.Tensor, float]:
+                def predict_chunk_async(observations: list[dict[str, Any]], source_step: int, source_time: float) -> tuple[torch.Tensor, float, dict[str, Any] | None]:
                     if not callable(predict_chunk):
                         raise RuntimeError(f"{type(policy).__name__} does not expose predict_action_chunk().")
                     set_control_step = getattr(policy, "set_inference_control_step", None)
                     if callable(set_control_step):
-                        set_control_step(control_step)
+                        set_control_step(source_step)
                     if policy_device.type == "cuda":
                         torch.cuda.synchronize(policy_device)
                     pipeline_started = time.perf_counter()
-                    runtime_requires_grad = getattr(policy, "ssact_runtime_requires_grad", None)
-                    inference_context = (
-                        torch.no_grad()
-                        if callable(runtime_requires_grad) and runtime_requires_grad()
-                        else torch.inference_mode()
-                    )
                     with (
-                        inference_context,
+                        torch.inference_mode(),
                         torch.autocast(device_type=policy_device.type)
                         if policy_device.type == "cuda" and policy.config.use_amp
                         else nullcontext(),
@@ -4544,9 +4598,10 @@ class EvalPolicyApp:
                         record_latest_policy_segmentation()
                     if policy_device.type == "cuda":
                         torch.cuda.synchronize(policy_device)
+                    query_report = capture_qtoken(observations[-1], source_step, source_time, pipeline_started)
                     pipeline_s = time.perf_counter() - pipeline_started
                     record_inference_latency(pipeline_s)
-                    return predicted_chunk, pipeline_s
+                    return predicted_chunk, pipeline_s, query_report
 
                 def apply_auto_replan(action_chunk: torch.Tensor, source: str) -> dict[str, Any] | None:
                     if auto_replan_scheduler is None or planner is None:
@@ -4574,99 +4629,6 @@ class EvalPolicyApp:
                     )
                     return report
 
-                def publish_ssact_runtime_report(pipeline_s: float) -> dict[str, Any]:
-                    latest_report = getattr(policy, "latest_ssact_control_report", None)
-                    report = latest_report() if callable(latest_report) else {}
-                    if (
-                        not report
-                        and mask_act_checkpoint
-                        and details["experiment"].upper() == "SSACT-3"
-                    ):
-                        latest_stage_outputs = getattr(policy, "latest_stage_outputs", None)
-                        stage_outputs = latest_stage_outputs() if callable(latest_stage_outputs) else {}
-                        phase_tensor = stage_outputs.get("phase_probabilities")
-                        if phase_tensor is None:
-                            return {}
-
-                        phase_probabilities = phase_tensor.reshape(-1, phase_tensor.shape[-1])[0].tolist()
-                        transition_tensor = stage_outputs.get("transition_probabilities")
-                        transition_probabilities = (
-                            transition_tensor.reshape(-1, transition_tensor.shape[-1])[0].tolist()
-                            if transition_tensor is not None
-                            else []
-                        )
-                        event_tensor = stage_outputs.get("event_probabilities")
-                        event_probabilities = (
-                            event_tensor.reshape(-1, event_tensor.shape[-1])[0].tolist()
-                            if event_tensor is not None
-                            else []
-                        )
-                        progress_tensor = stage_outputs.get("progress")
-                        progress_values = progress_tensor.reshape(-1).tolist() if progress_tensor is not None else []
-                        phase_names = ("expose", "separate", "transport", "restore", "done")
-                        transition_names = ("stay", "advance", "rollback", "uncertain")
-                        phase_index = max(range(len(phase_probabilities)), key=phase_probabilities.__getitem__)
-                        transition_index = (
-                            max(range(len(transition_probabilities)), key=transition_probabilities.__getitem__)
-                            if transition_probabilities
-                            else 0
-                        )
-                        report = {
-                            "stage_only": True,
-                            "phase": phase_names[phase_index],
-                            "phase_confidence": float(phase_probabilities[phase_index]),
-                            "phase_probabilities": [float(value) for value in phase_probabilities],
-                            "transition": transition_names[transition_index],
-                            "transition_probabilities": [float(value) for value in transition_probabilities],
-                            "event_probabilities": [float(value) for value in event_probabilities],
-                            "progress": [float(value) for value in progress_values],
-                            "execution_steps": replan_steps,
-                            "adaptive_horizon_applied": False,
-                            "servo_mode": "off",
-                            "control_step": control_step,
-                            "elapsed_s": max(time.perf_counter() - start_t, 0.0),
-                            "pipeline_ms": pipeline_s * 1000.0,
-                        }
-                        self._put_ssact_status(report)
-                        with (run_dataset_root / "ssact_stage_runtime.jsonl").open(
-                            "a", encoding="utf-8"
-                        ) as stream:
-                            stream.write(json.dumps(report, ensure_ascii=False) + "\n")
-                        self.log_queue.put(
-                            "[SSACT-3] "
-                            f"phase={report['phase']}@{report['phase_confidence']:.3f}, "
-                            f"transition={report['transition']}, K={replan_steps}, "
-                            f"pipeline={report['pipeline_ms']:.1f} ms; "
-                            "StageFiLM active, CLF/QP disabled."
-                        )
-                        return report
-                    if not report:
-                        return {}
-                    report = {
-                        **report,
-                        "control_step": control_step,
-                        "elapsed_s": max(time.perf_counter() - start_t, 0.0),
-                        "pipeline_ms": pipeline_s * 1000.0,
-                    }
-                    if runtime_configuration["ssact_adaptive_horizon"] and planner is not None:
-                        planner.set_replan_steps(int(report["execution_steps"]))
-                    self._put_ssact_status(report)
-                    with (run_dataset_root / "ssact_runtime.jsonl").open("a", encoding="utf-8") as stream:
-                        stream.write(json.dumps(report, ensure_ascii=False) + "\n")
-                    self.log_queue.put(
-                        "[SSACT] "
-                        f"horizon_reasons={','.join(report['horizon_reasons'])}; "
-                        f"phase={report['phase']}@{report['phase_confidence']:.3f}, "
-                        f"V={report['clf_value']:.4f}->{report['predicted_clf']:.4f}, "
-                        f"K={report['execution_steps']}, uncertainty={report['dynamics_uncertainty']:.4f}, "
-                        f"innovation={report['normalized_innovation']:.3f}, "
-                        f"servo={report['servo_mode']}, semantic_delta={report['semantic_delta_l2']:.5f}, "
-                        f"action_correction_max={report['correction_max']:.5f}, "
-                        f"QP={'applied' if report['qp_active'] else ('pass' if report['qp_evaluated'] else 'gated')}, "
-                        f"servo_applied={report['servo_applied']}; CLF=UNCALIBRATED."
-                    )
-                    return report
-
                 def install_pending_replan(wait: bool = False) -> bool:
                     nonlocal pending_replan
                     if pending_replan is None:
@@ -4674,7 +4636,7 @@ class EvalPolicyApp:
                     future, snapshot_step, observation_started, observation_ready = pending_replan
                     if not wait and not future.done():
                         return False
-                    new_chunk, async_pipeline_s = future.result()
+                    new_chunk, async_pipeline_s, query_report = future.result()
                     result_ready = time.perf_counter()
                     elapsed_steps = max(control_step - snapshot_step, 0)
                     chunk_steps = int(new_chunk.shape[-2])
@@ -4688,6 +4650,7 @@ class EvalPolicyApp:
                     apply_auto_replan(aligned_chunk, "asynchronous")
                     fused_steps = planner.update(aligned_chunk) if planner is not None else 0
                     pending_replan = None
+                    activate_qtoken(query_report)
                     self.log_queue.put(
                         f"[REPLAN] observation={max(observation_ready - observation_started, 0.0) * 1000:.1f} ms, "
                         f"async_pipeline={async_pipeline_s * 1000:.1f} ms, "
@@ -4733,7 +4696,7 @@ class EvalPolicyApp:
                             stream.write(json.dumps(report) + "\n")
                         self.log_queue.put("__RESIDUAL__|" + json.dumps(report))
                     elif planner is None:
-                        action_queue = getattr(policy, "_action_queue", None)
+                        action_queue = getattr(policy, "_action_queue", getattr(getattr(policy, "act_policy", None), "_action_queue", None))
                         diffusion_queues = getattr(policy, "_queues", {})
                         will_infer_chunk = (
                             len(action_queue) == 0
@@ -4760,13 +4723,18 @@ class EvalPolicyApp:
                         if will_infer_chunk:
                             if policy_device.type == "cuda":
                                 torch.cuda.synchronize(policy_device)
-                            record_inference_latency(time.perf_counter() - inference_started)
                             record_latest_policy_segmentation()
+                            activate_qtoken(capture_qtoken(
+                                policy_observation_frame, control_step, observation_ready - start_t, inference_started,
+                            ))
+                            record_inference_latency(time.perf_counter() - inference_started)
                     elif execution_mode == "synchronous":
                         if planner.needs_replan:
                             record_decision_observation(observation_frame)
-                            new_chunk, pipeline_s = predict_chunk_async(observation_snapshot())
-                            publish_ssact_runtime_report(pipeline_s)
+                            new_chunk, pipeline_s, query_report = predict_chunk_async(
+                                observation_snapshot(), control_step, observation_ready - start_t,
+                            )
+                            activate_qtoken(query_report)
                             apply_auto_replan(new_chunk, "synchronous")
                             fused_steps = planner.update(new_chunk)
                             self.log_queue.put(
@@ -4782,7 +4750,10 @@ class EvalPolicyApp:
                                 install_pending_replan(wait=True)
                             else:
                                 record_decision_observation(observation_frame)
-                                new_chunk, inference_s = predict_chunk_async(observation_snapshot())
+                                new_chunk, inference_s, query_report = predict_chunk_async(
+                                    observation_snapshot(), control_step, observation_ready - start_t,
+                                )
+                                activate_qtoken(query_report)
                                 apply_auto_replan(new_chunk, "asynchronous_initial")
                                 planner.update(new_chunk)
                                 self.log_queue.put(
@@ -4794,7 +4765,7 @@ class EvalPolicyApp:
                                 raise RuntimeError("Asynchronous replanning executor is unavailable.")
                             record_decision_observation(observation_frame)
                             pending_replan = (
-                                replan_executor.submit(predict_chunk_async, observation_snapshot()),
+                                replan_executor.submit(predict_chunk_async, observation_snapshot(), control_step, observation_ready - start_t),
                                 control_step,
                                 observation_started,
                                 observation_ready,
@@ -4824,7 +4795,9 @@ class EvalPolicyApp:
                         action_dict,
                         prefix=ACTION,
                     )
-                    if residual_runtime is not None and not residual_runtime.semantic_frames:
+                    if semantic_recorder is not None:
+                        semantic_frame = semantic_recorder.frame(observation_frame)
+                    elif residual_runtime is not None and not residual_runtime.semantic_frames:
                         import numpy as np
                         semantic_frame = {
                             key: np.zeros_like(observation_frame[key.removesuffix("_semantic")])
@@ -4835,10 +4808,12 @@ class EvalPolicyApp:
                             residual_runtime or policy, semantic_recording_features,
                         )
                     auxiliary_frame = held_auxiliary_recording_frame(observation_frame)
+                    query_frame = qtoken_recorder.frame(time.perf_counter() - start_t) if qtoken_recorder else {}
                     dataset.add_frame(
                         {
                             **observation_frame,
                             **auxiliary_frame,
+                            **query_frame,
                             **semantic_frame,
                             **action_frame,
                             "task": task,
@@ -4854,6 +4829,8 @@ class EvalPolicyApp:
                         1.0 / loop_s,
                         ", ".join(sorted({*observation_frame, *semantic_frame})),
                         model_masks,
+                        semantic_source={"run_token": self.started_at, "frame_index": control_step - 1,
+                                         "timestamp_s": observation_ready - start_t},
                     )
                     now = time.perf_counter()
                     if now - last_action_log_t > 1.0:
@@ -4882,6 +4859,9 @@ class EvalPolicyApp:
                         "average_selected_steps": sum(selected_steps) / len(selected_steps),
                         "selected_steps": selected_steps,
                     }
+                self.active_eval_metadata["control_duration_s"] = round(time.perf_counter() - start_t, 3)
+                if semantic_recorder is not None:
+                    self.active_eval_metadata["full_semantic_recording"] = semantic_recorder.finish()
                 final_evaluation_metadata = {
                     **evaluation_metadata,
                     **self.active_eval_metadata,
@@ -4890,9 +4870,12 @@ class EvalPolicyApp:
                     json.dumps(final_evaluation_metadata, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
+                self.log_queue.put("__SAVE_PROGRESS__|Finalizing trajectory and image frames...")
                 dataset.save_episode()
                 self.log_queue.put("Policy episode data saved. Robot remains connected.")
         finally:
+            if semantic_recorder is not None:
+                semantic_recorder.finish()
             if residual_runtime is not None:
                 residual_runtime.close()
             if replan_executor is not None:
@@ -4936,8 +4919,11 @@ class EvalPolicyApp:
         trials_per_grid = int(self.vars["trials_per_grid"].get())
         if trials_per_grid <= 0:
             raise ValueError("Trials per cell must be greater than zero.")
+        threshold = self._coverage_threshold()
+        if not 0 < threshold <= 1:
+            raise ValueError("恢复覆盖阈值必须大于 0 且不超过 1。")
         episode_time_s = float(self.vars["episode_time_s"].get())
-        if episode_time_s <= 0 or episode_time_s > MAX_EPISODE_TIME_S:
+        if not 0 < episode_time_s <= MAX_EPISODE_TIME_S:
             raise ValueError(
                 f"Episode sec must be greater than zero and no more than {MAX_EPISODE_TIME_S}."
             )
@@ -4946,20 +4932,19 @@ class EvalPolicyApp:
             raise ValueError("FPS must be greater than zero.")
         if self.vars["execution_mode"].get() not in {"synchronous", "asynchronous"}:
             raise ValueError("Execution mode must be synchronous or asynchronous.")
-        if self.enable_segmentation_preview.get():
-            segmentation_paths = {
-                "front": Path(self.vars["segmentation_model_path"].get()).expanduser(),
-            }
-            if self.include_side_camera.get():
-                segmentation_paths["side"] = Path(
-                    self.vars["segmentation_side_model_path"].get()
-                ).expanduser()
-            for view, segmentation_path in segmentation_paths.items():
-                if not segmentation_path.is_file():
-                    raise ValueError(
-                        f"{view.capitalize()} segmentation checkpoint does not exist: "
-                        f"{segmentation_path}"
-                    )
+        segmentation_paths = {
+            "front": Path(self.vars["segmentation_model_path"].get()).expanduser(),
+        }
+        if self.include_side_camera.get():
+            segmentation_paths["side"] = Path(
+                self.vars["segmentation_side_model_path"].get()
+            ).expanduser()
+        for view, segmentation_path in segmentation_paths.items():
+            if not segmentation_path.is_file():
+                raise ValueError(
+                    f"{view.capitalize()} segmentation checkpoint does not exist: "
+                    f"{segmentation_path}"
+                )
         action_steps_text = self.vars["n_action_steps"].get().strip()
         if not action_steps_text or int(action_steps_text) <= 0:
             raise ValueError("Replan interval must be greater than zero.")
@@ -4977,30 +4962,11 @@ class EvalPolicyApp:
         fusion_history_weight = float(self.vars["fusion_history_weight"].get())
         if not 0.0 <= fusion_history_weight <= 1.0:
             raise ValueError("Initial history weight must be between 0 and 1.")
-        ssact_mode = self.vars["ssact_servo_mode"].get()
-        if ssact_mode not in {"off", "shadow", "active"}:
-            raise ValueError("SSACT semantic servo mode must be off, shadow, or active.")
-        ssact_min_steps = int(self.vars["ssact_min_execution_steps"].get())
-        ssact_max_steps = int(self.vars["ssact_max_execution_steps"].get())
-        if ssact_min_steps < 1 or ssact_max_steps < ssact_min_steps:
-            raise ValueError("SSACT execution steps require 1 <= min <= max.")
-        if ssact_max_steps > int(self.vars["prediction_steps"].get() or action_steps_text):
-            raise ValueError("SSACT maximum execution steps cannot exceed prediction steps.")
-        if float(self.vars["ssact_max_action_residual"].get()) < 0:
-            raise ValueError("SSACT maximum action residual must be non-negative.")
-        variant = self._selected_policy_variant()
-        ssact_requested = ssact_mode != "off" or self.enable_ssact_adaptive_horizon.get()
         if self.enable_auto_replan.get():
             if not AUTO_REPLAN_CALIBRATION_PATH.is_file():
                 raise ValueError(f"Auto-replan calibration does not exist: {AUTO_REPLAN_CALIBRATION_PATH}")
             if fusion_steps > 0:
                 raise ValueError("Auto replan currently requires fusion steps = 0.")
-            if self.enable_ssact_adaptive_horizon.get():
-                raise ValueError("Auto replan and SSACT adaptive execution length cannot both be enabled.")
-        if ssact_requested and variant != "SSACT-1":
-            raise ValueError("SSACT runtime control can only be enabled with an SSACT-1 checkpoint.")
-        if ssact_requested and self.vars["execution_mode"].get() != "synchronous":
-            raise ValueError("SSACT runtime control currently requires synchronous execution.")
         reset_time_s = float(self.vars["reset_time_s"].get())
         if reset_time_s <= 0:
             raise ValueError("Reset sec must be greater than zero.")
@@ -5602,8 +5568,12 @@ class EvalPolicyApp:
         fps_hz: float,
         input_keys: str,
         model_masks: dict[str, Any] | None = None,
+        *, semantic_source: dict[str, Any] | None = None,
     ) -> None:
-        item = (self._preview_images(raw_obs), action, fps_hz, input_keys, model_masks or {})
+        images = self._preview_images(raw_obs)
+        if semantic_source is not None:
+            images["_semantic_source"] = semantic_source
+        item = (images, action, fps_hz, input_keys, model_masks or {})
         try:
             self.preview_queue.put_nowait(item)
         except queue.Full:
@@ -5612,16 +5582,6 @@ class EvalPolicyApp:
             except queue.Empty:
                 pass
             self.preview_queue.put_nowait(item)
-
-    def _put_ssact_status(self, report: dict[str, Any]) -> None:
-        try:
-            self.ssact_status_queue.put_nowait(dict(report))
-        except queue.Full:
-            try:
-                self.ssact_status_queue.get_nowait()
-            except queue.Empty:
-                pass
-            self.ssact_status_queue.put_nowait(dict(report))
 
     def capture_reset_pose(self) -> None:
         if not self.connected or self.robot is None:
@@ -6231,6 +6191,7 @@ class EvalPolicyApp:
 
     def stop_eval(self) -> None:
         if self.eval_running:
+            self.stop_requested = True
             self.stop_policy_requested = True
             self.vars["status"].set("Stopping policy loop; keeping robot connected.")
             self._append_log("[GUI] Stop requested. Policy will stop, robot stays connected.")
@@ -6279,6 +6240,7 @@ class EvalPolicyApp:
         self.log_queue.put(f"__PROCESS_DONE__|{return_code}")
 
     def _tick(self) -> None:
+        self._poll_segmentation_preview()
         if self.eval_running and not self.runtime_mismatch_warning_shown:
             started_configuration = self.active_eval_metadata.get("runtime_configuration")
             if isinstance(started_configuration, dict):
@@ -6305,7 +6267,7 @@ class EvalPolicyApp:
                         f"configuration folder. Changed fields: {changed_text}",
                     )
 
-        while True:
+        for _ in range(100):
             try:
                 message = self.log_queue.get_nowait()
             except queue.Empty:
@@ -6373,11 +6335,38 @@ class EvalPolicyApp:
                     if ok
                     else "Connection failed."
                 )
+            elif message.startswith("__QTOKEN__|"):
+                report = json.loads(message.split("|", 1)[1])
+                if not report.get("enabled"):
+                    self.vars["qtoken_status"].set("No Qtoken head in this policy")
+                    self.vars["qtoken_values"].set("")
+                else:
+                    self.vars["qtoken_status"].set(
+                        f"Decision {report['inference_id']} | source step {report['source_control_step']}")
+                    def metric_text(value):
+                        return "N/A" if value is None else f"{value:.4f}"
+                    self.vars["qtoken_values"].set("\n".join(
+                        f"{name}: {metric_text(report['measured'][name])} / {metric_text(report['predicted'][name])}"
+                        for name in report["metric_names"]
+                    ))
+            elif message.startswith("__SAVE_PROGRESS__|"):
+                if self.saving_result or self.eval_running:
+                    self.vars["status"].set(message.split("|", 1)[1])
             elif message.startswith("__EVAL_DONE__|"):
                 parts = message.split("|", 2)
                 ok = parts[1] == "0"
+                if not self.eval_finishing:
+                    self._consume_preview()
+                    self.eval_finishing = True
+                self._poll_segmentation_preview()
+                if self.segmentation_worker.pending_for(self.started_at):
+                    # Complete the last in-flight measurement without blocking Tk.
+                    self.log_queue.put(message)
+                    break
                 elapsed_s = 0.0 if self.started_at is None else time.monotonic() - self.started_at
                 self.eval_running = False
+                self.enable_segmentation_preview.set(False)
+                self.eval_finishing = False
                 self.started_at = None
                 self.start_button.configure(state=tk.NORMAL if self.connected else tk.DISABLED)
                 self.stop_button.configure(state=tk.DISABLED)
@@ -6394,7 +6383,8 @@ class EvalPolicyApp:
                     "ended_at": datetime.now().isoformat(timespec="seconds"),
                     "duration_s": round(elapsed_s, 3),
                     "return_code": 0 if ok else 1,
-                    "manual_stop": self.stop_policy_requested,
+                    "manual_stop": self.stop_requested,
+                    "auto_stop_task_complete": bool(self.segmentation_eval_metrics.get("auto_task_complete")),
                     "policy_type": self.vars["policy_type"].get(),
                     "policy_path": self.vars["checkpoint_path"].get(),
                     "dataset_repo_id": self.vars["dataset_repo_id"].get(),
@@ -6487,73 +6477,13 @@ class EvalPolicyApp:
             else:
                 self._append_log(message)
 
-        while True:
-            try:
-                images, action, fps_hz, input_keys, model_masks = self.preview_queue.get_nowait()
-            except queue.Empty:
-                break
-            self._update_preview(images, action, fps_hz, input_keys, model_masks)
-
-        while True:
-            try:
-                report = self.ssact_status_queue.get_nowait()
-            except queue.Empty:
-                break
-            probabilities = report.get("phase_probabilities", [0.0] * 5)
-            phase_labels = (
-                ("E", "S", "T", "R", "D")
-                if report.get("stage_only")
-                else ("U", "E", "T", "R", "D")
-            )
-            probability_text = " | ".join(
-                f"{label} {100.0 * float(value):.1f}%"
-                for label, value in zip(phase_labels, probabilities, strict=False)
-            )
-            self.vars["ssact_phase"].set(
-                f"Phase: {str(report.get('phase', 'unknown')).upper()} "
-                f"({100.0 * float(report.get('phase_confidence', 0.0)):.1f}%)"
-            )
-            self.vars["ssact_phase_probabilities"].set(probability_text)
-            self.vars["ssact_control_status"].set(
-                (
-                    f"K={report.get('execution_steps', '?')} | "
-                    f"transition={str(report.get('transition', 'unknown')).upper()} | "
-                    f"progress={','.join(f'{float(value):.2f}' for value in report.get('progress', []))} | "
-                    f"StageFiLM=ACTIVE | CLF/QP=OFF"
-                )
-                if report.get("stage_only")
-                else (
-                    f"K={report.get('execution_steps', '?')} | "
-                    f"V={float(report.get('clf_value', 0.0)):.4f} -> "
-                    f"{float(report.get('predicted_clf', 0.0)):.4f} | "
-                    f"unc={float(report.get('dynamics_uncertainty', 0.0)):.3f} | "
-                    f"innovation={float(report.get('normalized_innovation', 0.0)):.2f} | "
-                    f"QP={'applied' if report.get('qp_active') else ('pass' if report.get('qp_evaluated') else 'gated')} | "
-                    f"servo_applied={'YES' if report.get('servo_applied') else 'NO'} | "
-                    f"semantic_delta={float(report.get('semantic_delta_l2', 0.0)):.4f} | "
-                    f"action_correction={float(report.get('correction_max', 0.0)):.4f} | "
-                    f"reason={','.join(report.get('horizon_reasons', []))}"
-                )
-            )
-            self.vars["ssact_validation_status"].set(
-                (
-                    "phase/events/progress RUNNING (learned) | StageFiLM ACTIVE | "
-                    "horizon FIXED 4 | servo OFF | CLF-QP NOT USED"
-                )
-                if report.get("stage_only")
-                else (
-                    f"phase RUNNING (learned) | dynamics RUNNING (learned delta_s) | "
-                    f"horizon {'ACTIVE' if report.get('adaptive_horizon_applied') else 'FIXED'} (runtime rule) | "
-                    f"hazard NOT TRAINED | servo {str(report.get('servo_mode', 'off')).upper()} | "
-                    f"CLF-QP UNCALIBRATED"
-                )
-            )
+        self._consume_preview()
 
         if self.started_at is not None and (self.eval_running or self.process is not None):
             elapsed = int(time.monotonic() - self.started_at)
             self.vars["elapsed"].set(f"Elapsed: {elapsed // 60:02d}:{elapsed % 60:02d}")
 
-        self.root.after(200, self._tick)
+        self.root.after(50, self._tick)
 
     @staticmethod
     def _fit_preview_image(image: Any, target_width: int, *, nearest: bool = False) -> Any:
@@ -6614,20 +6544,26 @@ class EvalPolicyApp:
             available = [semantic for semantic in semantic_order if semantic in semantic_masks]
             probabilities = np.stack([semantic_masks[semantic] for semantic in available], axis=0)
             if "background" in semantic_masks:
-                # SEM-1/SEM-1-V2 use a mutually exclusive five-class softmax.
-                # Reconstruct the same soft semantic map seen by the policy instead
-                # of thresholding foreground channels as independent binary masks.
+                # Final policies supply filtered one-hot labels; older semantic
+                # policies supply class probabilities. Preserve either representation.
+                hard_labels = bool(
+                    np.all((probabilities == 0) | (probabilities == 1))
+                    and np.all(probabilities.sum(axis=0) == 1)
+                )
                 probabilities /= np.clip(probabilities.sum(axis=0, keepdims=True), 1e-6, None)
                 palette = np.asarray([semantic_colors[semantic] for semantic in available], dtype=np.float32)
                 overlay = np.einsum("khw,kc->hwc", probabilities, palette)
                 overlays[view] = np.ascontiguousarray(np.clip(overlay, 0, 255).astype(np.uint8))
                 winning_index = probabilities.argmax(axis=0)
                 confidence = probabilities.max(axis=0)
-                summaries[view] = f"soft-{len(available)} | " + ", ".join(
+                representation = "hard" if hard_labels else "soft"
+                summaries[view] = f"{representation}-{len(available)} | " + ", ".join(
                     f"{semantic} {100.0 * float((winning_index == idx).mean()):.1f}%"
                     for idx, semantic in enumerate(available)
                     if semantic != "background"
-                ) + f" | confidence {100.0 * float(confidence.mean()):.1f}%"
+                ) + (
+                    "" if hard_labels else f" | confidence {100.0 * float(confidence.mean()):.1f}%"
+                )
                 continue
 
             # Legacy Mask-ACT experiments predict independent foreground masks.
@@ -6643,6 +6579,44 @@ class EvalPolicyApp:
                 for semantic in available
             )
         return overlays, summaries
+
+    def _consume_preview(self) -> None:
+        try:
+            item = self.preview_queue.get_nowait()
+        except queue.Empty:
+            return
+        self._update_preview(*item)
+
+    def _poll_segmentation_preview(self) -> None:
+        try:
+            completed = self.segmentation_worker.poll()
+            if completed is None:
+                return
+            (_generation, eval_token, sampled_at), result = completed
+            overlays, summaries, measurements, loaded = result
+            for view, (path, device) in loaded.items():
+                if view not in self.segmentation_loaded_logged:
+                    self.segmentation_loaded_logged.add(view)
+                    self._append_log(f"[SEG] Loaded {view} model {path} on {device}.")
+            if self.eval_running and eval_token == self.started_at:
+                self._update_segmentation_eval_metrics(measurements, sampled_at=sampled_at)
+            if not (self.enable_segmentation_preview.get() or self.eval_running) or self.saving_result:
+                return
+            from PIL import Image, ImageTk
+            for view, overlay in overlays.items():
+                label = self.segmentation_preview_labels.get(view)
+                if label is None:
+                    continue
+                pil = self._fit_preview_image(Image.fromarray(overlay), label.winfo_width(), nearest=True)
+                self.current_segmentation_images[view] = ImageTk.PhotoImage(pil)
+                label.configure(image=self.current_segmentation_images[view])
+                summary = self.segmentation_summary_labels.get(view)
+                if summary is not None:
+                    summary.configure(text=summaries.get(view, ""))
+        except Exception as exc:
+            if not self.segmentation_error_logged:
+                self.segmentation_error_logged = True
+                self._append_log(f"[GUI] Background segmentation failed: {exc}")
 
     def _update_preview(
         self,
@@ -6666,61 +6640,30 @@ class EvalPolicyApp:
                     pil = self._fit_preview_image(pil, label.winfo_width())
                     self.current_images[image_key] = ImageTk.PhotoImage(pil)
                     label.configure(image=self.current_images[image_key])
-            if self.enable_segmentation_preview.get():
-                overlays: dict[str, Any] = {}
-                summaries: dict[str, str] = {}
-                measurements: dict[str, Any] = {}
-                model_path_vars = {
-                    "front": "segmentation_model_path",
-                    "side": "segmentation_side_model_path",
-                }
-                for image_key in ("front", "side"):
-                    image = images.get(image_key)
-                    if image is None:
-                        continue
-                    model = self.segmentation_models.get(image_key)
-                    if model is None:
-                        model = SegmentationPreviewModel(
-                            self.vars[model_path_vars[image_key]].get(),
-                            self.vars["segmentation_device"].get(),
-                        )
-                        self.segmentation_models[image_key] = model
-                    view_overlays, view_summaries, view_measurements = model.predict(
-                        {image_key: image}
-                    )
-                    overlays.update(view_overlays)
-                    summaries.update(view_summaries)
-                    measurements.update(view_measurements)
-                    if (
-                        image_key not in self.segmentation_loaded_logged
-                        and model.loaded_device != "not-loaded"
-                    ):
-                        self.segmentation_loaded_logged.add(image_key)
-                        self._append_log(
-                            f"[SEG] Loaded {image_key} model "
-                            f"{self.vars[model_path_vars[image_key]].get()} "
-                            f"on {model.loaded_device}."
-                        )
-                self._update_segmentation_eval_metrics(measurements)
-                for image_key, overlay in overlays.items():
-                    label = self.segmentation_preview_labels.get(image_key)
-                    if label is None:
-                        continue
-                    pil = Image.fromarray(np.asarray(overlay).astype(np.uint8), mode="RGB")
-                    pil = self._fit_preview_image(pil, label.winfo_width(), nearest=True)
-                    self.current_segmentation_images[image_key] = ImageTk.PhotoImage(pil)
-                    label.configure(image=self.current_segmentation_images[image_key])
-                    summary = self.segmentation_summary_labels.get(image_key)
-                    if summary is not None:
-                        summary.configure(text=summaries.get(image_key, ""))
-            else:
+            show_segmentation = self.enable_segmentation_preview.get() or self.eval_running
+            if (show_segmentation or self.eval_running) and not self.saving_result and not self.eval_finishing:
+                self.segmentation_worker.submit(
+                    images,
+                    {"front": self.vars["segmentation_model_path"].get(),
+                     "side": self.vars["segmentation_side_model_path"].get()},
+                    self.vars["segmentation_device"].get(),
+                    self.started_at if self.eval_running else None,
+                    recorder=getattr(self, "semantic_recorder", None) if self.eval_running else None,
+                    source=images.get("_semantic_source"),
+                )
+            if not show_segmentation:
                 self.current_segmentation_images.clear()
                 for label in self.segmentation_preview_labels.values():
                     label.configure(image="")
                 for summary in self.segmentation_summary_labels.values():
                     summary.configure(text="")
 
-            model_overlays, model_summaries = self._render_model_mask_previews(model_masks)
+            signature = tuple((key, id(value)) for key, value in sorted(model_masks.items()))
+            if signature != self.model_mask_signature:
+                self.model_mask_cache = self._render_model_mask_previews(model_masks)
+                self.model_mask_signature = signature
+                self.model_mask_sources = dict(model_masks)
+            model_overlays, model_summaries = self.model_mask_cache
             for image_key, label in self.model_mask_preview_labels.items():
                 overlay = model_overlays.get(image_key)
                 summary = self.model_mask_summary_labels.get(image_key)
@@ -6830,50 +6773,68 @@ class EvalPolicyApp:
         self.result_dialog = dialog
         dialog.title("Save evaluation result")
         dialog.transient(self.root)
-        dialog.resizable(False, False)
-        dialog.columnconfigure(0, weight=0)
-        dialog.columnconfigure(1, weight=1)
-        ttk.Label(dialog, text="Result").grid(row=0, column=0, sticky=tk.W, padx=14, pady=(14, 8))
+        dialog.resizable(True, True)
+        dialog.geometry(f"{min(1060, self.root.winfo_screenwidth() - 60)}x{min(900, self.root.winfo_screenheight() - 100)}")
+        footer = ttk.Frame(dialog)
+        footer.pack(side=tk.BOTTOM, fill=tk.X, padx=14, pady=10)
+        canvas = tk.Canvas(dialog, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(dialog, orient=tk.VERTICAL, command=canvas.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        body = ttk.Frame(canvas)
+        body.columnconfigure(1, weight=1)
+        window = canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        def scroll_result(event):
+            amount = -3 if getattr(event, "num", None) == 4 else 3 if getattr(event, "num", None) == 5 else -int(event.delta / 120)
+            canvas.yview_scroll(amount, "units")
+            return "break"
+        dialog.bind("<MouseWheel>", scroll_result)
+        dialog.bind("<Button-4>", scroll_result)
+        dialog.bind("<Button-5>", scroll_result)
+        ttk.Label(body, text="Result").grid(row=0, column=0, sticky=tk.W, padx=14, pady=(14, 8))
         ttk.Combobox(
-            dialog,
+            body,
             textvariable=self.vars["result"],
             values=RESULT_CHOICES,
             state="readonly",
             width=18,
         ).grid(row=0, column=1, sticky=tk.EW, padx=(0, 14), pady=(14, 8))
 
-        ttk.Label(dialog, text="Object exposed").grid(row=1, column=0, sticky=tk.W, padx=14, pady=8)
+        ttk.Label(body, text="Object exposed").grid(row=1, column=0, sticky=tk.W, padx=14, pady=8)
         ttk.Combobox(
-            dialog,
+            body,
             textvariable=self.vars["object_exposed"],
             values=("yes", "no"),
             state="readonly",
             width=18,
         ).grid(row=1, column=1, sticky=tk.EW, padx=(0, 14), pady=8)
 
-        ttk.Label(dialog, text="Object separated from occlusion").grid(
+        ttk.Label(body, text="Object separated from occlusion").grid(
             row=2, column=0, sticky=tk.W, padx=14, pady=8
         )
         ttk.Combobox(
-            dialog,
+            body,
             textvariable=self.vars["object_pushed_out"],
             values=("yes", "no"),
             state="readonly",
             width=18,
         ).grid(row=2, column=1, sticky=tk.EW, padx=(0, 14), pady=8)
 
-        ttk.Label(dialog, text="Task success (region + front cover)").grid(
+        ttk.Label(body, text="Task success (region + front cover)").grid(
             row=3, column=0, sticky=tk.W, padx=14, pady=8
         )
         ttk.Combobox(
-            dialog,
+            body,
             textvariable=self.vars["object_push_success"],
             values=("yes", "no"),
             state="readonly",
             width=18,
         ).grid(row=3, column=1, sticky=tk.EW, padx=(0, 14), pady=8)
 
-        details_frame = ttk.LabelFrame(dialog, text="Auto segmentation details", padding=(10, 8))
+        details_frame = ttk.LabelFrame(body, text="Auto segmentation details", padding=(10, 8))
         details_frame.grid(row=4, column=0, columnspan=2, sticky=tk.EW, padx=14, pady=(4, 8))
         details_frame.columnconfigure(1, weight=1)
         detail_labels: list[tuple[str, tk.Label, tk.Label]] = []
@@ -6903,46 +6864,32 @@ class EvalPolicyApp:
                 self.result_dialog = None
             dialog.destroy()
 
-        tags_frame = ttk.LabelFrame(dialog, text="Tags", padding=(10, 8))
+        tags_frame = ttk.LabelFrame(body, text="动作偏差（可多选，每项单独选择是否恢复）", padding=(10, 8))
         tags_frame.grid(row=5, column=0, columnspan=2, sticky=tk.EW, padx=14, pady=(0, 8))
-        tags_frame.columnconfigure(0, weight=1)
-        ttk.Entry(tags_frame, textvariable=self.vars["result_tags"]).grid(
-            row=0, column=0, columnspan=3, sticky=tk.EW
-        )
-        ttk.Label(tags_frame, text="Comma-separated labels saved with this trial.").grid(
-            row=1, column=0, columnspan=3, sticky=tk.W, pady=(4, 0)
-        )
-        tag_candidate_var = tk.StringVar(value="")
-        tag_candidates = self._result_tag_candidates()
-        tag_combo = ttk.Combobox(
-            tags_frame,
-            textvariable=tag_candidate_var,
-            values=tag_candidates,
-            state="readonly" if tag_candidates else tk.DISABLED,
-        )
-        tag_combo.grid(row=2, column=0, sticky=tk.EW, pady=(8, 0))
+        for group_index, (_, category_label, choices) in enumerate(DEVIATIONS):
+            group = ttk.LabelFrame(tags_frame, text=category_label, padding=5)
+            group_columns = 2 if self.root.winfo_screenwidth() >= 1050 else 1
+            group.grid(row=group_index // group_columns, column=group_index % group_columns, sticky=tk.NSEW, padx=4, pady=3)
+            for index, (code, label) in enumerate(choices):
+                recovery = ttk.Combobox(group, textvariable=self.deviation_recovered[code],
+                                        values=("请选择", "已恢复", "未恢复"), state="disabled", width=9)
+                recovery.grid(row=index, column=1, padx=(6, 0))
+                def toggle(code=code, recovery=recovery):
+                    recovery.configure(state="readonly" if self.deviation_selected[code].get() else "disabled")
+                    if not self.deviation_selected[code].get():
+                        self.deviation_recovered[code].set("请选择")
+                ttk.Checkbutton(group, text=label, variable=self.deviation_selected[code],
+                                command=toggle).grid(row=index, column=0, sticky=tk.W)
+                toggle()
+        ttk.Label(tags_frame, text="未勾选表示未观察到偏差；恢复指该偏差消除，独立于最终任务成败。").grid(
+            row=(len(DEVIATIONS) + group_columns - 1) // group_columns, column=0, columnspan=2, sticky=tk.W)
 
-        def add_selected_tag() -> None:
-            selected_tag = tag_candidate_var.get().strip()
-            if not selected_tag:
-                return
-            tags = self._parse_result_tags(self.vars["result_tags"].get())
-            if selected_tag.lower() not in {tag.lower() for tag in tags}:
-                tags.append(selected_tag)
-            self.vars["result_tags"].set(", ".join(tags))
-
-        ttk.Button(tags_frame, text="Add Tag", command=add_selected_tag).grid(
-            row=2, column=1, sticky=tk.E, padx=(8, 0), pady=(8, 0)
-        )
-        ttk.Button(tags_frame, text="Clear", command=lambda: self.vars["result_tags"].set("")).grid(
-            row=2, column=2, sticky=tk.E, padx=(8, 0), pady=(8, 0)
-        )
-
-        ttk.Label(dialog, text=self.vars["elapsed"].get()).grid(
+        ttk.Label(body, text=self.vars["elapsed"].get()).grid(
             row=6, column=0, columnspan=2, sticky=tk.W, padx=14, pady=(4, 8)
         )
-        buttons = ttk.Frame(dialog)
-        buttons.grid(row=7, column=0, columnspan=2, sticky=tk.E, padx=14, pady=(4, 14))
+        ttk.Label(footer, textvariable=self.vars["status"], wraplength=420).pack(side=tk.LEFT)
+        buttons = ttk.Frame(footer)
+        buttons.pack(side=tk.RIGHT)
 
         save_button: ttk.Button
         later_button: ttk.Button
@@ -7034,10 +6981,20 @@ class EvalPolicyApp:
         self.vars["object_pushed_out"].set("no")
         self.vars["object_push_success"].set("no")
         self.vars["result_tags"].set("")
+        for code, variable in self.deviation_selected.items():
+            variable.set(False)
+            self.deviation_recovered[code].set("请选择")
 
     def _result_metrics(self) -> dict[str, Any]:
-        tags = self._parse_result_tags(self.vars["result_tags"].get())
+        deviations = deviation_records({
+            code: self.deviation_recovered[code].get()
+            for code, selected in getattr(self, "deviation_selected", {}).items() if selected.get()
+        })
+        tags = [entry["label"] for entry in deviations]
         return {
+            "action_deviations_schema_version": 1,
+            "action_deviations": deviations,
+            "action_deviation_categories": sorted({entry["category"] for entry in deviations}),
             "object_exposed": self.vars["object_exposed"].get() == "yes",
             "object_separated_from_occlusion": self.vars["object_pushed_out"].get() == "yes",
             "object_pushed_out_of_occlusion": self.vars["object_pushed_out"].get() == "yes",
@@ -7177,10 +7134,10 @@ class EvalPolicyApp:
             and (run_root / encoder.meta.get_video_file_path(episode_index, video_key)).is_file()
             for video_key in video_keys
         ):
-            self._append_log("[RECORD] MP4 videos already exist for this run; skipping encoding.")
+            self.log_queue.put("[RECORD] MP4 videos already exist for this run; skipping encoding.")
             return
 
-        self._append_log(f"[RECORD] Encoding confirmed MP4 videos for {', '.join(video_keys)}.")
+        self.log_queue.put(f"[RECORD] Encoding confirmed MP4 videos for {', '.join(video_keys)}.")
         chunk_idx = episode["data/chunk_index"]
         file_idx = episode["data/file_index"]
         episode_df_path = run_root / DEFAULT_EPISODES_PATH.format(
@@ -7190,12 +7147,25 @@ class EvalPolicyApp:
         episode_df = pd.read_parquet(episode_df_path)
         video_metadata: dict[str, Any] = {}
         original_episodes = encoder.meta.episodes
+        import tempfile
+        from eval_video import encode_eval_video
+        record["video_encoding"] = {"codec": "h264", "preset": "veryfast", "crf": 30,
+                                    "parallel_streams": 2, "threads_per_stream": 2}
         try:
-            # This run directory contains one pending episode. Temporarily hiding existing
-            # episode metadata makes LeRobot initialize each camera video from file-000.
             encoder.meta.episodes = []
-            for video_key in video_keys:
-                video_metadata.update(encoder._save_episode_video(video_key, episode_index))
+            with tempfile.TemporaryDirectory(prefix="eval_encode_", dir=run_root) as temporary:
+                def encode_stream(video_key):
+                    folder = Path(temporary) / video_key
+                    folder.mkdir()
+                    target = folder / "video.mp4"
+                    encode_eval_video(encoder._get_image_file_dir(episode_index, video_key), target, encoder.fps)
+                    return target
+                with ThreadPoolExecutor(max_workers=2, thread_name_prefix="eval-video") as pool:
+                    pending = {pool.submit(encode_stream, key): key for key in video_keys}
+                    for count, future in enumerate(concurrent.futures.as_completed(pending), 1):
+                        key = pending[future]
+                        video_metadata.update(encoder._save_episode_video(key, episode_index, temp_path=future.result()))
+                        self.log_queue.put(f"__SAVE_PROGRESS__|Encoding videos {count}/{len(video_keys)}: {key}")
         finally:
             encoder.meta.episodes = original_episodes
         video_metadata.pop("episode_index", None)
@@ -7206,7 +7176,11 @@ class EvalPolicyApp:
         episode_df.to_parquet(episode_df_path)
         encoder.meta.episodes = load_episodes(run_root)
         encoder.finalize()
-        self._append_log("[RECORD] Confirmed MP4 video encoding finished.")
+        for key in video_keys:
+            image_dir = encoder._get_image_file_dir(episode_index, key)
+            if image_dir.is_dir():
+                shutil.rmtree(image_dir)
+        self.log_queue.put("[RECORD] Confirmed MP4 video encoding finished.")
 
     def discard_result(self, confirm: bool = True) -> bool:
         if not self.last_run:
@@ -7311,6 +7285,7 @@ class EvalPolicyApp:
             self._safe_disconnect_robot(robot)
             self.robot = None
             self.connected = False
+        self.segmentation_worker.close()
         self.root.destroy()
 
 

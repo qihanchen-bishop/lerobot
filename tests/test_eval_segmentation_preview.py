@@ -41,7 +41,7 @@ class StubSemanticPolicy:
 
 class EvalSegmentationPreviewTest(unittest.TestCase):
     def test_evaluation_protocol_defaults(self):
-        self.assertEqual(DEFAULT_EPISODE_TIME_S, 30)
+        self.assertEqual(DEFAULT_EPISODE_TIME_S, 40)
         self.assertEqual(DEFAULT_ACT_REPLAN_STEPS, 30)
         self.assertEqual(DEFAULT_TRIALS_PER_GRID, 2)
 
@@ -177,16 +177,16 @@ class EvalSegmentationPreviewTest(unittest.TestCase):
 
         front_path, side_path = segmentation_model_paths_for_policy(checkpoint)
 
-        self.assertEqual(front_path.parent.name, "unet_front_v4_r1")
-        self.assertEqual(side_path.parent.name, "unet_side")
+        self.assertEqual(front_path.parent.name, "finaldata_front_unet_r3")
+        self.assertEqual(side_path.parent.name, "finaldata_side_unet_r3")
 
     def test_legacy_checkpoint_uses_same_system_segmenters(self):
         checkpoint = PROJECT_ROOT / "outputs/train/ACT_3object/checkpoint_step_100000"
 
         front_path, side_path = segmentation_model_paths_for_policy(checkpoint)
 
-        self.assertEqual(front_path.parent.name, "unet_front_v4_r1")
-        self.assertEqual(side_path.parent.name, "unet_side")
+        self.assertEqual(front_path.parent.name, "finaldata_front_unet_r3")
+        self.assertEqual(side_path.parent.name, "finaldata_side_unet_r3")
 
     def test_v5_strategies_route_to_latest_view_specific_models(self):
         for strategy in (
@@ -199,8 +199,8 @@ class EvalSegmentationPreviewTest(unittest.TestCase):
 
                 front_path, side_path = segmentation_model_paths_for_policy(checkpoint)
 
-                self.assertEqual(front_path.parent.name, "unet_front_v4_r1")
-                self.assertEqual(side_path.parent.name, "unet_side")
+                self.assertEqual(front_path.parent.name, "finaldata_front_unet_r3")
+                self.assertEqual(side_path.parent.name, "finaldata_side_unet_r3")
 
     def test_neweval_layout_separates_view_strategy_and_runtime_configuration(self):
         app = object.__new__(EvalPolicyApp)
@@ -337,18 +337,18 @@ class EvalSegmentationPreviewTest(unittest.TestCase):
         )
 
     def test_delta_act_variants_encode_target_and_view_layout(self):
-        self.assertEqual(
-            EvalPolicyApp._act_variant_from_checkpoint(
-                PROJECT_ROOT / "outputs/train/delta/Delta_FS/100000/pretrained_model"
-            ),
-            "DELTA-FS",
-        )
-        self.assertEqual(
-            EvalPolicyApp._act_variant_from_checkpoint(
-                PROJECT_ROOT / "outputs/train/delta/AnchorDelta_FS/100000/pretrained_model"
-            ),
-            "ANCHOR-DELTA-FS",
-        )
+        with TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            for target, expected in (("follower_delta", "DELTA-FS"),
+                                     ("follower_anchor_delta", "ANCHOR-DELTA-FS")):
+                (checkpoint / "config.json").write_text(json.dumps({
+                    "type": "act", "action_target": target,
+                    "input_features": {
+                        "observation.images.front": {"type": "VISUAL"},
+                        "observation.images.side": {"type": "VISUAL"},
+                    },
+                }))
+                self.assertEqual(EvalPolicyApp._act_variant_from_checkpoint(checkpoint), expected)
 
     def test_decision_and_segmentation_recording_features_follow_rgb_views(self):
         dataset_features = {

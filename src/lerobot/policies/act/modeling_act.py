@@ -367,6 +367,7 @@ class ACTPolicy(PreTrainedPolicy):
 
     def reset(self):
         """This should be called whenever the environment is reset."""
+        self._latest_inference_metrics = None
         if self.config.temporal_ensemble_coeff is not None:
             self.temporal_ensembler.reset()
         else:
@@ -397,6 +398,11 @@ class ACTPolicy(PreTrainedPolicy):
             self._action_queue.extend(actions.transpose(0, 1))
         return self._action_queue.popleft()
 
+    def latest_inference_metrics(self) -> Tensor | None:
+        """Raw metric-head output from the same forward pass as the latest action chunk."""
+        metrics = self._latest_inference_metrics
+        return None if metrics is None else metrics.clone()
+
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
         """Predict a chunk of actions given environment observations."""
@@ -406,7 +412,9 @@ class ACTPolicy(PreTrainedPolicy):
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
-        actions = self.model(batch)[0]
+        actions, _latent, auxiliary = self.model(batch)
+        metrics = auxiliary.get(METRIC_PRED)
+        self._latest_inference_metrics = None if metrics is None else metrics.detach().cpu().clone()
         if self.config.action_target == "follower_delta":
             actions = decode_follower_delta_actions(
                 actions,

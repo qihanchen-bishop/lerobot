@@ -31,6 +31,27 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def resolve_torchscript_payload(script):
+    """Resolve a local LFS pointer to an identical available payload, without writes."""
+    script = Path(script)
+    if script.stat().st_size > 1024:
+        return script
+    pointer = script.read_bytes()
+    if not pointer.startswith(b"version https://git-lfs.github.com/spec/v1\n"):
+        return script
+    fields = dict(line.split(" ", 1) for line in pointer.decode().splitlines())
+    digest = fields["oid"].removeprefix("sha256:")
+    project = Path(__file__).resolve().parents[1]
+    candidates = [project / ".git/lfs/objects" / digest[:2] / digest[2:4] / digest]
+    candidates.extend(project / "data/finaldata_seg/models" / f"unet_{view}" / "model.ts"
+                      for view in VIEWS)
+    for candidate in candidates:
+        if (candidate.is_file() and candidate.stat().st_size == int(fields["size"])
+                and sha256(candidate) == digest):
+            return candidate
+    raise FileNotFoundError(f"TorchScript is a Git LFS pointer with no matching local payload: {script}")
+
+
 class ViewHeads(nn.Module):
     """Both independent heads read the same task token."""
 
@@ -73,7 +94,7 @@ class FrozenExportedUNet(nn.Module):
             raise ValueError(f"Segmentation label mismatch: {self.labels} != {expected_labels}")
         self.filter_policy = json.loads((root / "filter_policy.json").read_text())["policy"]
         filter_class_ids(np.zeros((2, 2), np.uint8), self.labels, self.filter_policy)
-        script = root / self.bundle_config["torchscript"]
+        script = resolve_torchscript_payload(root / self.bundle_config["torchscript"])
         self.network = torch.jit.load(str(script), map_location="cpu").eval()
         for parameter in self.network.parameters():
             parameter.requires_grad_(False)
