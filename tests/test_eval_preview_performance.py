@@ -1,5 +1,6 @@
 from collections import deque
 from pathlib import Path
+import os
 import queue
 import sys
 from tempfile import TemporaryDirectory
@@ -163,6 +164,7 @@ class EvalPreviewPerformanceTest(unittest.TestCase):
     def test_confirmed_video_encoding_preserves_all_streams_frames_and_metadata(self):
         import av
         from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+        parent_priority = os.getpriority(os.PRIO_PROCESS, 0) if hasattr(os, "getpriority") else None
         with TemporaryDirectory() as directory:
             root = Path(directory) / "episode"
             keys = [f"observation.images.{view}" for view in ("front", "side", "front_policy_input", "side_policy_input")]
@@ -178,7 +180,7 @@ class EvalPreviewPerformanceTest(unittest.TestCase):
                                        **{key: image for key in keys}, "task": "test"})
                 dataset.save_episode()
             finally:
-                dataset.finalize()
+                EvalPolicyApp._finalize_eval_dataset(dataset)
             app = self.app()
             app.log_queue = queue.Queue()
             record = {"save_video": True, "dataset_root": str(root), "dataset_repo_id": "local/encoding-test"}
@@ -190,10 +192,61 @@ class EvalPreviewPerformanceTest(unittest.TestCase):
                     frames = list(video.decode(video=0))
                     self.assertEqual(len(frames), 5)
                     self.assertEqual((frames[0].height, frames[0].width), (24, 32))
+                    for index, frame in enumerate(frames):
+                        self.assertAlmostEqual(float(frame.pts * frame.time_base), index / 30, places=5)
+                        self.assertLess(abs(float(frame.to_ndarray(format="rgb24").mean()) - index * 30), 5)
             self.assertFalse(list(root.rglob("frame-*.png")))
-            self.assertEqual(record["video_encoding"]["parallel_streams"], 2)
+            self.assertEqual(record["video_encoding"]["parallel_streams"], 1)
+            self.assertTrue(record["video_encoding"]["process_isolation"])
+            self.assertEqual(set(record["video_encoding"]["stream_seconds"]), set(keys))
             # An already committed episode must be safe to confirm a second time.
             app._encode_confirmed_run_videos(record)
+        if parent_priority is not None:
+            self.assertEqual(os.getpriority(os.PRIO_PROCESS, 0), parent_priority)
+
+    def test_encoder_subprocess_failure_keeps_source_frames_and_reports_error(self):
+        from eval_video import encode_eval_video_in_subprocess
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "frame-000000.png"
+            source.write_bytes(b"invalid PNG")
+            with self.assertRaisesRegex(RuntimeError, "Video encoding failed"):
+                encode_eval_video_in_subprocess(root, root / "video.mp4", 30)
+            self.assertEqual(source.read_bytes(), b"invalid PNG")
+            self.assertFalse((root / "video.mp4").exists())
+
+    def test_repeated_trials_release_image_workers_and_flush_pending_frames(self):
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+        from PIL import Image
+
+        baseline = set(threading.enumerate())
+        with TemporaryDirectory() as directory:
+            for trial in range(31):
+                dataset = LeRobotDataset.create(
+                    "local/worker-cleanup-test", 30, root=Path(directory) / str(trial),
+                    features={"action": {"dtype": "float32", "shape": (1,), "names": ["a"]}},
+                    image_writer_threads=4,
+                )
+                writer = dataset.image_writer
+                target = dataset.root / "pending.png"
+                writer.save_image(np.full((24, 32, 3), trial, np.uint8), target)
+                try:
+                    EvalPolicyApp._finalize_eval_dataset(dataset)
+                    self.assertTrue(all(not thread.is_alive() for thread in writer.threads))
+                    self.assertIsNone(dataset.image_writer)
+                    with Image.open(target) as saved:
+                        np.testing.assert_array_equal(np.asarray(saved), np.full((24, 32, 3), trial, np.uint8))
+                    self.assertEqual(set(threading.enumerate()) - baseline, set())
+                finally:
+                    writer.stop()
+
+    def test_dataset_files_are_closed_even_if_image_writer_stop_fails(self):
+        dataset = Mock()
+        dataset.stop_image_writer.side_effect = RuntimeError("writer failed")
+        with self.assertRaisesRegex(RuntimeError, "writer failed"):
+            EvalPolicyApp._finalize_eval_dataset(dataset)
+        dataset.finalize.assert_called_once_with()
 
 
 if __name__ == "__main__":
