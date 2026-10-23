@@ -100,7 +100,7 @@ POLICY_TYPES = (
     "sarm",
 )
 RESULT_CHOICES = ("success", "failure")
-TASK_CHOICES = ("cube", "paperball", "screw", "cube_r", "paperball_r", "screw_r")
+TASK_CHOICES = ("cube", "paperball", "screw", "crayon", "cube_r", "paperball_r", "screw_r")
 
 CAMERA_WIDTH = 1280
 CAMERA_HEIGHT = 720
@@ -4245,7 +4245,7 @@ class EvalPolicyApp:
                 image_writer_processes=0,
                 image_writer_threads=max(
                     1,
-                    4 * (len(robot.cameras) + len(auxiliary_recording_features)),
+                    4 * sum(feature.get("dtype") in {"image", "video"} for feature in dataset_features.values()),
                 ),
                 batch_encoding_size=1_000_000 if save_video else 1,
                 vcodec="h264",
@@ -4873,14 +4873,25 @@ class EvalPolicyApp:
                 dataset.save_episode()
                 self.log_queue.put("Policy episode data saved. Robot remains connected.")
         finally:
-            if semantic_recorder is not None:
-                semantic_recorder.finish()
-            if residual_runtime is not None:
-                residual_runtime.close()
-            if replan_executor is not None:
-                replan_executor.shutdown(wait=True, cancel_futures=True)
-            if dataset is not None:
-                dataset.finalize()
+            try:
+                if semantic_recorder is not None:
+                    semantic_recorder.finish()
+                if residual_runtime is not None:
+                    residual_runtime.close()
+                if replan_executor is not None:
+                    replan_executor.shutdown(wait=True, cancel_futures=True)
+            finally:
+                if dataset is not None:
+                    self._finalize_eval_dataset(dataset)
+
+    @staticmethod
+    def _finalize_eval_dataset(dataset: Any) -> None:
+        # LeRobotDataset.finalize() only closes parquet writers. Each trial owns
+        # an image writer whose workers otherwise survive until the GUI exits.
+        try:
+            dataset.stop_image_writer()
+        finally:
+            dataset.finalize()
 
     def _validate_eval_settings(self) -> None:
         if self.vars["residual_mode"].get() != "off":
@@ -7147,26 +7158,30 @@ class EvalPolicyApp:
         video_metadata: dict[str, Any] = {}
         original_episodes = encoder.meta.episodes
         import tempfile
-        from eval_video import encode_eval_video
+        from eval_video import encode_eval_video_in_subprocess
         record["video_encoding"] = {"codec": "h264", "preset": "veryfast", "crf": 30,
-                                    "parallel_streams": 2, "threads_per_stream": 2}
+                                    "parallel_streams": 1, "threads_per_stream": 2,
+                                    "process_isolation": True, "stream_seconds": {}}
+        encoding_started = time.perf_counter()
         try:
             encoder.meta.episodes = []
             with tempfile.TemporaryDirectory(prefix="eval_encode_", dir=run_root) as temporary:
-                def encode_stream(video_key):
-                    folder = Path(temporary) / video_key
+                for count, key in enumerate(video_keys, 1):
+                    self.log_queue.put(f"__SAVE_PROGRESS__|Encoding video {count}/{len(video_keys)}: {key}")
+                    stream_started = time.perf_counter()
+                    folder = Path(temporary) / key
                     folder.mkdir()
                     target = folder / "video.mp4"
-                    encode_eval_video(encoder._get_image_file_dir(episode_index, video_key), target, encoder.fps)
-                    return target
-                with ThreadPoolExecutor(max_workers=2, thread_name_prefix="eval-video") as pool:
-                    pending = {pool.submit(encode_stream, key): key for key in video_keys}
-                    for count, future in enumerate(concurrent.futures.as_completed(pending), 1):
-                        key = pending[future]
-                        video_metadata.update(encoder._save_episode_video(key, episode_index, temp_path=future.result()))
-                        self.log_queue.put(f"__SAVE_PROGRESS__|Encoding videos {count}/{len(video_keys)}: {key}")
+                    encode_eval_video_in_subprocess(
+                        encoder._get_image_file_dir(episode_index, key), target, encoder.fps,
+                    )
+                    video_metadata.update(encoder._save_episode_video(key, episode_index, temp_path=target))
+                    elapsed = round(time.perf_counter() - stream_started, 3)
+                    record["video_encoding"]["stream_seconds"][key] = elapsed
+                    self.log_queue.put(f"[RECORD] Encoded {key} in {elapsed:.3f}s.")
         finally:
             encoder.meta.episodes = original_episodes
+        record["video_encoding"]["encoding_seconds"] = round(time.perf_counter() - encoding_started, 3)
         video_metadata.pop("episode_index", None)
         video_df = pd.DataFrame(video_metadata, index=[episode_index]).convert_dtypes(
             dtype_backend="pyarrow"
@@ -7175,10 +7190,13 @@ class EvalPolicyApp:
         episode_df.to_parquet(episode_df_path)
         encoder.meta.episodes = load_episodes(run_root)
         encoder.finalize()
+        self.log_queue.put("__SAVE_PROGRESS__|Cleaning up encoded image frames...")
+        cleanup_started = time.perf_counter()
         for key in video_keys:
             image_dir = encoder._get_image_file_dir(episode_index, key)
             if image_dir.is_dir():
                 shutil.rmtree(image_dir)
+        record["video_encoding"]["cleanup_seconds"] = round(time.perf_counter() - cleanup_started, 3)
         self.log_queue.put("[RECORD] Confirmed MP4 video encoding finished.")
 
     def discard_result(self, confirm: bool = True) -> bool:
