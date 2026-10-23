@@ -1,0 +1,17 @@
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[>=Stealth,box/.style={draw,rounded corners,align=center,minimum height=1cm,font=\small}]
+\node[box,text width=2.4cm] (sup) at (0,0) {Quality-aware\\semantic supervision};
+\node[box,text width=3cm] (vis) at (4,1) {RGB, soft semantics,\\and proprioception};
+\node[box,text width=3cm] (query) at (4,-1) {Supervised task-\\descriptor queries};
+\node[box,text width=3cm] (enc) at (8,0) {Joint representation\\and ACT decoder};
+\node[box,text width=2cm] (act) at (11.4,0) {Action-chunk\\prediction};
+\draw[->] (sup) -- (vis);
+\draw[->,dashed] (sup) -- (query);
+\draw[->] (vis) -- (enc);
+\draw[->] (query) -- (enc);
+\draw[->] (enc) -- (act);
+\end{tikzpicture}
+\caption{Method overview. Quality-aware iterative annotation provides a frozen segmenter and quality-weighted descriptor labels. RGB, soft semantics, proprioception, and supervised queries jointly support action-chunk prediction.}
+\label{fig:architecture}
+\end{figure*}

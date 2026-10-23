@@ -1,0 +1,123 @@
+\subsection{Task-Relevant Information Preservation}
+\label{sec:representationanalysis}
+% 承接B3：表示既要改善覆盖，又要保留解释专家动作所需的信息。
+We seek conditions under which a representation can improve coverage while controlling the conditional imitation-error discrepancy.
+% 语义用于引导信息保留，专家动作重构将这一设计思路连接到误差迁移界。
+We examine semantic guidance as a way to retain task-relevant information, then connect the accuracy of that information to expert-action reconstruction and a bound on $D_\phi$.
+
+% \subsubsection{语义引导的压缩与覆盖}
+\subsubsection{Semantic-Guided Compression and Coverage}
+% 压缩的目标是合并不影响动作选择的外观差异，而不是无条件追求分布对齐。
+Semantic guidance can encourage an encoder to merge appearance differences while retaining object-level structure relevant to action selection.
+% 这是表示设计动机，不是语义输入自动改善覆盖的结论。
+This motivates a representation design, not an automatic coverage guarantee.
+% 沿用B3，覆盖条件在表示空间的事件上成立，压缩后可能不再区分部分历史。
+As in Section~\ref{sec:representationcoverage}, compression can relax coverage requirements by making some history distinctions irrelevant to representation events.
+% 将确定性分割图附加在完整RGB上并不改变相对RGB的最优覆盖常数。
+Appending a deterministic semantic map while retaining the original RGB input does not itself change the best coverage constant relative to RGB, since projection recovers that input.
+% 因此分析对象是联合编码后的决策表示，而非输入通道数量。
+The relevant object is the learned decision representation $Z=\phi(t,\mathcal H_t)$, not the number of input modalities.
+
+% 分布合并若同时丢失专家动作选择依据，条件误差差异仍可能增大。
+Improved coverage alone does not ensure a tighter bound; the error associated with merging histories must also be accounted for.
+% 用共同专家读出重构动作是控制D的一个充分途径，不是必要条件。
+A sufficient route is to retain information from which a common rule can reconstruct expert actions under both demonstration and deployment distributions.
+% 这一行为相关的信息保留视角与既有表示抽象研究一致，但下文使用专家动作重构给出具体条件。
+This emphasis on decision-relevant information is consistent with information-state and behaviorally grounded representation analyses~\cite{subramanian2022ais,zhang2021dbc}.
+% 下文以对象属性和空间关系构造可检验的信息保留条件。
+We next formulate this requirement using object attributes and spatial relationships.
+
+% \subsubsection{任务信息与专家动作重构}
+\subsubsection{Task Information and Expert-Action Reconstruction}
+% 任务相关并不自动等于足以解释专家选择，需要明确近似条件。
+We examine when retained task information is sufficient to approximate expert choices.
+% 同时考虑信息本身的解释能力与从表示中估计这些信息的误差。
+The reconstruction error depends on both what the selected information fails to explain and how accurately it is estimated.
+
+% 固定被评价策略及两种分布，使用相同编码器和策略读出。
+Fix the evaluated policy $\pi$ and set $\mu=\bar\mu_\pi$, with $\nu$ the demonstration distribution.
+Write $\pi(h)=p(Z)$ for the same measurable policy readout under both distributions.
+% G向量描述对象属性与空间关系；语义掩码可以提供相应监督量。
+We define a task descriptor vector $G\in\R^{d_G}$ whose components describe task-relevant object attributes and spatial relationships.
+Semantic masks provide a way to construct such quantities, including visibility and relative position.
+% 上下文预先指定，而不是将完整历史不加限制地保留。
+Let $\chi$ denote task-specified proprioceptive and execution context, selected in advance rather than identified with the unrestricted history.
+% 读出估计和上下文均应来自策略实际使用的表示。
+Suppose $Z$ retains $\chi$ and supports an estimate $\widehat G\in\R^{d_G}$ of $G$.
+For $\rho\in\{\mu,\nu\}$, define $\delta_{G,\rho}=\E_\rho\norm{G-\widehat G}$.
+% 两分布上均须定义这些量，包括缺失信息的明确约定。
+These quantities must be defined under both distributions, with an explicit convention for unavailable components.
+
+% \begin{assumption}[描述量条件下的专家选择]
+\begin{assumption}[Descriptor-conditioned expert selection]
+\label{ass:expertselection}
+% 共同的专家近似规则在两种分布下使用同一组描述量和上下文。
+There exists a common measurable rule $g_{\mathrm E}$ mapping descriptors and context to $\mathcal A$ such that, for $\rho\in\{\mu,\nu\}$,
+\begin{equation}
+ \E_\rho\norm{\pi_{\mathrm E}(h)-g_{\mathrm E}(G,\chi)}
+ \le\epsilon_{\mathrm{sel},\rho}.
+ \label{eq:expertselectionapprox}
+\end{equation}
+% 描述量估计误差对动作重构的影响由共同有限敏感性控制。
+For a finite constant $K_{\mathrm E}\ge0$,
+\begin{equation}
+ \norm{g_{\mathrm E}(G,\chi)-g_{\mathrm E}(\widehat G,\chi)}
+ \le K_{\mathrm E}\norm{G-\widehat G}
+ \label{eq:expertselectionsensitivity}
+\end{equation}
+% 近似误差及估计误差有限，两种分布下几乎处处成立。
+holds almost surely under both distributions, with finite $\epsilon_{\mathrm{sel},\rho}$ and $\delta_{G,\rho}$.
+\end{assumption}
+% 解释信息选择与信息估计各自承担的误差。
+Here, $\epsilon_{\mathrm{sel},\rho}$ measures expert choices unexplained by $(G,\chi)$, while $K_{\mathrm E}$ controls sensitivity to estimation error.
+% 任务有用性不自动保证专家选择一致性。
+Task relevance alone does not imply this condition: equally successful actions may reflect different expert choices.
+
+% 由表示读出的共同专家近似把描述量误差转为动作重构误差。
+Define $\widehat a_{\mathrm E}(Z)=g_{\mathrm E}(\widehat G,\chi)$.
+The triangle inequality yields
+\begin{equation}
+ \E_\rho\norm{\pi_{\mathrm E}(h)-\widehat a_{\mathrm E}(Z)}
+ \le b_\rho
+ :=\epsilon_{\mathrm{sel},\rho}+K_{\mathrm E}\delta_{G,\rho}.
+ \label{eq:expertreconstruction}
+\end{equation}
+% 证明见附录；读出监督直接针对其中的描述量估计项。
+Appendix~\ref{app:expertreconstruction} gives the derivation.
+Supervising descriptor readouts targets the estimation term, while the choice of descriptors and context determines how well expert actions can be explained.
+
+% \subsubsection{条件模仿误差差异的约束}
+\subsubsection{Bounds on Conditional Imitation-Error Discrepancy}
+\label{sec:relationtransfer}
+% 共同的专家重构规则将信息保留直接连接到B3的D项。
+Expert-action reconstruction connects information preservation to the discrepancy in Section~\ref{sec:representationcoverage}.
+% 策略与专家近似都只依赖Z，两者的平方距离因而是跨分布相同的函数。
+Because both $\pi(h)=p(Z)$ and $\widehat a_{\mathrm E}(Z)$ depend on the same representation, their squared difference is a common function under $\mu$ and $\nu$.
+% 实际条件模仿误差偏离这一共同函数的程度由专家重构误差控制。
+Expert reconstruction error bounds how far the actual conditional imitation errors depart from this function.
+
+% 固定动作尺度，假设动作集合直径有限。
+Assume a finite action-set diameter $B_{\mathcal A}=\sup_{a,a'\in\mathcal A}\norm{a-a'}$ under a fixed action scale.
+% \begin{proposition}[通过专家动作重构约束条件误差迁移]
+\begin{proposition}[Conditional-error transfer through expert reconstruction]
+\label{prop:relationtransfer}
+% 沿用专家选择与表示覆盖条件，重构误差上界由前式定义。
+Under Assumption~\ref{ass:expertselection} and the representation-level coverage condition in Section~\ref{sec:representationcoverage}, with $b_\rho$ defined in~\eqref{eq:expertreconstruction},
+\begin{equation}
+ D_\phi\le 2B_{\mathcal A}(b_\mu+C_\phi b_\nu).
+ \label{eq:relationdiscrepancybound}
+\end{equation}
+% 再以动作敏感性将模仿误差迁移转换为任务失败概率界。
+If Assumption~\ref{ass:actionsensitivity} also holds,
+\begin{equation}
+ F(\pi)\le F(\pi_{\mathrm E})
+ +TL\sqrt{C_\phi R_\nu(\pi)+2B_{\mathcal A}(b_\mu+C_\phi b_\nu)}.
+ \label{eq:relationtransferfailure}
+\end{equation}
+\end{proposition}
+% 证明对应附录，不再另行展开理想例子。
+The proof is in Appendix~\ref{app:relationtransfer}.
+% 回到B3的设计目标，同时限制覆盖加权误差和专家重构误差。
+The design objective is therefore to improve coverage while preserving information needed to reconstruct expert actions.
+% 比较任务界时固定外部条件，综合项下降才收紧上界。
+For a fixed expert baseline, horizon, and action sensitivity, reducing the combined imitation and reconstruction terms tightens the task-failure bound.

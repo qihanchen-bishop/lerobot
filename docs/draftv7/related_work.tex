@@ -1,0 +1,30 @@
+\section{Related Work}
+% \subsection{Visuomotor Imitation Learning and Action Chunking}
+% ACT以条件变分模型预测动作块，并通过时间集成聚合重叠预测\cite{zhao2023act}。
+% Diffusion Policy以条件去噪生成动作序列，结合滚动时域执行使用新观测\cite{chi2023diffusion}。
+% 这些方法并非始终开环，但预测长度、执行前缀与推理延迟共同决定了新信息何时影响动作。
+% 本文关注冻结基础动作块策略上的监督式局部修正，而非重新学习流生成过程。
+% 因此，比较需要区分计划衔接、当前观测更新和历史证据的作用，不能仅以是否异步划分方法。
+
+% 动作模仿与任务表现的联系还受到访问分布和系统性质约束。
+% DAgger通过专家参与的数据聚合处理学习策略访问情形的变化\cite{ross2011}；
+% 稳定性约束模仿与TaSIL则在相应稳定性条件下研究误差传播\cite{tu2022,pfrommer2022tasil}。
+% \subsection{Semantic and Task-Structured Representations}
+% 对象结构提供了不同于纯动作回归的视觉先验。VIOLA将对象提议、全局视觉及控制上下文用于时序模仿学习\cite{zhu2023viola}；
+% Transporter Networks通过与操作空间匹配的特征搬运表达拾取与放置关系\cite{zeng2021transporter}。
+% 本文保留RGB，并加入语义图及关系查询监督：语义指定对象范围，关系监督约束查询保留目标、工具与区域的相对信息。
+% 这种设计既不直接监督注意力图，也不要求人工编写阶段控制律。
+
+% 任务相关表示应保留影响决策的差异，而不仅使图像特征更接近。
+% DBC借助奖励与转移的行为等价性学习表示\cite{zhang2021dbc}，AIS通过奖励与后续信息状态的近似误差分析历史压缩\cite{subramanian2022ais}。
+% 这些工作为表示的控制含义提供依据，但本文未学习相应的奖励或转移模型。
+% 我们的分析转而明确所选关系近似动作任务后果的条件；语义输入及监督是否改善关系提取，由独立读出和闭环消融检验。
+% **2\. Tu 2022、Pfrommer 2022：建议移到 Related Work 的理论分析段落。**
+
+% 这两篇用于说明稳定性与误差传播相关的研究背景，不是你当前覆盖条件和敏感性条件的直接出处。可以在那里保留：
+
+% ```
+% Stability-based analyses further relate imitation-learning guarantees
+% to the propagation of policy errors through closed-loop dynamics
+% \cite{tu2022,pfrommer2022tasil}.
+% ```

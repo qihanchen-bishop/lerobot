@@ -1,0 +1,89 @@
+\section{Method Details}
+\label{app:methoddetails}
+
+\subsection{Descriptor Labels and Quality Weights}
+\label{app:seguncertainty}
+\label{app:visibilityextension}
+% 质量依据描述量所需的类别和几何量传播，避免无关类别影响有效监督。
+Descriptor supervision uses the quality evidence relevant to its geometric definition rather than a single frame-wide score.
+% 举例说明面积、位置及工具端点依赖不同的分割证据。
+Visible area depends primarily on target extent and topology; relative position also depends on the localization of both objects, and a tool-endpoint vector is sensitive to tool shape.
+% 类别准入、描述量有效性及软降权共同确定权重。
+For the classes $\mathcal C_j$ used by descriptor $j$, let $\eta_{t,c}^{\mathrm{seg}}$ indicate that class $c$ passes anomaly screening, and let $m_{t,j}^{G}$ indicate that the descriptor is defined.
+The supervision weight is
+\begin{equation}
+ \varpi_{t,j}^{G}
+ =m_{t,j}^{G}
+  \prod_{c\in\mathcal C_j}\eta_{t,c}^{\mathrm{seg}}\,
+  g_j(\upsilon_{t,j}^{G}),
+ \label{eq:relationadmission}
+\end{equation}
+% 异常程度从相关证据汇总，g单调降权而非正确概率。
+where $\upsilon_{t,j}^{G}$ aggregates the relevant evidence in~\eqref{eq:segevidence}, and $g_j$ is a nonincreasing weight between zero and one.
+% 可信范围全权重，存疑降权，异常拒绝；人工审核确定边界。
+Reviewed descriptor labels determine the reliable, downweighted, and rejected ranges; these weights are not probabilities of correctness.
+% 缺少连续标定时仅使用准入，不凭空解释软分数。
+Without sufficient evidence to calibrate a graded weight, $g_j\equiv1$ gives validity and anomaly admission alone.
+% 所有组统一降权会被组内归一化抵消，主要作用是调整样本相对权重。
+The groupwise normalization in~\eqref{eq:methodbaseloss} primarily changes the relative contributions of samples within a descriptor group.
+
+% 区分不可见与漏分，未定义关系不以零距离填充。
+An empty mask is a valid zero-area label only when absence is confirmed by review or supporting temporal evidence.
+Undefined distances and directions are excluded from the auxiliary loss rather than labeled as zero.
+% 缺少光流对应不等价于错误，过度结构修补则不进入分割训练。
+Missing optical-flow correspondences provide no motion evidence, whereas excessive structural repair excludes a frame from segmentation training.
+% 离线诊断可使用完整视频，但不作为在线可用信息。
+Whole-video diagnostics may use later frames offline; they are not supplied to the deployed policy.
+
+\subsection{Pseudo-Label and Descriptor-Readout Errors}
+\label{app:pseudolabel}
+% 使用与C一致的分布索引，以三角不等式分离拟合与标签误差。
+For either evaluation distribution $\rho$ used in Section~\ref{sec:representationanalysis}, inserting the descriptor pseudo-label $\widetilde G$ gives
+\begin{equation}
+ \delta_{G,\rho}
+ \le \E_\rho\norm{\widehat G-\widetilde G}
+    +\E_\rho\norm{\widetilde G-G}.
+ \label{eq:pseudolabel}
+\end{equation}
+% 第一项是读出相对标签的误差，第二项是标签本身误差；质量筛选主要针对后者。
+The terms separate descriptor fitting from pseudo-label error, motivating quality screening in addition to query supervision.
+% 准入后的精度并不代表所有历史，需记录有效率。
+When measured only on admitted labels, this comparison concerns the admitted subset; the admission rate is reported alongside the error.
+
+\subsection{Task-Descriptor Instance}
+\label{app:descriptorinstance}
+% 当前实例仅从主视角计算几何描述量，不混合视角的像素坐标。
+Our task instance uses front-view masks for three descriptor groups, irrespective of whether the policy receives one or two camera views.
+% 三组分别为可见面积、目标区域距离和工具端点到目标的向量。
+They describe target visibility, target--region distance, and the vector from a tool endpoint to the target.
+% 定义图像尺寸、掩码与质心。
+For image width $W$ and height $H_I$, let $M_O,M_R,M_T$ be the object, region, and tool masks, with centroids $c_O,c_R,c_T$ when nonempty.
+The labels are
+\begin{equation}
+ \begin{aligned}
+ \widetilde G^{(1)}&=|M_O|/(WH_I),\\
+ \widetilde G^{(2)}&=\norm{c_O-c_R}/
+       \sqrt{(W-1)^2+(H_I-1)^2},\\
+ \widetilde G^{(3)}&=\clip(\bar c_O-\bar e_{T,L},-1,1).
+ \end{aligned}
+ \label{eq:methodgeometry}
+\end{equation}
+% 归一化像素坐标，保留方向符号。
+Here, $\bar c=(c_x/(W-1),c_y/(H_I-1))$, with rightward and downward positive directions.
+% 工具端点由主轴极值及左侧约定确定，不等同于物理接触端。
+The endpoint $\bar e_{T,L}$ is the leftmost of the two extremes along the tool mask's principal axis in normalized coordinates.
+This geometric convention need not identify the physical contact tip.
+% 区域质心距离用于辅助描述，不是任务完成判据。
+Target--region centroid distance is an auxiliary descriptor, not the criterion for complete target containment.
+
+\subsection{Evaluation Scope}
+\label{app:datascope}
+% 种子见过初始教师，作为参考而非独立最终测试。
+Seed videos used by the initial segmenter provide a development reference, not an independent final test.
+% 最终跨视频评价按完整视频隔离所有训练与选择过程。
+Cross-video evaluation requires held-out videos excluded from annotation-model fitting and selection, with the split maintained through policy training.
+Descriptor evaluation uses the base policy in deployment mode.
+For ACT, this sets the latent input to zero rather than conditioning on the demonstrated action posterior~\cite{zhao2023act}.
+
+% 草稿中的实现核对事项单独记录，不展开旧模型参数和审计流水。
+\draftnote{定稿前须完成统一数据划分及新版描述量质量权重的实现核对；已有结果不能自动作为新版方法的验证。待核对事项单列于 method\_implementation\_notes.md。}

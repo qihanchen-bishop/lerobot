@@ -1,0 +1,185 @@
+
+\section{}
+\label{app:actionproofs}
+\subsection{Proof of the Policy Performance-Difference Identity}
+\label{app:pdidentity}
+We prove~\eqref{eq:pd} by summing expected changes in the reference value.
+The evaluation-domain restriction in Section~\ref{sec:task} and
+Assumption~\ref{ass:visualassessability} give the terminal value
+\begin{equation}
+ V_T^{\pi_0}(\mathcal H_T)
+ =1-\mathcal V(I_{0:T}^{1:V})=1-\Psi.
+ \label{eq:appterminalvalue}
+\end{equation}
+
+For $t<T$, taking action $\pi(\mathcal H_t)$ and then following $\pi_0$
+gives the failure probability $V_{t+1}^{\pi_0}(\mathcal H_{t+1})$ conditional on the next history.
+Averaging over next histories under Assumption~\ref{ass:commonprocess} gives
+\begin{equation}
+ Q_t^{\pi_0}(\mathcal H_t,\pi(\mathcal H_t))
+ =
+ \E_\pi\!\left[
+ V_{t+1}^{\pi_0}(\mathcal H_{t+1})
+ \mid \mathcal H_t
+ \right].
+ \label{eq:appvaluerecursion}
+\end{equation}
+Here, $\pi$ determines the next-history distribution, while $V_{t+1}^{\pi_0}$
+accounts for subsequent execution under $\pi_0$.
+
+\begin{subequations}
+\label{eq:pdproof}
+Combining~\eqref{eq:actionconsequence} and~\eqref{eq:appvaluerecursion}
+and taking expectations gives
+\begin{equation}
+ \begin{aligned}
+ &\E_\pi[A_t^{\pi_0}(\mathcal H_t,\pi(\mathcal H_t))]\\
+ &=\E_\pi\!\left[\E_\pi\!\left[
+ V_{t+1}^{\pi_0}(\mathcal H_{t+1})\mid\mathcal H_t\right]\right]
+ -\E_\pi[V_t^{\pi_0}(\mathcal H_t)].
+ \end{aligned}
+ \label{eq:pdproofonestep}
+\end{equation}
+
+By the tower property, averaging the conditional next-step value over current histories
+gives its unconditional expectation:
+\begin{equation}
+ \begin{aligned}
+ &\E_\pi\!\left[\E_\pi\!\left[
+ V_{t+1}^{\pi_0}(\mathcal H_{t+1})\mid\mathcal H_t\right]\right]\\
+ &=\E_\pi[V_{t+1}^{\pi_0}(\mathcal H_{t+1})].
+ \end{aligned}
+ \label{eq:pdprooftower}
+\end{equation}
+
+Substituting~\eqref{eq:pdprooftower} into~\eqref{eq:pdproofonestep} and summing over time
+leaves only the terminal and initial terms:
+\begin{equation}
+ \begin{aligned}
+ &\E_\pi\sum_{t=0}^{T-1}A_t^{\pi_0}(\mathcal H_t,\pi(\mathcal H_t))\\
+ &=\sum_{t=0}^{T-1}\Bigl\{
+ \E_\pi[V_{t+1}^{\pi_0}(\mathcal H_{t+1})]-\E_\pi[V_t^{\pi_0}(\mathcal H_t)]\Bigr\}\\
+ &=\E_\pi[V_T^{\pi_0}(\mathcal H_T)]-\E_\pi[V_0^{\pi_0}(\mathcal H_0)].
+ \end{aligned}
+ \label{eq:pdprooftelescope}
+\end{equation}
+
+At time $T$, no action remains. By~\eqref{eq:appterminalvalue},
+the terminal term is the failure probability under $\pi$:
+\begin{equation}
+ \E_\pi[V_T^{\pi_0}(\mathcal H_T)]=\E_\pi[1-\Psi]=F(\pi).
+ \label{eq:pdproofterminal}
+\end{equation}
+
+The policies share the initial-history distribution, so the initial term equals
+the failure probability of following $\pi_0$ throughout:
+\begin{equation}
+ \begin{aligned}
+ \E_\pi[V_0^{\pi_0}(\mathcal H_0)]
+ &=\E_{\pi_0}[V_0^{\pi_0}(\mathcal H_0)]\\
+ &=F(\pi_0).
+ \end{aligned}
+ \label{eq:pdproofinitial}
+\end{equation}
+
+Finally, substituting~\eqref{eq:pdproofterminal} and~\eqref{eq:pdproofinitial}
+into~\eqref{eq:pdprooftelescope} gives
+\begin{equation}
+ \E_\pi\sum_{t=0}^{T-1}A_t^{\pi_0}(\mathcal H_t,\pi(\mathcal H_t))
+ =F(\pi)-F(\pi_0).
+ \label{eq:pdproofresult}
+\end{equation}
+\end{subequations}
+
+This establishes~\eqref{eq:pd}.
+
+\subsection{Proof of the Task-Failure Bound}
+\label{app:actionriskbound}
+We prove~\eqref{eq:successbound} by first bounding task consequences
+through action deviations and then transferring the resulting
+deployment error to the demonstration distribution.
+
+Set $\pi_0=\pi_{\mathrm E}$ and let $e(h)=\norm{\pi(h)-\pi_{\mathrm E}(h)}$.
+\begin{subequations}
+\label{eq:riskproof}
+Applying Assumption~\ref{ass:actionsensitivity} in~\eqref{eq:pd}
+bounds each step's increase in failure probability by its action deviation:
+\begin{equation}
+ F(\pi)-F(\pi_{\mathrm E})
+ \le L\,\E_\pi\!\left[\sum_{t=0}^{T-1}e(\mathcal H_t)\right].
+ \label{eq:riskproofsensitivity}
+\end{equation}
+
+Since $\bar\mu_\pi$ samples control steps uniformly, the time sum equals
+$T$ times the deployment average:
+\begin{equation}
+ \E_\pi\!\left[\sum_{t=0}^{T-1}e(\mathcal H_t)\right]
+ =T\,\E_{(t,h)\sim\bar\mu_\pi}e(h).
+ \label{eq:riskprooftimeaverage}
+\end{equation}
+
+By the Cauchy--Schwarz inequality, the mean action deviation is bounded
+by its root mean square:
+\begin{equation}
+ \E_{\bar\mu_\pi}e(h)
+ \le\sqrt{\E_{\bar\mu_\pi}e(h)^2}.
+ \label{eq:riskproofsquared}
+\end{equation}
+
+Assumption~\ref{ass:democoverage} also bounds expectations of nonnegative
+measurable functions, by simple-function approximation and monotone convergence.
+Applying it to $e(h)^2$ and using~\eqref{eq:populationimitationrisk} gives
+\begin{equation}
+ \E_{\bar\mu_\pi}e(h)^2
+ \le C\,\E_\nu e(h)^2=C R_\nu(\pi).
+ \label{eq:riskproofcoverage}
+\end{equation}
+\end{subequations}
+
+Combining~\eqref{eq:riskproofsensitivity}--\eqref{eq:riskproofcoverage}
+establishes~\eqref{eq:successbound}.
+
+% \subsection{表示层面迁移界的证明}
+\subsection{Proof of the Representation-Level Transfer Bound}
+\label{app:representationcoverage}
+% 先分离条件误差差异与分布覆盖，再用动作敏感性得到任务界。
+We prove~\eqref{eq:representationrisktransfer-main} by separating conditional error discrepancy from distributional coverage, then apply action sensitivity to obtain~\eqref{eq:representationcoveragebound}.
+
+% 沿用B3符号及其可积性和可测条件均值条件。
+Let $\mu=\bar\mu_\pi$, with the remaining notation and the integrability and measurable conditional-mean conditions as in Section~\ref{sec:representationcoverage}.
+% 表示覆盖保证示范零测集也是部署零测集，因此示范侧条件均值在部署表示下有意义。
+Representation coverage ensures that $\nu_Z$-null sets are also $\mu_Z$-null sets, so the demonstration-side conditional mean is well defined for the deployment comparison.
+
+\begin{subequations}
+\label{eq:representationrisktransfer}
+% 第一步：按表示条件化，将部署误差写成各表示下条件平均误差的平均。
+First, conditioning on the representation gives
+\begin{equation}
+ \E_\mu e(h)^2=\E_{\mu_Z}m_\mu(Z).
+ \label{eq:transferconditioning}
+\end{equation}
+
+% 第二步：同一表示下部署与示范的误差可能不同，由D_phi控制这一差异。
+At the same representation, deployment and demonstration conditional errors can differ. By the definition of $D_\phi$,
+\begin{equation}
+ \begin{aligned}
+ \E_{\mu_Z}m_\mu(Z)
+ &\le\E_{\mu_Z}m_\nu(Z)
+    +\E_{\mu_Z}|m_\mu(Z)-m_\nu(Z)|\\
+ &=\E_{\mu_Z}m_\nu(Z)+D_\phi.
+ \end{aligned}
+ \label{eq:transferdiscrepancy}
+\end{equation}
+
+% 第三步：对非负条件误差应用表示覆盖，再用全期望得到示范总体风险。
+Finally, applying representation coverage to the nonnegative function $m_\nu$ and taking the total expectation give
+\begin{equation}
+ \E_{\mu_Z}m_\nu(Z)
+ \le C_\phi\E_{\nu_Z}m_\nu(Z)
+ =C_\phi R_\nu(\pi).
+ \label{eq:transfercoverage}
+\end{equation}
+\end{subequations}
+% 上述三步建立风险迁移界。任务界沿用A-B的敏感性、时间平均与Cauchy--Schwarz步骤。
+Combining~\eqref{eq:transferconditioning}--\eqref{eq:transfercoverage} establishes~\eqref{eq:representationrisktransfer-main}.
+Under Assumption~\ref{ass:actionsensitivity}, substituting this result into the sensitivity, time-average, and Cauchy--Schwarz steps~\eqref{eq:riskproofsensitivity}--\eqref{eq:riskproofsquared} yields~\eqref{eq:representationcoveragebound}.

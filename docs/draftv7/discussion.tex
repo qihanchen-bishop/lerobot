@@ -1,0 +1,42 @@
+% 定量失败统计在实验章节，机制解释与适用边界在此集中讨论。
+\section{Discussion and Conclusion}
+\label{sec:discussion}
+\subsection{Failure Cases and Limitations}
+\label{sec:failureanalysis}
+本节结合表~\ref{tab:failurecounts}的失败分布和同步视频、指令、感知日志，
+分析完整方法尚未解决的问题。
+案例选择覆盖不同失败类型，不以个别成功片段替代整体统计。
+
+\begin{figure*}[t]
+\centering
+\fbox{\parbox[c][2.4cm][c]{.95\textwidth}{\centering
+(a) 持续分割错误：RGB、语义预测、人工审核\\[4pt]
+(b) 描述量准确但执行失败：任务关系与接触状态\\[4pt]
+填写两个任务的代表性案例；只标注日志与视频支持的事实}}
+\caption{Representative failure cases and supporting evidence. Placeholder for perception and task-information limitations.}
+\label{fig:failurecases}
+\end{figure*}
+
+\subsubsection{Perception and Task Information}
+质量筛选针对视频中的异常变化，不能排除时间上稳定的系统性误分。
+所选描述量刻画对象属性与空间关系，但不一定足以解释接触状态或专家的具体动作选择；
+语义分割准确与描述量读出准确也不意味着策略已经正确利用这些信息。
+\draftnote{结合图~\ref{fig:failurecases}(a,b)区分分割错误、描述量估计错误和执行决策错误。
+说明是否存在描述量准确仍失败的情况，并联系理论中的专家选择近似误差解释未被当前信息覆盖的动作选择因素。
+没有探针或干预证据时，将原因表述为待验证解释，而非确定归因。}
+
+\subsubsection{Scope of the Evidence}
+本文的任务表现界使用总体模仿误差，并依赖覆盖、动作敏感性和专家选择条件。
+独立轨迹上的读出和动作误差用于检验相应机制，
+不能将有限训练损失直接代入这些界，也不能据更紧的上界确定实际成功率排序。
+两个任务上的分别训练验证方法的适用性，不等同于零样本跨任务迁移；
+手术模拟材料上的实验亦不构成临床有效性证据。
+\draftnote{根据真实划分与训练重复说明结论覆盖哪些物体、位置和平台。
+联系理论B--C总结哪些机制获得实验支持、哪些条件尚未得到直接测量；
+概括新增任务的描述量设计、语义标注与训练成本。
+若未做多预算实验，不声明样本效率优势；QToken没有独立停止头时，不将任务成功等同于自主停止能力。}
+
+\subsection{Conclusion}
+\draftnote{用一段总结问题、两个方法模块及两个实机任务支持的核心结论。
+填写实际成功率、稳定性或恢复收益，只保留与匹配对照相符的表述；
+最后指出一个由失败分析直接支持的主要局限，不预先声明显著提升、通用性或收敛保证。}

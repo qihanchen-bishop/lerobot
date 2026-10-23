@@ -1,0 +1,108 @@
+\subsection{Visuomotor Imitation Learning}
+\label{sec:task}
+
+We study offline visuomotor imitation learning from a finite, fixed set of robot demonstrations,
+for manipulation tasks whose completion can be assessed from visual history.
+The policy generates control commands from visual and proprioceptive observations and available execution history.
+Training is based on this fixed demonstration dataset, with demonstrated actions providing the primary imitation target, 
+whereas deployment performance is measured by the probability of task completion over a finite horizon.
+
+\subsubsection{System and Observations}
+
+Consider a robotic system governed by a single decision policy that performs a given manipulation task
+through the joint actions of its actuators.
+The joint robot-environment state $s_t\in\mathcal S$ evolves under the command
+$u_t\in\mathcal A$ and gives rise to observation $o_t$.
+The observation $o_t=(I_t^{1:V},q_t)$ comprises multi-view images
+$I_t^{1:V}=(I_t^1,\ldots,I_t^V)$ and proprioceptive information $q_t$,
+where $V\ge1$ is the number of cameras and $I_t^v$ is the image from the $v$th view.
+Over a finite horizon of $T$ control steps, this interaction is represented by the following partially observed controlled process:
+\begin{align}
+ s_0&\sim p_0,\nonumber\\
+ s_{t+1}&\sim P(\cdot\mid s_t,u_t),\quad 0\le t<T,\nonumber\\
+ o_t&\sim O(\cdot\mid s_t),\quad 0\le t\le T.
+ \label{eq:interactionmodel}
+\end{align}
+Here, $\mathcal S$ is the state space, $\mathcal A\subseteq\R^{d_u}$ is the admissible command set
+specified by the chosen robot control interface,
+$d_u$ is the command dimension, $p_0$ is the initial-state distribution,
+and $P$ and $O$ are the transition and observation kernels, respectively.
+
+\subsubsection{Offline Demonstrations and Policy}
+The policy learns from a fixed demonstration set $\mathcal D=\{\zeta_i\}_{i=1}^{N}$
+for the same manipulation task. The $i$th demonstration trajectory $\zeta_i$ records
+observations and demonstrated control commands:
+\begin{equation}
+ \zeta_i=(o_0^i,u_0^{\mathrm E,i},o_1^i,\ldots,
+ u_{T_i-1}^{\mathrm E,i},o_{T_i}^i).
+ \label{eq:demonstrations}
+\end{equation}
+Here, $N$ is the finite number of demonstrations, $T_i\ge1$ is the number of control steps
+in the $i$th trajectory, and the superscript $\mathrm E$ denotes demonstrated commands.
+
+
+The information available to the deployed policy $\pi$ is represented by the history $\mathcal H_t$.
+This history includes observations $o_{0:t}$ obtained up to time $t$, previously executed commands $u_{0:t-1}$, 
+and other runtime records before the current decision.
+The policy defines a distribution over admissible control commands,
+with $u_t\sim\pi(\cdot\mid\mathcal H_t)$.
+The command history is empty at $t=0$.
+
+\subsubsection{Learning and Task Objectives}
+For the following analysis, we consider deterministic policies acting on the available history,
+with $\pi_{\mathrm E}$ denoting the expert policy.
+Let $\nu$ denote the population distribution underlying the demonstrations,
+where $(t,h)\sim\nu$ specifies a control step and its available history.
+We define the population imitation risk as the expected squared
+Euclidean deviation from the expert's action:
+\begin{equation}
+ R_\nu(\pi)
+ :=\E_{(t,h)\sim\nu}\norm{\pi(h)-\pi_{\mathrm E}(h)}^2.
+ \label{eq:populationimitationrisk}
+\end{equation}
+% 训练通过有限示范上的经验模仿损失来追求降低总体风险，具体损失在方法部分定义。
+Training seeks to reduce this risk through an empirical imitation loss
+on the finite demonstrations; the specific training losses are defined in Section~\ref{sec:method}.
+
+The deployment objective is to complete the task within the finite horizon.
+The measurable task-completion function $\Phi:\mathcal S^{T+1}\to\{0,1\}$ equals $1$
+for state trajectories satisfying the task's terminal or temporal requirements and $0$ otherwise.
+This defines the completion indicator $\Psi$ and the task-completion probability $J(\pi)$ of the deployed policy $\pi$:
+\begin{equation}
+ \Psi=\Phi(s_{0:T}),\qquad
+ J(\pi)=\Prob_\pi(\Psi=1).
+ \label{eq:visualtask}
+\end{equation}
+Here, $\Prob_\pi$ is the trajectory probability law induced jointly by the system model
+and the complete deployed policy $\pi$.
+% 学习旨在降低模仿风险，部署则追求更高任务成功率；后续分析研究二者何时能够联系起来。
+Learning aims to reduce $R_\nu(\pi)$, whereas deployment aims to increase $J(\pi)$.
+A lower imitation risk does not by itself guarantee a higher task-completion probability;
+the following analysis examines conditions relating these objectives.
+
+
+\subsubsection{Visual Assessability}
+Under a fixed camera configuration and evaluation horizon $T$, the evaluation domain
+$\Omega_{\mathrm{eval}}\subseteq\mathcal S^{T+1}\times\mathcal I^{T+1}$
+consists of prespecified pairs of physical trajectories and visual histories
+consistent with the system model and visibility conditions,
+where $\mathcal I$ is the space of multi-view image tuples $I_t^{1:V}$.
+
+\begin{assumption}[Visual assessability]
+\label{ass:visualassessability}
+% 存在可测的视觉判别函数 $\mathcal V:\mathcal I^{T+1}\to\{0,1\}$，
+% 使任意 $(s_{0:T},I_{0:T}^{1:V})\in\Omega_{\mathrm{eval}}$ 均满足
+There exists a measurable visual decision function $\mathcal V:\mathcal I^{T+1}\to\{0,1\}$
+such that, for every $(s_{0:T},I_{0:T}^{1:V})\in\Omega_{\mathrm{eval}}$,
+\begin{equation}
+ \Phi(s_{0:T})=\mathcal V(I_{0:T}^{1:V}).
+ \label{eq:visassumption}
+\end{equation}
+\end{assumption}
+
+% 该假设只要求评价域内的任务完成可由视觉判断，不要求完整状态可观测。
+Assumption~\ref{ass:visualassessability} specifies visual identifiability of completion within the evaluation domain,
+without requiring full-state observability.
+% 后续分析中的策略执行及反事实动作比较均限于物理轨迹与视觉历史几乎必然落在评价域内的过程。
+The subsequent analysis considers policy executions and counterfactual action comparisons
+for which $(s_{0:T},I_{0:T}^{1:V})\in\Omega_{\mathrm{eval}}$ almost surely.

@@ -1,0 +1,113 @@
+﻿method,object,code,label,trials_with_tag,failed_trials_with_tag,successful_trials_with_tag,recovered
+ACT,ALL,air_sweep,tool 拨空气／未接触目标,36,36,0,1
+ACT,ALL,near_region,差点进／停在区域边缘,4,2,2,2
+ACT,ALL,object_trapped,物体卡布里／被布套住,9,9,0,2
+ACT,ALL,oscillation,反复横跳／小范围摆动／抽搐,35,34,1,1
+ACT,ALL,tool_too_high,在物体上面拨／tool 太高,12,10,2,2
+ACT,ALL,wrong_direction,推偏／方向错误,5,5,0,0
+ACT,cube,air_sweep,tool 拨空气／未接触目标,6,6,0,0
+ACT,cube,object_trapped,物体卡布里／被布套住,2,2,0,0
+ACT,cube,oscillation,反复横跳／小范围摆动／抽搐,1,1,0,0
+ACT,cube,tool_too_high,在物体上面拨／tool 太高,4,3,1,1
+ACT,cube,wrong_direction,推偏／方向错误,2,2,0,0
+ACT,paperball,air_sweep,tool 拨空气／未接触目标,11,11,0,0
+ACT,paperball,near_region,差点进／停在区域边缘,1,1,0,0
+ACT,paperball,object_trapped,物体卡布里／被布套住,1,1,0,0
+ACT,paperball,oscillation,反复横跳／小范围摆动／抽搐,11,11,0,0
+ACT,paperball,tool_too_high,在物体上面拨／tool 太高,4,3,1,1
+ACT,paperball,wrong_direction,推偏／方向错误,1,1,0,0
+ACT,screw,air_sweep,tool 拨空气／未接触目标,11,11,0,1
+ACT,screw,near_region,差点进／停在区域边缘,3,1,2,2
+ACT,screw,oscillation,反复横跳／小范围摆动／抽搐,14,13,1,1
+ACT,screw,tool_too_high,在物体上面拨／tool 太高,4,4,0,0
+ACT,screw,wrong_direction,推偏／方向错误,2,2,0,0
+ACT,crayon,air_sweep,tool 拨空气／未接触目标,8,8,0,0
+ACT,crayon,object_trapped,物体卡布里／被布套住,6,6,0,2
+ACT,crayon,oscillation,反复横跳／小范围摆动／抽搐,9,9,0,0
+DP,ALL,air_sweep,tool 拨空气／未接触目标,44,40,4,4
+DP,ALL,hesitation,启动或中途犹豫／动作选择迟疑,1,1,0,0
+DP,ALL,object_trapped,物体卡布里／被布套住,7,6,1,1
+DP,ALL,oscillation,反复横跳／小范围摆动／抽搐,40,40,0,0
+DP,ALL,overshoot,推过头／弹射／滑出目标区,1,1,0,0
+DP,ALL,tool_too_high,在物体上面拨／tool 太高,1,1,0,0
+DP,ALL,wrong_direction,推偏／方向错误,3,3,0,0
+DP,cube,air_sweep,tool 拨空气／未接触目标,11,11,0,0
+DP,cube,hesitation,启动或中途犹豫／动作选择迟疑,1,1,0,0
+DP,cube,oscillation,反复横跳／小范围摆动／抽搐,7,7,0,0
+DP,cube,wrong_direction,推偏／方向错误,1,1,0,0
+DP,paperball,air_sweep,tool 拨空气／未接触目标,10,8,2,2
+DP,paperball,object_trapped,物体卡布里／被布套住,2,2,0,0
+DP,paperball,oscillation,反复横跳／小范围摆动／抽搐,7,7,0,0
+DP,screw,air_sweep,tool 拨空气／未接触目标,11,10,1,1
+DP,screw,oscillation,反复横跳／小范围摆动／抽搐,11,11,0,0
+DP,screw,overshoot,推过头／弹射／滑出目标区,1,1,0,0
+DP,screw,wrong_direction,推偏／方向错误,1,1,0,0
+DP,crayon,air_sweep,tool 拨空气／未接触目标,12,11,1,1
+DP,crayon,object_trapped,物体卡布里／被布套住,5,4,1,1
+DP,crayon,oscillation,反复横跳／小范围摆动／抽搐,15,15,0,0
+DP,crayon,tool_too_high,在物体上面拨／tool 太高,1,1,0,0
+DP,crayon,wrong_direction,推偏／方向错误,1,1,0,0
+RGBQtoken,ALL,air_sweep,tool 拨空气／未接触目标,12,11,1,1
+RGBQtoken,ALL,near_region,差点进／停在区域边缘,2,1,1,1
+RGBQtoken,ALL,object_trapped,物体卡布里／被布套住,7,7,0,2
+RGBQtoken,ALL,oscillation,反复横跳／小范围摆动／抽搐,10,10,0,0
+RGBQtoken,ALL,pushed_away,推远／拨远了拨不回来,2,2,0,0
+RGBQtoken,ALL,tool_too_high,在物体上面拨／tool 太高,1,0,1,1
+RGBQtoken,ALL,wrong_direction,推偏／方向错误,5,5,0,0
+RGBQtoken,cube,air_sweep,tool 拨空气／未接触目标,3,3,0,0
+RGBQtoken,cube,object_trapped,物体卡布里／被布套住,2,2,0,2
+RGBQtoken,cube,oscillation,反复横跳／小范围摆动／抽搐,3,3,0,0
+RGBQtoken,cube,tool_too_high,在物体上面拨／tool 太高,1,0,1,1
+RGBQtoken,cube,wrong_direction,推偏／方向错误,3,3,0,0
+RGBQtoken,paperball,air_sweep,tool 拨空气／未接触目标,2,1,1,1
+RGBQtoken,paperball,near_region,差点进／停在区域边缘,1,0,1,1
+RGBQtoken,paperball,object_trapped,物体卡布里／被布套住,4,4,0,0
+RGBQtoken,paperball,pushed_away,推远／拨远了拨不回来,2,2,0,0
+RGBQtoken,paperball,wrong_direction,推偏／方向错误,1,1,0,0
+RGBQtoken,screw,air_sweep,tool 拨空气／未接触目标,4,4,0,0
+RGBQtoken,screw,oscillation,反复横跳／小范围摆动／抽搐,4,4,0,0
+RGBQtoken,screw,wrong_direction,推偏／方向错误,1,1,0,0
+RGBQtoken,crayon,air_sweep,tool 拨空气／未接触目标,3,3,0,0
+RGBQtoken,crayon,near_region,差点进／停在区域边缘,1,1,0,0
+RGBQtoken,crayon,object_trapped,物体卡布里／被布套住,1,1,0,0
+RGBQtoken,crayon,oscillation,反复横跳／小范围摆动／抽搐,3,3,0,0
+segNoQtoken,ALL,air_sweep,tool 拨空气／未接触目标,30,29,1,1
+segNoQtoken,ALL,hesitation,启动或中途犹豫／动作选择迟疑,1,1,0,0
+segNoQtoken,ALL,near_region,差点进／停在区域边缘,2,1,1,1
+segNoQtoken,ALL,object_trapped,物体卡布里／被布套住,5,5,0,0
+segNoQtoken,ALL,oscillation,反复横跳／小范围摆动／抽搐,33,33,0,0
+segNoQtoken,ALL,tool_too_high,在物体上面拨／tool 太高,1,1,0,0
+segNoQtoken,ALL,wrong_direction,推偏／方向错误,2,1,1,1
+segNoQtoken,cube,air_sweep,tool 拨空气／未接触目标,2,2,0,0
+segNoQtoken,cube,near_region,差点进／停在区域边缘,1,1,0,0
+segNoQtoken,cube,object_trapped,物体卡布里／被布套住,4,4,0,0
+segNoQtoken,cube,oscillation,反复横跳／小范围摆动／抽搐,6,6,0,0
+segNoQtoken,cube,tool_too_high,在物体上面拨／tool 太高,1,1,0,0
+segNoQtoken,cube,wrong_direction,推偏／方向错误,2,1,1,1
+segNoQtoken,paperball,air_sweep,tool 拨空气／未接触目标,12,12,0,0
+segNoQtoken,paperball,hesitation,启动或中途犹豫／动作选择迟疑,1,1,0,0
+segNoQtoken,paperball,object_trapped,物体卡布里／被布套住,1,1,0,0
+segNoQtoken,paperball,oscillation,反复横跳／小范围摆动／抽搐,12,12,0,0
+segNoQtoken,screw,air_sweep,tool 拨空气／未接触目标,9,8,1,1
+segNoQtoken,screw,near_region,差点进／停在区域边缘,1,0,1,1
+segNoQtoken,screw,oscillation,反复横跳／小范围摆动／抽搐,8,8,0,0
+segNoQtoken,crayon,air_sweep,tool 拨空气／未接触目标,7,7,0,0
+segNoQtoken,crayon,oscillation,反复横跳／小范围摆动／抽搐,7,7,0,0
+viewQtoken,ALL,air_sweep,tool 拨空气／未接触目标,2,1,1,2
+viewQtoken,ALL,near_region,差点进／停在区域边缘,4,1,3,3
+viewQtoken,ALL,object_trapped,物体卡布里／被布套住,3,3,0,1
+viewQtoken,ALL,oscillation,反复横跳／小范围摆动／抽搐,1,1,0,0
+viewQtoken,ALL,overshoot,推过头／弹射／滑出目标区,1,0,1,1
+viewQtoken,ALL,tool_trapped,tool 卡布里／被布套住,1,0,1,1
+viewQtoken,ALL,wrong_direction,推偏／方向错误,1,0,1,1
+viewQtoken,cube,air_sweep,tool 拨空气／未接触目标,1,1,0,1
+viewQtoken,cube,near_region,差点进／停在区域边缘,1,0,1,1
+viewQtoken,cube,object_trapped,物体卡布里／被布套住,1,1,0,1
+viewQtoken,cube,oscillation,反复横跳／小范围摆动／抽搐,1,1,0,0
+viewQtoken,cube,wrong_direction,推偏／方向错误,1,0,1,1
+viewQtoken,paperball,object_trapped,物体卡布里／被布套住,1,1,0,0
+viewQtoken,paperball,tool_trapped,tool 卡布里／被布套住,1,0,1,1
+viewQtoken,screw,near_region,差点进／停在区域边缘,3,1,2,2
+viewQtoken,screw,overshoot,推过头／弹射／滑出目标区,1,0,1,1
+viewQtoken,crayon,air_sweep,tool 拨空气／未接触目标,1,0,1,1
+viewQtoken,crayon,object_trapped,物体卡布里／被布套住,1,1,0,0

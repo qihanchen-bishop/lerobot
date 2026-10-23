@@ -1,0 +1,5 @@
+﻿method,semantic_input,supervised_Qtoken,successes,n,success_rate_pct
+ACT,False,False,54,96,56.25
+RGBQtoken,False,True,72,96,75.0
+segNoQtoken,True,False,60,96,62.5
+viewQtoken,True,True,92,96,95.83333333333333

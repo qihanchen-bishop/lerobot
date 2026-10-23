@@ -1,0 +1,5 @@
+﻿factor,context,baseline,added_factor,gain_pp
+semantic_input,without_Qtoken,ACT,segNoQtoken,6.25
+semantic_input,with_Qtoken,RGBQtoken,viewQtoken,20.83333333333333
+Qtoken,without_semantic_input,ACT,RGBQtoken,18.75
+Qtoken,with_semantic_input,segNoQtoken,viewQtoken,33.33333333333333

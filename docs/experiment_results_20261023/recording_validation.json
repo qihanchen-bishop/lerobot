@@ -1,0 +1,2408 @@
+{
+  "runs_checked": 480,
+  "parquet_frame_counts_and_indices_match": true,
+  "image_column_schemas_match": true,
+  "image_payloads_not_decoded": true,
+  "runs": [
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_170128",
+      "frames": 449
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_170156",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_170315",
+      "frames": 425
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_170344",
+      "frames": 483
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_170422",
+      "frames": 641
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_170511",
+      "frames": 537
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_170604",
+      "frames": 1192
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_170818",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_170936",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171054",
+      "frames": 391
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171122",
+      "frames": 437
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171152",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171309",
+      "frames": 467
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171339",
+      "frames": 464
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171413",
+      "frames": 517
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171500",
+      "frames": 457
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171622",
+      "frames": 357
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171645",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171843",
+      "frames": 412
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171911",
+      "frames": 375
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_171937",
+      "frames": 389
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_172005",
+      "frames": 458
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_172102",
+      "frames": 464
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_172134",
+      "frames": 497
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_172215",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_172405",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_172522",
+      "frames": 443
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_172550",
+      "frames": 395
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_172617",
+      "frames": 477
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261021_172649",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_090334",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_090453",
+      "frames": 503
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_090525",
+      "frames": 362
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_090549",
+      "frames": 1193
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_090708",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_090818",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_090932",
+      "frames": 382
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_091011",
+      "frames": 363
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_091102",
+      "frames": 1193
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_091217",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_091335",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_091600",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_091725",
+      "frames": 329
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_091750",
+      "frames": 368
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_091820",
+      "frames": 327
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_091842",
+      "frames": 795
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_091949",
+      "frames": 360
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_092013",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_092143",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_092252",
+      "frames": 1193
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_092409",
+      "frames": 503
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_092440",
+      "frames": 430
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_092512",
+      "frames": 646
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_092704",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_092823",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_092934",
+      "frames": 1024
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_093228",
+      "frames": 1147
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_093340",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_093507",
+      "frames": 354
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_093534",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_093700",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_093829",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_094003",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_094110",
+      "frames": 355
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_095052",
+      "frames": 350
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_095114",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_095232",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_095344",
+      "frames": 314
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_095412",
+      "frames": 343
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_095444",
+      "frames": 305
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_095518",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_095638",
+      "frames": 1177
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_141100",
+      "frames": 1193
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_141215",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_141351",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_141505",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_141619",
+      "frames": 679
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_141703",
+      "frames": 1195
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_141902",
+      "frames": 382
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_141957",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_142240",
+      "frames": 1192
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_142357",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_142518",
+      "frames": 362
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_142544",
+      "frames": 376
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_142617",
+      "frames": 370
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_142643",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_142824",
+      "frames": 369
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_142848",
+      "frames": 375
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_142945",
+      "frames": 335
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_143007",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_143131",
+      "frames": 329
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_143153",
+      "frames": 337
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_143220",
+      "frames": 333
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_143302",
+      "frames": 341
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_143333",
+      "frames": 1194
+    },
+    {
+      "method": "ACT",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/act/ACT_DatasetNorm/eval_test_20261022_143502",
+      "frames": 391
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_100358",
+      "frames": 1187
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_100546",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_101222",
+      "frames": 1181
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_101332",
+      "frames": 1188
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_101441",
+      "frames": 427
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_101512",
+      "frames": 363
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_101757",
+      "frames": 559
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_101839",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_102059",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_102339",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_102445",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_102718",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_102844",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_103028",
+      "frames": 820
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_103457",
+      "frames": 635
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_103557",
+      "frames": 636
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_103650",
+      "frames": 437
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_103724",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_103842",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_104023",
+      "frames": 335
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_104102",
+      "frames": 357
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_104145",
+      "frames": 336
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_104328",
+      "frames": 316
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_104454",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_104631",
+      "frames": 318
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_104701",
+      "frames": 761
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_104818",
+      "frames": 1188
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_105044",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_105237",
+      "frames": 410
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_105310",
+      "frames": 484
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_105345",
+      "frames": 1188
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_105529",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_105651",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_105921",
+      "frames": 1186
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_110137",
+      "frames": 311
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_110255",
+      "frames": 959
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_110551",
+      "frames": 506
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_110931",
+      "frames": 473
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_111015",
+      "frames": 421
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_111056",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_111203",
+      "frames": 697
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_111251",
+      "frames": 276
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_111313",
+      "frames": 308
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_111349",
+      "frames": 303
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_111415",
+      "frames": 325
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_111615",
+      "frames": 392
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_111708",
+      "frames": 376
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_112157",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_112531",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_112708",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_113058",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_113352",
+      "frames": 689
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_113435",
+      "frames": 392
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_113520",
+      "frames": 392
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_113646",
+      "frames": 376
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_113722",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_114006",
+      "frames": 1187
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_114141",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_114314",
+      "frames": 568
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_114408",
+      "frames": 387
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_114444",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_114634",
+      "frames": 471
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_114710",
+      "frames": 326
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_114736",
+      "frames": 1188
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_114904",
+      "frames": 1189
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_115057",
+      "frames": 319
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_115133",
+      "frames": 1188
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_115311",
+      "frames": 282
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_115345",
+      "frames": 290
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_115443",
+      "frames": 309
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_115507",
+      "frames": 309
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_120013",
+      "frames": 441
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_143551",
+      "frames": 1185
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_143737",
+      "frames": 1185
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_143915",
+      "frames": 1185
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_144032",
+      "frames": 1186
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_144148",
+      "frames": 1185
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_144309",
+      "frames": 716
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_144423",
+      "frames": 737
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_144534",
+      "frames": 1185
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_144656",
+      "frames": 1185
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_144811",
+      "frames": 1185
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_144932",
+      "frames": 1185
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_145046",
+      "frames": 1186
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_145244",
+      "frames": 369
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_145310",
+      "frames": 743
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_145356",
+      "frames": 410
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_145428",
+      "frames": 391
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_145503",
+      "frames": 1186
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_145620",
+      "frames": 1186
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_145754",
+      "frames": 1187
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_145911",
+      "frames": 1185
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_150029",
+      "frames": 1185
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_150159",
+      "frames": 349
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_150243",
+      "frames": 376
+    },
+    {
+      "method": "DP",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/diffusion/DP_DatasetNorm/eval_test_20261022_150307",
+      "frames": 326
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_094345",
+      "frames": 1172
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_094510",
+      "frames": 376
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_094543",
+      "frames": 412
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_094615",
+      "frames": 1166
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_094753",
+      "frames": 380
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_094821",
+      "frames": 410
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_094853",
+      "frames": 460
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_094927",
+      "frames": 562
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095055",
+      "frames": 1168
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095216",
+      "frames": 1169
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095346",
+      "frames": 386
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095415",
+      "frames": 356
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095445",
+      "frames": 380
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095513",
+      "frames": 369
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095543",
+      "frames": 411
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095613",
+      "frames": 457
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095648",
+      "frames": 325
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095714",
+      "frames": 1167
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095857",
+      "frames": 343
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095925",
+      "frames": 340
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_095956",
+      "frames": 1171
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_100125",
+      "frames": 381
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_100157",
+      "frames": 353
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_100223",
+      "frames": 350
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_100302",
+      "frames": 734
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_100351",
+      "frames": 342
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_100421",
+      "frames": 569
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_100542",
+      "frames": 1170
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_100807",
+      "frames": 1171
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_100929",
+      "frames": 1169
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_101051",
+      "frames": 1172
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_101215",
+      "frames": 1169
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_101339",
+      "frames": 300
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_101409",
+      "frames": 322
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_101440",
+      "frames": 308
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_101507",
+      "frames": 318
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_101545",
+      "frames": 1166
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_101708",
+      "frames": 422
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_101822",
+      "frames": 372
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_101901",
+      "frames": 433
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_101942",
+      "frames": 1163
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_102110",
+      "frames": 1168
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_102241",
+      "frames": 308
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_102312",
+      "frames": 299
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_102338",
+      "frames": 524
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_102424",
+      "frames": 477
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_102615",
+      "frames": 334
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_102651",
+      "frames": 357
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_102745",
+      "frames": 361
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_102957",
+      "frames": 337
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_103028",
+      "frames": 349
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_103054",
+      "frames": 348
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_103131",
+      "frames": 345
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_103157",
+      "frames": 406
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_103236",
+      "frames": 356
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_103304",
+      "frames": 398
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_103342",
+      "frames": 1154
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_103501",
+      "frames": 1153
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_103626",
+      "frames": 1151
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_103747",
+      "frames": 1148
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104012",
+      "frames": 330
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104043",
+      "frames": 317
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104114",
+      "frames": 314
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104143",
+      "frames": 371
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104215",
+      "frames": 292
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104243",
+      "frames": 283
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104314",
+      "frames": 1171
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104451",
+      "frames": 560
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104551",
+      "frames": 606
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104633",
+      "frames": 494
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104754",
+      "frames": 314
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104824",
+      "frames": 314
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_104919",
+      "frames": 1170
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105024",
+      "frames": 1167
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105143",
+      "frames": 1171
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105255",
+      "frames": 412
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105327",
+      "frames": 434
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105356",
+      "frames": 451
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105431",
+      "frames": 615
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105510",
+      "frames": 486
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105545",
+      "frames": 361
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105612",
+      "frames": 1170
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105726",
+      "frames": 366
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105757",
+      "frames": 355
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105829",
+      "frames": 444
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105858",
+      "frames": 421
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_105929",
+      "frames": 395
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_110001",
+      "frames": 385
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_110033",
+      "frames": 291
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_110057",
+      "frames": 1169
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_110210",
+      "frames": 307
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_110237",
+      "frames": 323
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_110306",
+      "frames": 354
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_110352",
+      "frames": 357
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_110434",
+      "frames": 409
+    },
+    {
+      "method": "RGBQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/RGBQtoken/eval_test_20261023_110504",
+      "frames": 429
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_110617",
+      "frames": 1145
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_110728",
+      "frames": 346
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_110758",
+      "frames": 576
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_110941",
+      "frames": 441
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_111037",
+      "frames": 1146
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_111158",
+      "frames": 359
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_111229",
+      "frames": 472
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_111301",
+      "frames": 477
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_111336",
+      "frames": 1146
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_111459",
+      "frames": 1145
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_111610",
+      "frames": 354
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_111639",
+      "frames": 1145
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_111800",
+      "frames": 1147
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_111921",
+      "frames": 444
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_111958",
+      "frames": 507
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_112041",
+      "frames": 1145
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_112159",
+      "frames": 342
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_112231",
+      "frames": 526
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_112312",
+      "frames": 336
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_112341",
+      "frames": 327
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_112409",
+      "frames": 532
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_112809",
+      "frames": 350
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_112844",
+      "frames": 379
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_112921",
+      "frames": 357
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_113320",
+      "frames": 1147
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_113430",
+      "frames": 1143
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_113540",
+      "frames": 1147
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_113655",
+      "frames": 1147
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_113822",
+      "frames": 349
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_113847",
+      "frames": 1148
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_143254",
+      "frames": 1135
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_143426",
+      "frames": 1143
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_143535",
+      "frames": 1147
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_143717",
+      "frames": 1146
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_143845",
+      "frames": 311
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_143916",
+      "frames": 316
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_143948",
+      "frames": 329
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_144137",
+      "frames": 1102
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_144338",
+      "frames": 1146
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_144633",
+      "frames": 1145
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_144750",
+      "frames": 300
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_144818",
+      "frames": 749
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_144922",
+      "frames": 283
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_145003",
+      "frames": 1100
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_145139",
+      "frames": 302
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_145416",
+      "frames": 299
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_145440",
+      "frames": 320
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_145613",
+      "frames": 1146
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_145721",
+      "frames": 1147
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_145912",
+      "frames": 323
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_145959",
+      "frames": 1147
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_150216",
+      "frames": 382
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_150258",
+      "frames": 619
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_150343",
+      "frames": 1143
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_150449",
+      "frames": 351
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_150630",
+      "frames": 1147
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_150909",
+      "frames": 1144
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_151057",
+      "frames": 312
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_151120",
+      "frames": 325
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_151149",
+      "frames": 1146
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_151300",
+      "frames": 318
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_151334",
+      "frames": 326
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_151408",
+      "frames": 329
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_151501",
+      "frames": 1147
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_151712",
+      "frames": 292
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_151813",
+      "frames": 953
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_152031",
+      "frames": 289
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_152238",
+      "frames": 299
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_152302",
+      "frames": 313
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_152423",
+      "frames": 306
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_152447",
+      "frames": 955
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_155213",
+      "frames": 1142
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_155331",
+      "frames": 1143
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_155445",
+      "frames": 355
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_155512",
+      "frames": 351
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_155543",
+      "frames": 407
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_155616",
+      "frames": 408
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_155648",
+      "frames": 415
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_155718",
+      "frames": 413
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_155754",
+      "frames": 1142
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_155923",
+      "frames": 304
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160030",
+      "frames": 296
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160054",
+      "frames": 1146
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160214",
+      "frames": 1147
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160322",
+      "frames": 1146
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160438",
+      "frames": 361
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160510",
+      "frames": 1144
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160644",
+      "frames": 300
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160706",
+      "frames": 287
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160749",
+      "frames": 290
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160813",
+      "frames": 280
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160904",
+      "frames": 315
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_160939",
+      "frames": 305
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_161006",
+      "frames": 306
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_161038",
+      "frames": 322
+    },
+    {
+      "method": "segNoQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_162507",
+      "frames": 1144
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_143324",
+      "frames": 579
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_145135",
+      "frames": 511
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_145344",
+      "frames": 484
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_145415",
+      "frames": 502
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_145458",
+      "frames": 520
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_145532",
+      "frames": 505
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_145911",
+      "frames": 557
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150031",
+      "frames": 486
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150107",
+      "frames": 407
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150138",
+      "frames": 400
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150210",
+      "frames": 419
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150240",
+      "frames": 428
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150315",
+      "frames": 486
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150350",
+      "frames": 481
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150442",
+      "frames": 493
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150517",
+      "frames": 1138
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150715",
+      "frames": 364
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150740",
+      "frames": 383
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150811",
+      "frames": 394
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_150841",
+      "frames": 408
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_151020",
+      "frames": 407
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_151048",
+      "frames": 431
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_151127",
+      "frames": 499
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_151212",
+      "frames": 624
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_151435",
+      "frames": 434
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_151519",
+      "frames": 472
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_151601",
+      "frames": 515
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_151731",
+      "frames": 486
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_151815",
+      "frames": 451
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_152432",
+      "frames": 1135
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_160614",
+      "frames": 506
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_160644",
+      "frames": 714
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_161218",
+      "frames": 387
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_161421",
+      "frames": 385
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_161459",
+      "frames": 368
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_161528",
+      "frames": 362
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_161601",
+      "frames": 344
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_161630",
+      "frames": 432
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_161753",
+      "frames": 433
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_161823",
+      "frames": 463
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162128",
+      "frames": 374
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162157",
+      "frames": 346
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162236",
+      "frames": 357
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162311",
+      "frames": 356
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162355",
+      "frames": 348
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162427",
+      "frames": 337
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162457",
+      "frames": 440
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162613",
+      "frames": 706
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162730",
+      "frames": 441
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162800",
+      "frames": 403
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162836",
+      "frames": 583
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162923",
+      "frames": 399
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_162953",
+      "frames": 516
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_163057",
+      "frames": 502
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_163139",
+      "frames": 601
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_163249",
+      "frames": 1137
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_163549",
+      "frames": 328
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_163701",
+      "frames": 319
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_164736",
+      "frames": 365
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_164801",
+      "frames": 403
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_164832",
+      "frames": 371
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_164858",
+      "frames": 403
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_164931",
+      "frames": 472
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_165011",
+      "frames": 440
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_165044",
+      "frames": 314
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_165114",
+      "frames": 317
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_165144",
+      "frames": 322
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_165210",
+      "frames": 331
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_165246",
+      "frames": 418
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_165327",
+      "frames": 361
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_165409",
+      "frames": 430
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261021_165439",
+      "frames": 441
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_121850",
+      "frames": 417
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_122109",
+      "frames": 295
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_122559",
+      "frames": 330
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_122628",
+      "frames": 318
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_122653",
+      "frames": 304
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_122725",
+      "frames": 308
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_122752",
+      "frames": 530
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_122839",
+      "frames": 312
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_123005",
+      "frames": 328
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_123120",
+      "frames": 322
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_123146",
+      "frames": 1135
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_123310",
+      "frames": 335
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_123338",
+      "frames": 321
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_123414",
+      "frames": 349
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_123443",
+      "frames": 335
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_123526",
+      "frames": 361
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_123555",
+      "frames": 342
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_140715",
+      "frames": 380
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_140746",
+      "frames": 353
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_140826",
+      "frames": 380
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_140856",
+      "frames": 329
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_140927",
+      "frames": 385
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_140957",
+      "frames": 372
+    },
+    {
+      "method": "viewQtoken",
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/viewQtoken/eval_test_20261022_150624",
+      "frames": 383
+    }
+  ]
+}

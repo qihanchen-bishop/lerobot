@@ -1,0 +1,36 @@
+{
+  "authoritative_outcome": "user-confirmed saved result label",
+  "manual_override": {
+    "dataset_name": "eval_test_20261023_110758",
+    "task": "cube",
+    "grid_cell": "(1,0)",
+    "trial_index": 1,
+    "saved_result": "failure",
+    "auto_success": true,
+    "reason": "User confirmed failure; object stopped near region boundary."
+  },
+  "invalid_interruption": {
+    "dataset_name": "eval_test_20261023_114001",
+    "task": "paperball",
+    "grid_cell": "(3,0)",
+    "original_trial_index": 1,
+    "reason": "User confirmed invalid manual interruption, excluded; original row no longer present in current source."
+  },
+  "replacement": [
+    {
+      "dataset_root": "/home/romilab/Projects/IsaacLab/source/lerobot/eval/finaldata/mask_act/segNoQtoken/eval_test_20261023_162507",
+      "task": "paperball",
+      "grid_cell": "(3,0)",
+      "trial_index": 2,
+      "result": "failure",
+      "manual_stop": false,
+      "return_code": 0,
+      "control_duration_s": 40.026,
+      "saved_at": "2026-10-23T16:26:11"
+    }
+  ],
+  "excluded_methods": [
+    "VIOLA"
+  ],
+  "valid_records_per_method": 96
+}

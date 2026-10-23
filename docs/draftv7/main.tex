@@ -1,0 +1,69 @@
+% 理论章节以任务后果统一B/C/D；当前方法仍为动作与几何监督，不含任务价值学习。
+\documentclass[journal,10pt]{IEEEtran}
+\usepackage{amsmath,amssymb,bm,mathtools,booktabs,array}
+\usepackage{graphicx}
+\usepackage{xeCJK}
+\setmainfont{NimbusRoman}[
+ Path=/usr/share/fonts/opentype/urw-base35/,
+ Extension=.otf,UprightFont=*-Regular,BoldFont=*-Bold,
+ ItalicFont=*-Italic,BoldItalicFont=*-BoldItalic,SmallCapsFont=*-Regular]
+\setCJKmainfont[AutoFakeBold=true,AutoFakeSlant=true,SmallCapsFont={Droid Sans Fallback}]{Droid Sans Fallback}
+\setCJKsansfont{Droid Sans Fallback}
+\setCJKmonofont{Droid Sans Fallback}
+\usepackage{xeCJKfntef}
+\usepackage{algorithmic}
+\usepackage{tikz}
+\usepackage{placeins}
+\usetikzlibrary{arrows.meta}
+\usepackage{cite}
+\usepackage{comment}
+\usepackage[hidelinks]{hyperref}
+\newcommand{\draftnote}[1]{\par\smallskip{\small（\CJKunderline{#1}）}\par\smallskip}
+\newcommand{\E}{\mathbb E}
+\newcommand{\Prob}{\mathbb P}
+\newcommand{\R}{\mathbb R}
+\newcommand{\norm}[1]{\lVert#1\rVert}
+\newcommand{\inner}[2]{\langle#1,#2\rangle}
+\newcommand{\ind}{\mathbf 1}
+\DeclareMathOperator{\clip}{clip}
+% \newtheorem{proposition}{命题}
+\newtheorem{proposition}{Proposition}
+% \newtheorem{assumption}{假设}
+\newtheorem{assumption}{Assumption}
+\renewcommand{\IEEEproofname}{证明}
+\renewcommand{\refname}{参考文献}
+\title{Semantic-Guided Imitation Learning}
+\author{}
+\makeatletter
+\let\tableinput\@@input
+\makeatother
+\begin{document}
+\maketitle
+\begin{abstract}
+% 改善动作块模仿策略的任务完成表现。
+% 研究针对两个互补缺口：有限动作监督未必充分保留任务相关关系，
+% 而生成动作块时的观察也未必足以解释执行期间的动态变化。
+% 为此，基础策略结合语义输入与几何监督查询生成动作块，
+% 条件性分析以动作的后续任务损失为共同尺度，
+% 区分表示造成的决策信息损失、历史的潜在价值与实际决策误差，
+% \draftnote{待补：最终实验平台、任务范围、对照结果及定量结论；摘要在完整评测后定稿。}
+\end{abstract}
+\begin{IEEEkeywords}
+Imitation learning, semantic representations, visuomotor control.
+\end{IEEEkeywords}
+\input{introduction}
+\input{related_work}
+\input{analysis}
+\input{method}
+\input{experiments}
+\input{discussion}
+% 允许末尾实验浮动体与后续正文自然排版，避免强制清空造成空栏。
+\FloatBarrier
+\appendices
+\input{action_analysis_proofs}
+\input{representation_feedback_proofs}
+\input{method_details}
+\input{evaluation_details}
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+\end{document}

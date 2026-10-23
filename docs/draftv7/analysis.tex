@@ -1,0 +1,19 @@
+\section{Problem Formulation and Theoretical Analysis}
+\label{sec:analysis}
+% 本章先限定离线视觉动作学习的对象与任务评价条件，
+% 再分析动作拟合与实际任务表现之间的差距。
+% 后续以动作的任务后果为共同尺度，
+
+This section studies conditions for improving task performance from limited demonstrations. 
+Starting from the relationship between imitation error and task success, we examine how to preserve information needed to distinguish the task consequences of different actions. 
+
+We first establish conditions under which action error bounds task-failure probability 
+and explain why improved coverage in representation space alone does not guarantee better task performance. 
+% 随后分析语义引导如何保留专家选择依据，并由动作重构误差约束模仿误差迁移。
+We then examine how semantic guidance can preserve task-relevant information
+and, under consistent expert selection, control imitation-error transfer through expert-action reconstruction.
+\input{formulation}
+\input{action_analysis}
+\input{representation_analysis}
+% 提前提交双栏方法图，使其显示在方法正文附近的前一页。
+\input{method_figures}

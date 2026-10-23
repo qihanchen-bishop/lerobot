@@ -1,0 +1,73 @@
+% C的证明：描述量读出误差 -> 专家动作重构 -> 条件误差差异。
+\section{Proofs for Task-Relevant Information Preservation}
+\label{app:representationproofs}
+
+% \subsection{专家动作重构界的证明}
+\subsection{Proof of the Expert-Action Reconstruction Bound}
+\label{app:expertreconstruction}
+% 固定两种分布与共同读出，用三角不等式证明正文重构界。
+We prove~\eqref{eq:expertreconstruction} under the common encoder and readouts of Section~\ref{sec:representationanalysis}, with $\mu=\bar\mu_\pi$.
+% 第一步：共同的专家动作近似是Z的可测函数。
+Define the common represented expert rule $\widehat a_{\mathrm E}(Z)=g_{\mathrm E}(\widehat G,\chi)$.
+% 三角不等式和专家选择假设分别约束两分布上的动作重构误差。
+The triangle inequality and Assumption~\ref{ass:expertselection} give, for $\rho\in\{\mu,\nu\}$,
+\begin{equation}
+ \begin{aligned}
+ \E_\rho\norm{\pi_{\mathrm E}-\widehat a_{\mathrm E}}
+ &\le \E_\rho\norm{\pi_{\mathrm E}-g_{\mathrm E}(G,\chi)}\\
+ &\quad+\E_\rho\norm{g_{\mathrm E}(G,\chi)-g_{\mathrm E}(\widehat G,\chi)}\\
+ &\le\epsilon_{\mathrm{sel},\rho}+K_{\mathrm E}\delta_{G,\rho}
+ =b_\rho.
+ \end{aligned}
+ \label{eq:appexpertreconstruction}
+\end{equation}
+
+
+% \subsection{条件误差迁移界的证明}
+\subsection{Proof of the Conditional-Error Transfer Bound}
+\label{app:relationtransfer}
+% 先对比真实动作误差与表示中的共同函数，再用覆盖条件合并两分布的重构误差。
+We prove Proposition~\ref{prop:relationtransfer} by comparing actual imitation error with a common function of $Z$, then transferring the demonstration-side reconstruction error through representation coverage.
+% 沿用正文的策略和专家读出。
+Use $\pi(h)=p(Z)$ and $\widehat a_{\mathrm E}(Z)=g_{\mathrm E}(\widehat G,\chi)$ from Section~\ref{sec:representationanalysis}.
+% 第二步：策略和专家近似均只依赖Z，因此其平方距离在两分布中是同一个函数。
+Since $\pi(h)=p(\phi(t,h))$, the represented squared error
+$\ell_Z(z)=\norm{p(z)-\widehat a_{\mathrm E}(z)}^2$ is the same function of $z$ under both distributions.
+% 两个动作距离之和不超过两倍动作集合直径，反三角不等式约束距离之差。
+All three actions belong to $\mathcal A$, so the reverse triangle inequality yields
+\begin{equation}
+ \begin{aligned}
+ |e(h)^2-\ell_Z(Z)|
+ &\le\bigl(\norm{\pi-\pi_{\mathrm E}}
+       +\norm{\pi-\widehat a_{\mathrm E}}\bigr)
+       \norm{\pi_{\mathrm E}-\widehat a_{\mathrm E}}\\
+ &\le 2B_{\mathcal A}\norm{\pi_{\mathrm E}-\widehat a_{\mathrm E}}.
+ \end{aligned}
+ \label{eq:appsquarederrorperturbation}
+\end{equation}
+% 分别在两分布下条件化，公共函数ell_Z留在条件期望之外。
+Conditioning separately under each distribution gives
+\begin{equation}
+ |m_\rho(z)-\ell_Z(z)|
+ \le 2B_{\mathcal A}
+ \E_\rho[\norm{\pi_{\mathrm E}-\widehat a_{\mathrm E}}\mid Z=z].
+ \label{eq:appconditionalexpertapprox}
+\end{equation}
+
+% 第三步：插入相同的ell_Z，用表示覆盖迁移示范侧条件误差。
+Insert the common function $\ell_Z$ between $m_\mu$ and $m_\nu$ and apply representation coverage to the nonnegative demonstration-side conditional error:
+\begin{equation}
+ \begin{aligned}
+ D_\phi
+ &\le\E_{\mu_Z}|m_\mu(Z)-\ell_Z(Z)|\\
+ &\quad+\E_{\mu_Z}|m_\nu(Z)-\ell_Z(Z)|\\
+ &\le\E_{\mu_Z}|m_\mu(Z)-\ell_Z(Z)|\\
+ &\quad+C_\phi\E_{\nu_Z}|m_\nu(Z)-\ell_Z(Z)|\\
+ &\le 2B_{\mathcal A}(b_\mu+C_\phi b_\nu).
+ \end{aligned}
+ \label{eq:apprelationdiscrepancy}
+\end{equation}
+% 有限表示覆盖使示范侧条件不等式也在部署表示分布下几乎处处成立。
+Representation coverage ensures that the demonstration-side conditional inequality also holds $\mu_Z$-almost everywhere.
+% 代入B3的任务界即可，无需重复完整结论。
+This proves~\eqref{eq:relationdiscrepancybound}; substitution into~\eqref{eq:representationcoveragebound} establishes~\eqref{eq:relationtransferfailure}.
