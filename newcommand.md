@@ -625,3 +625,71 @@ cd /data/qihan/lerobot
 - 正式训练实时指标：`outputs/train/semantic/final-ViewQtoken-v{2,3}/metrics/train_metrics.jsonl`。
 - 查看会话：`tmux attach -t task1` / `tmux attach -t task2`。此次分别使用 GPU 0 / GPU 1，不影响上述命令自行选择 CUDA 环境。
 - 运行期间控制台日志暂存于 `outputs/train/semantic/.final-ViewQtoken-v{2,3}.train.log.tmp`；正常结束后移动到各输出目录的 `logs/train.log`。
+
+## VIOLA-finaldata-FS：官方候选框双视角基线
+
+直接使用官方 VIOLA 网络和预训练 Detic ProposalNetwork，不用分割标签、U-Net 或 Qtoken。
+front 提供候选区域和全局特征，side 接入原版第二相机分支；保留10帧历史、因果 Transformer 和 GMM 单步动作头。
+输入是 follower `observation.state`，监督仍是原始数据 `action`，不是 follower delta。
+具体适配和复现边界见 [VIOLA_BASELINE.md](mycode/VIOLA_BASELINE.md)。
+
+使用独立环境 `.cache/viola/venv/bin/python`，当前已经配置。重建时执行 `bash mycode/setup_viola_baseline.sh`。
+不强制指定 GPU；需要分配时在命令前添加 `CUDA_VISIBLE_DEVICES=0` 或 `1`。
+
+### 短程链路验证
+
+三个物体各选4条完整轨迹，每类留1条独立验证，共9条训练、3条验证。以下输出已用于本次试跑，训练目录禁止覆盖；重新试跑请换输出目录。
+
+```bash
+cd /data/qihan/lerobot
+.cache/viola/venv/bin/python mycode/viola_baseline.py prepare \
+    --root data/finaldata_seg \
+    --output outputs/cache/VIOLA-finaldata-FS-pilot/dataset.hdf5 \
+    --per-class 4 --valid-per-class 1
+
+.cache/viola/venv/bin/python mycode/viola_baseline.py train \
+    --dataset outputs/cache/VIOLA-finaldata-FS-pilot/dataset.hdf5 \
+    --output outputs/train/baselines/VIOLA-finaldata-FS-pilot \
+    --steps 1000 --batch-size 16 --workers 4 --seed 1000
+
+.cache/viola/venv/bin/python mycode/viola_baseline.py verify \
+    --checkpoint outputs/train/baselines/VIOLA-finaldata-FS-pilot/checkpoint-001000.pt \
+    --dataset outputs/cache/VIOLA-finaldata-FS-pilot/dataset.hdf5 \
+    --output outputs/train/baselines/VIOLA-finaldata-FS-pilot/inference-verification.json \
+    --frames 300
+```
+
+### 全量基线训练
+
+使用和其他 finaldata 方法相同的108条示范。这里保留全部轨迹用于训练，不用训练集冒充验证集，最终性能用统一实机测试判断。
+下面默认51epochs、batch16、AdamW 1e-4，沿用官方公开配置；如要设定100000步预算，将 `--epochs 51` 替换成 `--steps 100000`，不要声称不同方法相同步数等于相同训练曝光量。
+
+```bash
+cd /data/qihan/lerobot
+.cache/viola/venv/bin/python mycode/viola_baseline.py prepare \
+    --root data/finaldata_seg \
+    --output outputs/cache/VIOLA-finaldata-FS-all/dataset.hdf5 \
+    --per-class 0 --valid-per-class 0
+
+.cache/viola/venv/bin/python mycode/viola_baseline.py train \
+    --dataset outputs/cache/VIOLA-finaldata-FS-all/dataset.hdf5 \
+    --output outputs/train/baselines/VIOLA-finaldata-FS \
+    --epochs 51 --batch-size 16 --workers 4 --seed 1000 \
+    --log-every 50 --save-every 5000
+```
+
+- RGB：全图缩放128×128、除255；state：训练集逐关节mean/std；action：训练集逐关节min/max到[-1,1]，匹配原版GMM的tanh均值。与ACT的action归一化不同是算法适配，不能直接比较二者原始loss。
+- 候选框训练前离线生成，推理在线生成；未使用人工框。两者走同一Detic及预处理函数。
+- 输出为10维原始数据单位的绝对关节指令；官方GMM采样可能越过训练范围，实机部署仍须现有限位/速度保护。
+- 日志：训练目录 `metrics.jsonl`、`summary.json`；候选框预览：缓存目录 `dataset.previews/`。试跑不是收敛模型或实机成功率证明。
+- 本次试跑已完成：9项测试通过，1000步后独立轨迹窗口上的归一化MAE从0.5016降至0.1322；300帧在线/离线候选框一致，端到端延迟中位数18.05ms、P95为29.67ms（不含相机/通信）。
+
+全量流程一键运行（先预计算，再训练；任何步骤失败即停止，不覆盖已有训练目录）：
+
+```bash
+cd /data/qihan/lerobot
+bash mycode/run_viola_finaldata_fs.sh
+```
+
+此次在 `tmux task1` 使用 `CUDA_VISIBLE_DEVICES=1` 启动上述流程；日志分别为
+`outputs/logs/VIOLA-finaldata-FS/prepare.log` 和 `outputs/logs/VIOLA-finaldata-FS/train.log`。
