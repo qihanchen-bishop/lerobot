@@ -95,6 +95,10 @@ NLL可为负，不能与ACT的L1或DP的去噪loss直接比较。报告的MAE使
 - `outputs/train/baselines/VIOLA-finaldata-FS-pilot/train.log`、`metrics.jsonl`、`summary.json`。
 - 同目录 `checkpoint-001000.pt`、`inference-verification.json`、`inference.log`、`tests.log`、`environment.txt`。
 
-用户随后授权全量训练，已在 `tmux task1` 启动 `mycode/run_viola_finaldata_fs.sh`（GPU 1）：先对108条轨迹预计算候选框，成功后自动训练51epochs。启动时已确认预计算帧数持续增长；这不表示正式训练已经完成。流程日志位于 `outputs/logs/VIOLA-finaldata-FS/`，训练输出位于 `outputs/train/baselines/VIOLA-finaldata-FS/`。
+用户随后授权的全量训练已于2026-10-22 16:35（UTC+8）完成。运行入口为 `mycode/run_viola_finaldata_fs.sh`，会话为 `tmux task1`（GPU 1）。流程日志位于 `outputs/logs/VIOLA-finaldata-FS/`，训练输出位于 `outputs/train/baselines/VIOLA-finaldata-FS/`。
+
+2026-10-23复核：108条示范、51epochs、196,809步全部完成，纯训练及结束验证约107.8分钟；40个checkpoint齐全。3,937条训练指标记录的NLL和梯度范数均为有限值。最初5,000步的日志窗口平均NLL为-13.68，190,000步之后为-32.05；最后一条NLL为-34.28，连续密度的负NLL是允许的，不代表错误。
+
+最终权重 `checkpoint-196809.pt` 重载输出最大差为0；300帧录制数据回放的RGB和候选框与缓存逐帧完全一致，输出300×10个有限动作值。该次测量的端到端延迟中位数18.87ms、P95为25.84ms，不含采集/通信，详情见训练目录 `inference-verification.json`。这次全量训练没有留出验证轨迹，回放也不是闭环机器人评估，因此不能据此断言泛化效果或任务成功率。
 
 较早的 `VIOLA-finaldata-FS-pilot-numpy-compat-preflight` 仅是发现旧NumPy别名兼容问题时留下的初始化记录，没有执行参数更新，不是另一个训练结果。
