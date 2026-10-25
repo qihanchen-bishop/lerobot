@@ -88,6 +88,7 @@ def segmentation_model_path_for_policy(checkpoint_path: str | Path) -> Path:
     return segmentation_model_paths_for_policy(checkpoint_path)[0]
 
 POLICY_TYPES = (
+    "viola",
     "mask_act",
     "act",
     "diffusion",
@@ -856,7 +857,7 @@ class EvalPolicyApp:
         self.low_resolution = tk.BooleanVar(value=True)
         self.auto_reset_after_policy = tk.BooleanVar(value=True)
         self.lock_grippers = tk.BooleanVar(value=True)
-        self.save_video = tk.BooleanVar(value=True)
+        self.save_video = tk.BooleanVar(value=False)
         self.use_amp = tk.BooleanVar(value=True)
         self.enable_segmentation_preview = tk.BooleanVar(value=False)
         self.enable_auto_replan = tk.BooleanVar(value=False)
@@ -1495,15 +1496,6 @@ class EvalPolicyApp:
         ttk.Entry(top, textvariable=self.vars["reset_time_s"], width=12).grid(row=row, column=3, sticky=tk.W)
 
         row += 1
-        ttk.Checkbutton(top, text="Save MP4 video", variable=self.save_video).grid(
-            row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5
-        )
-        ttk.Label(
-            top,
-            text="Off: keep trajectory + image frames, skip MP4 encoding",
-        ).grid(row=row, column=1, columnspan=3, sticky=tk.W, pady=5)
-
-        row += 1
         ttk.Label(top, text="Extra args").grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=5)
         ttk.Entry(top, textvariable=self.vars["extra_args"]).grid(row=row, column=1, columnspan=3, sticky=tk.EW)
 
@@ -1632,6 +1624,9 @@ class EvalPolicyApp:
 
     @staticmethod
     def _checkpoint_rgb_keys(checkpoint_path: str | Path) -> list[str] | None:
+        from viola_eval import is_viola_checkpoint, RGB_KEYS
+        if is_viola_checkpoint(checkpoint_path):
+            return list(RGB_KEYS)
         current = Path(checkpoint_path).expanduser()
         if current.is_file():
             current = current.parent
@@ -2332,7 +2327,6 @@ class EvalPolicyApp:
             "use_amp": self.use_amp,
             "auto_reset_after_policy": self.auto_reset_after_policy,
             "lock_grippers": self.lock_grippers,
-            "save_video": self.save_video,
             "enable_realsense": self.enable_realsense,
             "enable_auto_replan": self.enable_auto_replan,
         }
@@ -2406,6 +2400,9 @@ class EvalPolicyApp:
         self._append_log(f"Found {len(options)} checkpoint(s) in presets from {folder}")
 
     def _infer_policy_type(self, path: Path) -> str:
+        from viola_eval import is_viola_checkpoint
+        if is_viola_checkpoint(path):
+            return "viola"
         if (path / "training_state.pt").is_file() or (path / "mask_act_run_config.json").is_file():
             return "mask_act"
         config_path = path / "config.json"
@@ -2450,6 +2447,17 @@ class EvalPolicyApp:
         self._refresh_grid_stats()
 
     def _refresh_action_chunk_settings(self, checkpoint_path: Path) -> None:
+        from viola_eval import is_viola_checkpoint
+        if is_viola_checkpoint(checkpoint_path):
+            for key, value in {"model_chunk_size": "1", "prediction_steps": "1", "n_action_steps": "1",
+                               "fusion_steps": "0", "fusion_history_weight": "0", "num_inference_steps": "",
+                               "noise_scheduler_type": "checkpoint", "execution_mode": "synchronous"}.items():
+                self.vars[key].set(value)
+            self.use_amp.set(False)
+            self.enable_auto_replan.set(False)
+            self.lock_grippers.set(True)
+            self._append_log("[VIOLA] Dual-view single-step policy; inference on every new observation, temporal history=10.")
+            return
         data: dict[str, Any] | None = None
         config_path = checkpoint_path / "config.json"
         if config_path.is_file():
@@ -3854,7 +3862,7 @@ class EvalPolicyApp:
             **self._grid_metadata(),
             "policy_variant": policy_variant,
             "mask_act_experiment": policy_variant if self.vars["policy_type"].get() == "mask_act" else None,
-            "save_video": self.save_video.get(),
+            "save_video": None,  # Selected in the result dialog after the run.
             "prediction_steps": (
                 int(self.vars["prediction_steps"].get())
                 if self.vars["prediction_steps"].get().strip()
@@ -4018,7 +4026,6 @@ class EvalPolicyApp:
         task = str(self.active_eval_metadata["task"])
         fps = int(self.active_eval_metadata["fps"])
         episode_time_s = float(self.active_eval_metadata["episode_time_s"])
-        save_video = bool(self.active_eval_metadata.get("save_video", self.save_video.get()))
         save_parent = Path(str(self.active_eval_metadata["save_parent"]))
         run_dataset_root = self._make_run_dataset_root(save_parent, repo_id)
         self.active_dataset_root = run_dataset_root
@@ -4026,10 +4033,16 @@ class EvalPolicyApp:
         from mask_act_inference import is_mask_act_checkpoint, load_mask_act_for_inference
 
         runtime_configuration = self.active_eval_metadata["runtime_configuration"]
+        viola_checkpoint = runtime_configuration["policy_type"] == "viola"
         mask_act_checkpoint = runtime_configuration["policy_type"] == "mask_act" or is_mask_act_checkpoint(
             checkpoint
         )
-        if mask_act_checkpoint:
+        if viola_checkpoint:
+            from viola_eval import config_for_checkpoint, metadata, validate_runtime
+            validate_runtime(runtime_configuration)
+            policy_cfg = config_for_checkpoint(checkpoint)
+            _, viola_spec = metadata(checkpoint)
+        elif mask_act_checkpoint:
             policy, preprocessor, postprocessor, details = load_mask_act_for_inference(
                 checkpoint,
                 PROJECT_ROOT,
@@ -4086,13 +4099,14 @@ class EvalPolicyApp:
                 use_videos=True,
             ),
         )
-        if not save_video:
-            dataset_features = self._video_features_to_images(dataset_features)
         policy_inputs = sorted(policy_cfg.input_features)
         policy_action_names = self._policy_feature_names(dataset_features, policy_cfg.output_features, ACTION)
         policy_state_names = self._policy_feature_names(
             dataset_features, policy_cfg.input_features, "observation.state"
         )
+        if viola_checkpoint and (policy_action_names != viola_spec["action_names"]
+                                 or policy_state_names != viola_spec["state_names"]):
+            raise ValueError("Robot joint ordering differs from the VIOLA training state/action ordering")
         if policy_action_names:
             dataset_features = self._features_with_names(dataset_features, ACTION, policy_action_names)
         if policy_state_names and "observation.state" in dataset_features:
@@ -4191,7 +4205,7 @@ class EvalPolicyApp:
             self.active_eval_metadata.update(
                 {
                     "policy_semantic_recording_keys": semantic_keys,
-                    "policy_semantic_recording_format": "video" if save_video else "image_frames",
+                    "policy_semantic_recording_format": "pending",
                     "policy_semantic_representation": (
                         "hard_palette_rgb_before_act_normalization"
                         if hard_semantic_input else "soft_palette_rgb_before_act_normalization"
@@ -4207,7 +4221,7 @@ class EvalPolicyApp:
             semantic_keys = sorted(full_semantic_recording_features)
             self.active_eval_metadata.update({
                 "full_semantic_recording_keys": semantic_keys,
-                "full_semantic_recording_format": "video" if save_video else "image_frames",
+                "full_semantic_recording_format": "pending",
                 "full_semantic_alignment": "latest_completed_live_result_held_between_updates",
                 "full_semantic_representation": "filtered_hard_label_palette_rgb",
                 "full_semantic_recording": {"status": "pending"},
@@ -4231,6 +4245,7 @@ class EvalPolicyApp:
             )
 
         dataset = None
+        viola_policy = None
         residual_runtime = None
         replan_executor: ThreadPoolExecutor | None = None
         last_action_log_t = 0.0
@@ -4241,13 +4256,13 @@ class EvalPolicyApp:
                 root=run_dataset_root,
                 robot_type=robot.name,
                 features=dataset_features,
-                use_videos=save_video,
+                use_videos=True,
                 image_writer_processes=0,
                 image_writer_threads=max(
                     1,
                     4 * sum(feature.get("dtype") in {"image", "video"} for feature in dataset_features.values()),
                 ),
-                batch_encoding_size=1_000_000 if save_video else 1,
+                batch_encoding_size=1_000_000,
                 vcodec="h264",
             )
             evaluation_metadata = {
@@ -4263,7 +4278,13 @@ class EvalPolicyApp:
                 json.dumps(evaluation_metadata, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
-            if not mask_act_checkpoint:
+            if viola_checkpoint:
+                from viola_eval import VIOLAEvalPolicy, IdentityProcessor
+                viola_policy = policy = VIOLAEvalPolicy(checkpoint, run_dataset_root / "viola_inference.log")
+                preprocessor, postprocessor = IdentityProcessor(), IdentityProcessor()
+                self.active_eval_metadata["viola"] = policy.metadata
+                self.log_queue.put("[VIOLA] Loaded official policy and Detic in isolated worker; single-step native joint targets.")
+            elif not mask_act_checkpoint:
                 policy = make_policy(policy_cfg, ds_meta=dataset.meta)
                 preprocessor, postprocessor = make_pre_post_processors(
                     policy_cfg=policy_cfg,
@@ -4381,9 +4402,7 @@ class EvalPolicyApp:
                         "The gripper keeps its current/initial angle."
                     )
             self.log_queue.put(
-                "[RECORD] MP4 video saving enabled for front/side; encoding is deferred until Save."
-                if save_video
-                else "[RECORD] MP4 encoding disabled; trajectory and image frames will still be saved."
+                "[RECORD] Staging image frames. Choose whether to save MP4 videos in the post-run result dialog."
             )
             self.log_queue.put(
                 f"[CONTROL] execution_mode={execution_mode}, "
@@ -4881,8 +4900,12 @@ class EvalPolicyApp:
                 if replan_executor is not None:
                     replan_executor.shutdown(wait=True, cancel_futures=True)
             finally:
-                if dataset is not None:
-                    self._finalize_eval_dataset(dataset)
+                try:
+                    if viola_policy is not None:
+                        viola_policy.close()
+                finally:
+                    if dataset is not None:
+                        self._finalize_eval_dataset(dataset)
 
     @staticmethod
     def _finalize_eval_dataset(dataset: Any) -> None:
@@ -4894,6 +4917,10 @@ class EvalPolicyApp:
             dataset.finalize()
 
     def _validate_eval_settings(self) -> None:
+        if self.vars["policy_type"].get() == "viola":
+            from viola_eval import metadata, validate_runtime
+            metadata(self.vars["checkpoint_path"].get())
+            validate_runtime(self._runtime_configuration_snapshot())
         if self.vars["residual_mode"].get() != "off":
             if self.vars["policy_type"].get() not in {"act", "mask_act"}:
                 raise ValueError("Residual evaluation requires ACT or a supported semantic ACT base policy")
@@ -5874,6 +5901,8 @@ class EvalPolicyApp:
 
     @staticmethod
     def _model_parameter_statistics(model: Any) -> dict[str, int]:
+        if hasattr(model, "inference_model_statistics"):
+            return dict(model.inference_model_statistics)
         parameters = list(model.parameters())
         buffers = list(model.buffers())
         return {
@@ -6412,7 +6441,9 @@ class EvalPolicyApp:
                 self._apply_auto_result_fields()
                 self._start_post_run_reset()
                 if ok:
-                    status = "Policy stopped; reset is running in background. Save Result will encode videos."
+                    status = (
+                        "Policy stopped; reset is running in background. Review labels and choose whether to save MP4 videos."
+                    )
                 else:
                     status = "Policy failed; reset is running in background. Review the auto labels, then save or discard."
                 self.vars["status"].set(status)
@@ -6866,6 +6897,8 @@ class EvalPolicyApp:
         update_detail_state()
 
         def close_dialog() -> None:
+            if self.saving_result:
+                return
             try:
                 self.vars["result"].trace_remove("write", result_trace_id)
             except tk.TclError:
@@ -6894,6 +6927,11 @@ class EvalPolicyApp:
         ttk.Label(tags_frame, text="未勾选表示未观察到偏差；恢复指该偏差消除，独立于最终任务成败。").grid(
             row=(len(DEVIATIONS) + group_columns - 1) // group_columns, column=0, columnspan=2, sticky=tk.W)
 
+        video_options = ttk.Frame(footer)
+        video_options.pack(side=tk.TOP, fill=tk.X, pady=(0, 8))
+        video_checkbox = ttk.Checkbutton(video_options, text="保存 MP4 视频（默认不勾选）", variable=self.save_video)
+        video_checkbox.pack(side=tk.LEFT)
+        ttk.Label(video_options, text="不勾选：保留结果、轨迹和图像帧，跳过 MP4 编码。").pack(side=tk.LEFT, padx=(12, 0))
         ttk.Label(body, text=self.vars["elapsed"].get()).grid(
             row=6, column=0, columnspan=2, sticky=tk.W, padx=14, pady=(4, 8)
         )
@@ -6914,8 +6952,11 @@ class EvalPolicyApp:
                 self._alert("Cannot save result", str(exc))
                 return
             self.saving_result = True
-            self.vars["status"].set("Saving result and encoding videos...")
-            for button in (save_button, later_button, discard_button):
+            self.vars["status"].set(
+                "Saving result and encoding videos..." if record.get("save_video")
+                else "Saving result (MP4 disabled)..."
+            )
+            for button in (save_button, later_button, discard_button, video_checkbox):
                 button.configure(state=tk.DISABLED)
 
             def worker() -> None:
@@ -6937,7 +6978,7 @@ class EvalPolicyApp:
 
             def save_failed(exc: Exception) -> None:
                 self.saving_result = False
-                for button in (save_button, later_button, discard_button):
+                for button in (save_button, later_button, discard_button, video_checkbox):
                     button.configure(state=tk.NORMAL)
                 self.vars["status"].set("Save failed. Check the error and try again.")
                 self._alert("Cannot save result", str(exc))
@@ -6986,6 +7027,7 @@ class EvalPolicyApp:
         dialog.after_idle(activate_dialog)
 
     def _reset_result_fields(self) -> None:
+        self.save_video.set(False)
         self.vars["result"].set("failure")
         self.vars["object_exposed"].set("no")
         self.vars["object_pushed_out"].set("no")
@@ -7073,6 +7115,7 @@ class EvalPolicyApp:
         )
         record = {
             **self.last_run,
+            "save_video": bool(self.save_video.get()),
             "result": self.vars["result"].get(),
             **metrics,
             "trial_index": prior_count + 1,
@@ -7082,7 +7125,23 @@ class EvalPolicyApp:
         return record, result_path
 
     def _commit_result_save(self, record: dict[str, Any], result_path: Path) -> None:
-        self._encode_confirmed_run_videos(record)
+        if record.get("save_video"):
+            self._encode_confirmed_run_videos(record)
+        else:
+            from eval_video import save_pending_episode_as_images
+
+            self.log_queue.put("__SAVE_PROGRESS__|Saving image frames without MP4 encoding...")
+            save_pending_episode_as_images(record["dataset_root"], record["dataset_repo_id"])
+        for key in ("policy_semantic_recording_format", "full_semantic_recording_format"):
+            if key in record:
+                record[key] = "video" if record.get("save_video") else "image_frames"
+        metadata_path = Path(record["dataset_root"]) / "evaluation_metadata.json"
+        if metadata_path.is_file():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            for key in ("save_video", "policy_semantic_recording_format", "full_semantic_recording_format"):
+                if key in record:
+                    metadata[key] = record[key]
+            metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         with result_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         dataset_root = record.get("dataset_root")
@@ -7130,6 +7189,8 @@ class EvalPolicyApp:
 
         video_keys = list(encoder.meta.video_keys)
         if not video_keys:
+            if encoder.meta.image_keys:
+                raise ValueError("This run has already been finalized as image frames. Uncheck 保存 MP4 视频 to retry saving its labels.")
             return
         if encoder.meta.total_episodes != 1:
             raise ValueError(

@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-BASE_PYTHON="${BASE_PYTHON:-/home/qihan/miniconda3/envs/lerobot/bin/python}"
+BASE_PYTHON="${BASE_PYTHON:-$(command -v python)}"
 mkdir -p .cache/viola
 if [[ ! -d .cache/viola/upstream ]]; then
     git clone https://github.com/UT-Austin-RPL/VIOLA.git .cache/viola/upstream
@@ -25,7 +25,10 @@ PY=.cache/viola/venv/bin/python
     fvcore==0.1.5.post20221221 iopath==0.1.9 pycocotools==2.0.11 lvis==0.5.3 \
     ftfy==6.3.1 yacs==0.1.8 ninja==1.13.2 matplotlib==3.10.9 gym==0.26.2 tensorboard==2.21.0
 "$PY" -m pip install --no-deps git+https://github.com/openai/CLIP.git@d05afc436d78f1c48dc0dbf8e5980a9d471f35f6
-MAX_JOBS=2 "$PY" -m pip install --no-build-isolation --no-deps .cache/viola/upstream/third_party/detectron2
+# This R50 proposal network uses Torch/torchvision CUDA operators. Build only
+# Detectron2's CPU extension, avoiding a dependency on a matching system nvcc.
+CUDA_VISIBLE_DEVICES="" MAX_JOBS=2 PATH="$ROOT/.cache/viola/venv/bin:$PATH" \
+    "$PY" -m pip install --no-build-isolation --no-deps .cache/viola/upstream/third_party/detectron2
 "$PY" -m pip install --no-build-isolation --no-deps -e .cache/viola/robomimic
 WEIGHT=.cache/viola/Detic_LI_CLIP_R5021k_640b64_4x_ft4x_max-size.pth
 if [[ ! -f "$WEIGHT" ]]; then

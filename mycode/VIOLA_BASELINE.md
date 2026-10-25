@@ -63,6 +63,36 @@ NLL可为负，不能与ACT的L1或DP的去噪loss直接比较。报告的MAE使
 
 ## 环境隔离
 
+### 本地策略测试界面
+
+在原来的 `lerobot` 环境运行 `python mycode/gui_eval_lerobot_policy.py`，
+重启界面后选择 **Config preset → VIOLA**。预设位于
+`mycode/eval_configs/finaldata/VIOLA.json`，加载
+`outputs/train/finaldata/VIOLA/checkpoint-196809.pt`，结果保存到
+`eval/finaldata/viola/VIOLA`。目录形式要求只有一个 `checkpoint-*.pt`；
+有多个权重时需要在预设中明确指定文件，避免自动选错。
+
+采用双视角、3×4 网格、每格两次、40 秒时限和同一视觉判定阈值。
+VIOLA 每个新观测预测一个动作，因此预测长度和重规划间隔均为 1，
+同步执行、关闭动作块融合/自适应重规划/AMP、锁定夹爪。
+不能沿用 ACT 的 30 步重规划间隔。
+
+`mycode/viola_eval.py` 在 `.cache/viola/venv` 子进程中运行官方模型与 Detic；
+主界面继续使用原环境。子进程没有硬件连接，异常或通信超时会向界面报错；
+每轮结束释放子进程。RGB 颜色转换、10 维关节顺序和训练归一化在适配层核对；
+动作反归一化只做一次，不替换官方 GMM 采样。界面参数统计包含策略及 Detic，
+两者的明细、实际 checkpoint 和推理日志路径另存到每轮的 `viola` 元数据。
+
+新机器首次配置可运行：
+
+```bash
+BASE_PYTHON="$(which python)" bash mycode/setup_viola_baseline.sh
+```
+
+本机离线接入验证位于 `result/viola_gui_verification_20261023/`，只回放已有数据，
+没有操作机械臂。目标频率保持 30 Hz；本机包含 Detic 和进程通信的单步推理约
+33–40 ms，实际闭环频率需以 `[CONTROL] actual_fps` 为准，不能使用训练服务器的延时替代。
+
 `.cache/viola/venv` 通过 `--system-site-packages` 继承服务器现有 Torch2.7.1/CUDA12.8，同时局部覆盖旧代码所需的 numpy1.26、Pillow9.5、timm0.4.12、kornia0.6.1 等。没有降级现有 ACT/DP 环境。
 
 旧Torch1.10不适合当前Blackwell显卡，因此保持算法实现不变而适配依赖。Detectron2编译其CPU扩展，所用标准GPU运算由Torch/torchvision执行；当前R50候选网络不需要额外的自定义CUDA算子。孤立环境可能因继承未使用的主环境包出现pip依赖提示，不能据此将它用于其他策略训练。
