@@ -1,48 +1,63 @@
-# draftv7：保留 v6 英文正文，更新中文实验
+# draftv7：中文实验论述与英文图表
 
-本稿由 `../draftv6` 复制后修改，原版 draftv6 未改动。
+本稿由 draftv6 复制后修改；本次没有改动 draftv6，也未同步 Git。
 
-- 阅读入口：[main.pdf](main.pdf)；LaTeX 主文件：[main.tex](main.tex)。
-- 实验正文及评估附录使用中文，数据截至 2026-10-23 16:26 补采完成。
-- 非实验章节保留 v6 的原文与语言，仅删除残差分支、历史条件残差反馈及其依赖表述。v6 原有的中文注释、讨论占位和空摘要也保持原有状态。
-- 建模、动作分析、表示分析、动作分析证明、参考文献库和编译脚本与 v6 字节一致。
-- 残差理论和证明不参与编译；方法框架图重新绘为不含残差分支的英文图。完整旧内容仍在 `../draftv6/`，供下一篇使用。
-- 独立结果表格：[../experiment_results_20261023/README.md](../experiment_results_20261023/README.md)。
+- 阅读入口：[main.pdf](main.pdf)，主文件：[main.tex](main.tex)。
+- 实验正文及评估附录保留中文；实验图表、表头和图题为英文。
+- 策略结果截至 2026-10-23 补采完成；2026-10-26补入finaldata标注迭代记录。
+- 理论源文件与35个编号理论公式保持不变。方法已同步硬语义图、双视角读出与质量损失归一化。
+- 原 v7 已去掉历史反馈分支；旧完整稿保存在 draftv6。
 
-## 实验数据和图片
+## 章节与图表
 
-五种方法共480次有效实机试验，每方法96次，四类物体 × 12位置 × 每条件两次。
-纳入ACT、DP、RGBQtoken、segNoQtoken、viewQtoken；未纳入VIOLA。
-segNoQtoken方块的边界记录按人工确认失败计入；纸球无效中止已替换为正常执行的补采失败记录。
+实验按标注迭代、整体表现、模块消融、物体与位置变化、执行瓶颈与时间、理论联系组织。
+统计细节、实现配置、失败计数和完整条件结果放在 evaluation_details.tex。
 
-`experiments.tex` 包含总体、类别、位置、消融、重复表现、时间、失败阶段和推理开销。
-`evaluation_details.tex` 说明有效记录、标签修正及统计口径。
-`figures/results_20261023/` 包含五组中文 PDF/PNG 图：
+五方法共480次有效试验，每方法96次；四类物体、12位置、每条件两次。
+纳入ACT、DP、RGBQtoken、segNoQtoken和viewQtoken，不包含VIOLA。
+已有人工修正与无效中止替换记录保留，不重新筛选结果。
 
-1. `overall_objects_zh`：总体及四类物体；
-2. `ablation_zh`：语义输入与查询监督的四格对照；
-3. `position_zh`：同位置跨物体汇总；
-4. `time_failure_zh`：累计完成与失败阶段；
-5. `object_position_zh`：完整物体—位置矩阵。
+figures/results_20261023 包含五组英文 PDF/PNG：
 
-图表及动态表格来自 `results/` 的冻结CSV/JSON。原始统计脚本与已执行notebook位于项目本地的 `result/final_five_method_comparison_20261023/`（该原目录不随此次提交上传）。
-本稿携带冻结的逐试验CSV、汇总、检验值、人工复核和验证结果，可独立重建图表。
+1. overall_objects_en：总体区间及四类物体，附录。
+2. ablation_en：语义输入与监督查询四格对照。
+3. position_en：同位置跨物体汇总。
+4. time_failure_en：累计完成与失败阶段。
+5. object_position_en：完整物体--位置矩阵，附录。
 
-```bash
-/home/romilab/.cache/codex/eval-analysis-venv/bin/python docs/draftv7/build_experiment_assets.py
-python docs/draftv7/build_result_tables.py
+旧中文图与生成器保留，但当前论文不引用这些中文图。
+英文图表由 results 中冻结的 CSV/JSON 生成，无需模型权重或视频。
+来源与产物哈希保存在 results/english_assets_manifest.json。
+
+figures/annotation_finaldata/annotation_iteration_en 展示R0--R3的固定保留视频异常率及伪标签扩充。
+results/annotation_finaldata 保存SAM2来源哈希、逐视频诊断、像素混淆矩阵和模型谱系的精简快照。
+快照核对两视角R3与finaldata_seg/models导出模型一致；不重新推理，不修改SAM2工程。
+保留视频没有人工像素真值，种子参考不是独立测试集。图中异常率是自动诊断，不是人工错误率。
+
+## 重建与验证
+
+在仓库根目录执行：
+
+~~~bash
+.cache/viola/venv/bin/python docs/draftv7/build_experiment_assets_en.py
+.cache/viola/venv/bin/python docs/draftv7/build_annotation_assets.py
 bash docs/draftv7/build.sh
-python docs/draftv7/verify_draft.py
-```
+python3 docs/draftv7/verify_draft.py
+~~~
 
-`verify_draft.py` 的原始记录哈希检查依赖本机原始数据路径；CSV、图表和表格重建不依赖图像帧或模型权重。
-编译沿用独立latex环境，图表使用独立分析环境。
+绘图仅需 numpy 和 matplotlib，使用本机已有环境，不修改策略环境。
+验证默认检查冻结数据、图表哈希、理论保留、引用及编译日志，显式报告原机器数据缺失。
+加 --require-originals 后严格要求原始 JSONL 可访问；本机缺少这些其他机器路径，不能声称完成原始视频复审。
+v6 源文件和理论仍严格核对，包含运行路径的 .log/.blg 等易变构建记录不作为源文件完整性判据。
+标注生成器加 --refresh 可重新读取SAM2记录并校验源报告与导出模型，默认只使用冻结快照。
 
-## 保留原稿带来的待定事项
+## 审阅入口与待定事项
 
-遵照本次范围，方法正文未改为最终checkpoint的实现描述。最终测试实际使用硬语义图、三个共享查询的双视角八维读出、目标像素到固定区域的最大距离，以及按几何有效坐标数归一化的辅助损失；这些差异已在实验章节“本轮测试的实现配置”集中说明。
+- [写作参考、理论对应与补充验证建议](experiment_revision_notes.md)。
+- [方法实现核对与尚未验证部分](method_implementation_notes.md)。
+- [验证记录](verification_zh.md)。
 
-v6引言中的仿真表述、讨论中的第二任务及失败案例占位未扩写为新结果。当前新增证据仅覆盖所报告的一项实机任务。摘要、相关工作占位、讨论定稿及方法与最终实现的统一仍应后续单独修订。
-
-本文保留条件性理论，实机成功率不直接验证覆盖、动作敏感性或专家选择假设。
-未新增跨训练种子实验、独立分割精度评估或逐查询消融；参考文献库本次未重新做全库出版信息核验。
+未扩写摘要、相关工作、引言中的仿真表述、讨论中的第二任务及案例占位。
+当前新增证据只覆盖所报告的一项实机任务，整稿定稿时需统一这些部分。
+成功率支持方法在所测任务上的有效性，不直接证明覆盖、敏感性或专家选择假设。
+本轮未新增跨训练种子实验、独立像素真值测试、质量筛选消融或逐查询消融。

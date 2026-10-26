@@ -1,218 +1,199 @@
-\section{实机实验}
+\section{Experiments}
 \label{sec:experiments}
-实验围绕三个问题展开：完整方法相对现有动作生成策略的表现如何，语义输入与查询监督分别带来何种收益，
-以及这些收益如何随物体类别和初始位置变化。
-全部结果来自完成补采后的五组实机记录，共480次有效试验。
+本节检验语义引导的任务信息表示能否改善有限示范下的实际任务完成表现。
+双臂暴露与执行要求机器人主动改变遮挡、建立工具接触并完成目标转移，能够同时考察感知变化与多阶段动作衔接。
+实验依次考察标注扩展过程的质量变化、完整方法的任务表现、语义输入与受监督查询的贡献，以及不同物体、位置和执行阶段上的收益。
+评价以实际任务结果而非训练误差为依据，对应第~\ref{sec:actionanalysis}节对模仿目标与任务目标的区分。
 
-\subsection{任务、数据与评价协议}
-双臂系统执行遮挡物体操作：一侧操作遮挡布使目标暴露，另一侧使用工具将目标移出遮挡并送入指定区域，随后恢复遮挡布覆盖。
-输入来自前、侧两个RGB视角，统一为$640\times360$。
-示范数据包含108条轨迹、61740帧，以30 Hz记录10维关节位置和动作，训练物体为方块、纸球和螺丝。
-测试增加训练未见的蜡笔，按相同任务目标评估类别变化下的表现。
-这里的训练未见指动作示范中的物体类别，不涉及对视觉预训练语料的排除承诺。
+\subsection{Experimental Setup}
+\label{sec:experimentalsetup}
+\subsubsection{任务与示范}
+平台由两台SO-ARM101机械臂及固定的前、侧视相机构成，图像分辨率为$640\times360$。
+机器人首先拨开遮挡布，使目标暴露并与布料分离，再使用末端工具将目标送入指定区域，最后恢复布料在前视画面中的覆盖面积。
+布料恢复不是重新遮盖目标物体。
+示范集包含方块、纸球和螺丝三类物体，共108条轨迹、61,740帧，以30 Hz记录双视角图像、10维关节状态和关节指令。
+所有方法使用这组动作示范，不增加策略交互训练数据。
 
-每类物体设置12个位置，每位置重复两次，每种方法共96次。
-位置以$(x,y)$表示，$x=0,1,2,3$从图像左向右排列，$y=0,1,2$从上向下排列。
-每种方法在同一位置汇总四类物体后有8次试验；每类物体有24次。
-该坐标用于描述测试网格，不赋予行号物理深度含义。
+一次任务须在40 s内使目标完全位于指定区域内，并使布料在前视图中的像素占比恢复至0.32以上。
+统一前视评估器检查暴露、分离、入区与布料恢复条件，以最近7次评估中的至少4次成功票确认完成；最终结果采用操作者确认后保存的标签。
+这将第~\ref{sec:task}节的任务完成判据具体化为可由视觉检查的条件，但不要求场景的全部物理状态可观测。
 
-单次策略控制时限为40 s，目标控制频率为30 Hz。
-统一视觉评估器使用前视角检测目标暴露、脱离遮挡、进入目标区域及遮挡布恢复，侧视角只作诊断。
-完成条件要求上述状态同时成立，并在最近7次分割评估中至少获得4次成功票；
-遮挡布恢复使用前视角像素占比阈值0.32。
-最终统计采用保存并由操作者确认的成功或失败标签。
-阶段检测是辅助证据，不以「曾到达某阶段」替代最终成功。
-所有纳入记录均为正常退出且未手动中止；一次无效中止已用正常完成的补采记录替换。
-附录~\ref{app:evalaudit}列出标签修正和补采处理。
+\subsubsection{测试条件与评价指标}
+测试使用三类示范物体及一个未出现在动作示范中的蜡笔类别。
+每类物体在$4\times3$网格的12个初始位置各测试两次，共48个物体--位置条件、每方法96次试验。
+横坐标$x=0,\ldots,3$从图像左侧向右侧增加，纵坐标$y=0,\ldots,2$从上向下增加。
+五种方法合计480次有效试验；当前记录用于评价跨位置表现，不将未经核实的训练位置划分表述为未见位置泛化。
 
-\subsection{本轮测试的实现配置}
-本轮最终checkpoint采用过滤后的硬标签语义图，训练读取离线标签，在线使用冻结U-Net的argmax输出和连通分量过滤。
-三个任务查询分别对应可见性、工具--目标向量和目标--区域距离，每个查询包含前、侧视角独立读出头，共8个标量。
-前视角工具参考点为主轴左端点，侧视角为工具质心；区域距离使用目标像素到固定区域的最大归一化距离。
-辅助Smooth L1损失的尺度为0.01，分母为几何有效坐标数，质量权重直接缩放分子。
-这些是本轮实验的实际配置；方法与方法附录中保留的早期表示、几何和损失形式未作为本轮实现参数使用。
+主要指标为任务成功次数及成功率，辅助指标为完成时间、阶段到达次数与同条件重复成功情况。
+总体成功率报告Wilson 95\%区间；方法差异按物体--位置分区组检验，并对10个总体两两比较作Holm校正。
+原始记录审计、统计条件和详细区组结果见附录~\ref{app:evalaudit}。
 
-\subsection{对照方法与消融设置}
-ACT与Diffusion Policy（DP）为基线。
-基于ACT构建四种模块配置：ACT仅使用RGB与本体信息；RGBQtoken增加关系查询监督；
-segNoQtoken增加双视角语义输入；viewQtoken同时使用语义输入与关系查询，为完整方法。
-图中分别简写为ACT、RGB＋Q、语义无Q和语义＋Q。
-这四种配置构成语义输入与查询监督的$2\times2$对照。
-
-四种ACT配置每次预测60步并执行30步，采用同步推理。
-DP预测64步、执行30步，采用异步推理；其DDIM去噪步数在三种训练物体上为16，在蜡笔上为24。
-DP比较体现相应部署配置的表现。
-所有配置均关闭额外修正模块；本组结果不包含VIOLA。
-
-主要指标为固定试验集合上的成功次数与成功率，报告总体Wilson 95\%区间作为比例不确定性的描述。
-方法比较以物体--位置为区组，在每个区组内合并两方法各两次结果，以超几何分配卷积计算双侧成功次数差检验。
-总体五方法的10个两两比较采用Holm校正。
-试验编号不作为跨方法的一一配对依据。
-检验以区组内结果可交换为零假设条件，未将采集协议表述为随机分配。
-
-\begin{table*}[t]
-\centering
-\caption{五组方法的最终实机结果。单元格为成功次数/试验数（成功率，\%）；蜡笔为训练未见物体。}
-\label{tab:mainresults}
-\small\setlength{\tabcolsep}{5pt}
-\begin{tabular}{lccccc}
-\toprule
-方法 & 方块 & 纸球 & 螺丝 & 蜡笔 & 总体\\
-\midrule
-\tableinput{results/main_table_rows.tex}
-\bottomrule
-\end{tabular}
-\end{table*}
-\begin{figure*}[t]
-\centering
-\includegraphics[width=\textwidth]{figures/results_20261023/overall_objects_zh.pdf}
-\caption{总体及分物体比较。(a) 每方法96次，误差线为总体比例的Wilson 95\%区间；右侧标注成功次数。(b) 每方法每类物体24次，柱顶数字为成功次数；蜡笔标记为训练未见类别。完整方法在四类物体上均为23/24。}
-\label{fig:overallobjects}
-\end{figure*}
-
-\begin{figure*}[!t]
-\centering
-\includegraphics[width=\textwidth]{figures/results_20261023/position_zh.pdf}
-\caption{相同位置下的跨物体汇总。每格为成功次数/8，统一色阶对应0--100\%成功率；横轴从左向右、纵轴从上向下。位置$(0,1)$上，ACT、DP、RGBQtoken和segNoQtoken分别为2/8、0/8、3/8和1/8，完整方法为7/8。}
-\label{fig:positions}
-\end{figure*}
-
-\subsection{总体表现与物体类别}
-表~\ref{tab:mainresults}和图~\ref{fig:overallobjects}显示，完整方法成功92/96次，达到95.83\%。
-ACT、DP、RGBQtoken及segNoQtoken分别为54/96、50/96、72/96和60/96。
-完整方法相对四组对照分别提高39.58、43.75、20.83和33.33个百分点。
-总体区组检验经Holm校正后，完整方法与四组对照的差异均达到0.05水平（表~\ref{tab:contrasts}）。
-RGBQtoken相对ACT和DP的校正后$p$值分别为0.0188与0.000845；
-segNoQtoken相对ACT的差异未达到该水平，校正后$p=0.817$。
+\subsubsection{对照与模块配置}
+采用ACT~\cite{zhao2023act}和Diffusion Policy（DP）~\cite{chi2023diffusion}作为动作生成基线。
+在同一ACT骨干上，以$S$表示额外语义视觉输入，以$Q$表示受监督的任务描述量查询，构造表~\ref{tab:ablationdesign}的四格对照。
+所有配置均保留RGB与本体信息；ACT+$Q$只在训练时使用由语义标签构造的辅助监督，部署时不输入分割图。
+ACT+$S$与完整方法使用同一套冻结分割器。
 
 \begin{table}[t]
 \centering
-\caption{完整方法相对各对照的总体差异。成功率差以百分点计；$p$值在全部10个总体比较内校正。}
-\label{tab:contrasts}
+\caption{Factorial ablation of semantic inputs ($S$) and supervised task-descriptor queries ($Q$). All variants retain RGB and proprioception.}
+\label{tab:ablationdesign}
 \small
 \begin{tabular}{lcc}
 \toprule
-对照 & 成功率差 & Holm校正$p$\\
+Variant & Semantic input & Supervised queries\\
 \midrule
-\tableinput{results/contrast_rows.tex}
+ACT & -- & --\\
+ACT+$S$ & Yes & --\\
+ACT+$Q$ & -- & Yes\\
+Ours ($S+Q$) & Yes & Yes\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-完整方法在四类物体上均为23/24，训练物体合计69/72，蜡笔23/24，二者观察成功率同为95.83\%。
-ACT和DP在三种训练物体上均为41/72，在蜡笔上分别为13/24和9/24。
-RGBQtoken与segNoQtoken在蜡笔上分别为19/24与17/24，完整方法进一步提高到23/24。
-按相同类别比较，完整方法相对ACT的增量分别为5、11、12和10次成功，
-相对segNoQtoken为7、12、7和6次，纸球上的改进最明显。
-对四类物体全部40个方法比较统一校正后，完整方法相对segNoQtoken在纸球上仍有差异证据（$p=0.00376$）；
-不能将总体显著性直接推广为每个类别的单独显著性。
+四种ACT配置均训练100,000步，batch size为8，学习率为$10^{-5}$，随机种子为1000。
+部署时每次预测60步、执行前30步后同步重新规划。
+DP使用100,000步checkpoint，预测64步、执行30步，采用异步推理；DDIM在三类示范物体上使用16步，在蜡笔上使用24步。
+因此，ACT四格对照用于分析表示模块的作用，DP比较反映其所用部署配置的系统表现。
+所有方法目标控制频率均为30 Hz，但不假定实际推理延迟完全相同。
 
-\subsection{语义输入与查询监督的消融}
-图~\ref{fig:ablation}给出四种ACT配置。
-相对RGB基线，仅增加查询监督提高18.75个百分点，仅增加语义输入提高6.25个百分点。
-在查询监督存在时增加语义输入，提高20.83个百分点；
-在语义输入存在时增加查询监督，提高33.33个百分点。
-完整方法相对两个单模块配置分别多成功20次和32次。
+完整方法使用过滤后的硬语义彩色图，与RGB共享视觉编码器；训练读取离线标注，推理使用冻结U-Net。
+三个共享查询分别描述目标可见面积、工具--目标向量和目标--区域距离，并以独立的双视角读出头产生八维监督量。
+质量权重与查询监督共同启用；本轮未将其拆分为独立实验因素。
+具体几何、损失及记录名称映射见附录~\ref{app:testedimplementation}。
 
-两条增益之差为14.58个百分点，描述了本次试验中联合配置的额外改善。
-本研究未对这一交互差异实施独立推断，因此将其作为描述性结果。
-实验支持联合设计优于两个单模块配置，不能仅凭该差值断言存在显著的统计交互效应。
+\subsection{Quality-Aware Iterative Annotation}
+\label{sec:annotationresults}
+从少量审核种子出发，迭代流程扩展了可用语义监督，并降低了保留视频上原始预测的异常率，但改善并非逐轮单调。
+每类示范物体选取一条双视角轨迹作为人工种子，共3条轨迹，每个视角1,967帧；另保留3条轨迹、每视角1,878帧监测迭代，不参与分割训练。
+前、侧视角分别训练U-Net，种子仅用于初始模型R0；后续三轮累计覆盖15、44、102条非种子轨迹，旧轮准入标签与新轮标签共同训练下一模型。
+至R3，前、侧视角分别累积47,766和42,010帧准入伪标签，包含训练与内部验证划分（图~\ref{fig:annotationiteration}(a)）。
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/annotation_finaldata/annotation_iteration_en.pdf}
+\caption{Annotation expansion and held-out video diagnostics. (a) Cumulative accepted pseudo-label frames, including the internal validation split. (b, c) Automatically flagged frames before and after structural filtering, evaluated on the same three held-out trajectories (1,878 frames per view). R0 is the seed-trained model; R1--R3 use cumulative pseudo-labels. Filtering modifies masks, rather than removing frames from these evaluation denominators.}
+\label{fig:annotationiteration}
+\end{figure*}
+
+在固定保留视频上，前视原始预测的异常率从R0的7.72\%降至R3的4.42\%，侧视从12.19\%降至9.53\%。
+这里的异常表示面积、空间形状、拓扑和运动一致性中的多类证据同时触发，并不等同于人工确认的分割错误。
+结构过滤后的侧视异常率从8.20\%降至6.34\%，但前视从1.81\%变为1.92\%，没有相同的改善（图~\ref{fig:annotationiteration}(b, c)）。
+两个视角的原始异常率均在R2低于R3，说明扩大伪标签池不保证所有质量指标持续改善。
+
+人工种子还用于检查像素标签一致性，逐轮结果见表~\ref{tab:annotationiterations}。
+R1--R3的前视前景mIoU为97.90\%--97.87\%，侧视约97.66\%--97.65\%；但侧视R0在自身训练种子上为99.06\%，至R3下降约1.41个百分点。
+种子受初始教师训练影响，而保留视频没有人工像素真值，因此这些结果分别反映种子参考一致性和无标签异常诊断，不能证明独立测试集上的精度不退化。
+后续策略使用已导出的R3分割器，不将其表述为各项指标均最优。
+
+这组记录展示了少量人工种子向大规模伪标签扩展的可行性及质量监测的必要性。
+它对应附录~\ref{app:pseudolabel}中对伪标签误差的关注，但异常率并非描述量标签误差的直接测量；质量筛选的独立贡献仍需无筛选对照。
+评价划分与门控口径见附录~\ref{app:annotationaudit}。
+
+\subsection{Overall Task Performance}
+\label{sec:overallresults}
+完整方法在96次试验中成功92次，成功率为95.83\%，相比ACT和DP分别提高39.58和43.75个百分点（表~\ref{tab:mainresults}）。
+总体区间及分类别可视化见附录图~\ref{fig:overallobjects}。
+按相同物体--位置条件比较，完整方法相对两种基线和两个单模块配置的总体差异均在Holm校正后达到$p<0.001$。
+详细效应量与检验值见表~\ref{tab:contrasts}。
+
+\begin{table*}[t]
+\centering
+\caption{Real-robot task performance. Entries report successes/trials (percentage); crayon is absent from the policy demonstrations. Time is averaged over successful trials only.}
+\label{tab:mainresults}
+\small\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccccc}
+\toprule
+Method & Cube & Paper ball & Screw & Crayon (unseen) & Overall & Time (s)\\
+\midrule
+\tableinput{results/main_table_rows_en.tex}
+\bottomrule
+\end{tabular}
+\end{table*}
+
+这一比较表明，在相同动作示范和测试条件下，联合表示设计能够改善完整任务结果，而不仅是改变监督损失。
+不过，总体优势不能单独归因于语义输入或查询监督；下面通过四格消融分析两者的作用。
+
+\subsection{Contributions of Semantics and Supervised Queries}
+\label{sec:ablationresults}
+联合配置的收益大于任何一个单模块配置，但仅增加语义输入的改善有限（图~\ref{fig:ablation}）。
+ACT+$S$成功60/96次，相比ACT增加6次（6.25个百分点），总体差异未达到校正后0.05水平（$p=0.817$）。
+相比之下，ACT+$Q$成功72/96次，增加18次（18.75个百分点，$p=0.0188$）。
+这说明，受监督的任务查询模块在没有额外语义输入时也能带来收益；增加一个语义视觉流并不自动产生相同效果。
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{figures/results_20261023/ablation_zh.pdf}
-\caption{语义输入与查询监督的四格对照，每格96次。所有配置保留RGB和本体观测，语义输入为额外视觉流。}
+\includegraphics[width=\columnwidth]{figures/results_20261023/ablation_en.pdf}
+\caption{The $2\times2$ ACT ablation. Each cell contains 96 trials. The query factor includes task-query tokens and their quality-weighted descriptor supervision.}
 \label{fig:ablation}
 \end{figure}
 
-\begin{table*}[!t]
-\centering
-\caption{总体比例区间与控制时长。时间不含标签保存及视频编码；成功子集平均值与全部试验平均值分别统计。}
-\label{tab:timing}
-\small
-\begin{tabular}{lcccc}
-\toprule
-方法 & 成功率95\%区间（\%） & 成功子集均时（s） & 全部试验均时（s） & 20 s内成功\\
-\midrule
-\tableinput{results/timing_rows.tex}
-\bottomrule
-\end{tabular}
-\end{table*}
+当已有查询监督时，增加语义输入使成功次数从72提高到92；当已有语义输入时，增加查询模块使成功次数从60提高到92。
+两个单模块配置均未达到联合配置的表现。
+两条增益之差为14.58个百分点，作为描述性结果提示联合使用的价值，但本轮没有对该交互量进行独立显著性检验。
+
+这一现象与第~\ref{sec:representationanalysis}节的设计动机一致：有用的表示不仅需要突出对象结构，还应保留动作选择所需的任务信息。
+语义图提供对象级输入，而查询监督约束其联合表示中可读出的可见性和空间关系。
+四格结果支持这套联合设计，但不直接测量描述量误差$\delta_{G,\rho}$，也不将增加查询的效果等同于已经证明$D_\phi$下降。
+
+\subsection{Object and Position Variation}
+\label{sec:positionresults}
+完整方法的高成功率并非仅来自某一种物体或少数初始位置。
+四类物体均成功23/24次；三类示范物体合计69/72次，示范未见的蜡笔为23/24次。
+在蜡笔上，ACT、DP、ACT+$S$及ACT+$Q$分别成功13、9、17和19次。
+因此，当前证据支持向这个额外物体类别的迁移，但其范围不是任意未见物体或跨任务泛化。
+
 \begin{figure*}[!t]
 \centering
-\includegraphics[width=\textwidth]{figures/results_20261023/time_failure_zh.pdf}
-\caption{完成时间与失败阶段。(a) 分母固定为每方法全部96次试验，失败试验不会从分母移除。(b) 依据记录中最远到达的自动阶段与最终保存标签划分失败；边界误判经人工改为失败，保留在最后一类中。}
+\includegraphics[width=\textwidth]{figures/results_20261023/position_en.pdf}
+\caption{Success across the initial-position grid. Each cell pools four objects and two repeats ($n=8$); all panels share the same 0--100\% scale. Coordinates refer to the image grid, not physical depth.}
+\label{fig:positions}
+\end{figure*}
+
+图~\ref{fig:positions}显示，完整方法在12个位置均至少成功7/8次，而ACT和DP的最差位置分别为1/8和0/8。
+ACT+$S$与ACT+$Q$仍分别存在1/8和3/8的位置。
+完整方法相对ACT+$Q$新增的20次成功中，17次来自左侧两列；
+相对ACT+$S$新增的32次成功中，30次来自上方两行。
+这些空间分布表明，联合配置的改善主要补足了单模块方案表现较弱的区域，而非只在原本容易的位置重复获益。
+
+以每个物体--位置的两次重复为单位，完整方法在48个条件中的44个条件两次均成功，其余4个条件各成功一次，没有两次均失败的条件。
+ACT、DP、ACT+$S$和ACT+$Q$两次均成功的条件数分别为17、18、22和31。
+每条件仅两次重复不足以精确估计局部成功概率，但与空间分布一起支持完整方法在本测试网格上的一致性。
+完整物体--位置矩阵见附录图~\ref{fig:objectpositions}。
+这里检验的是部署行为在条件变化下的表现，不以网格成功率代替第~\ref{sec:representationcoverage}节的表示覆盖常数。
+
+\subsection{Execution Bottlenecks and Completion Time}
+\label{sec:executionresults}
+阶段记录将主要收益定位在目标分离后的入区过程，而非仅在初始暴露阶段。
+ACT在89次试验中曾使物体分离，但仅55次曾入区；ACT+$S$相应为93次和62次，ACT+$Q$为92次和73次。
+完整方法则在全部96次试验中达到分离，92次入区并最终成功。
+因此，相比只输入语义图，完整方法最明显的变化是减少了分离后未能完成目标转移的试验。
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/results_20261023/time_failure_en.pdf}
+\caption{Completion and failure profiles. (a) Cumulative successful trials divided by all 96 trials; failures remain in the denominator. (b) Mutually exclusive failure categories based on the furthest automatically detected stage and the final reviewed label.}
 \label{fig:timefailure}
 \end{figure*}
 
-\subsection{位置分布与同条件重复表现}
-\label{sec:positionresults}
-图~\ref{fig:positions}按相同位置汇总四种物体，附录图~\ref{fig:objectpositions}进一步给出每个物体--位置的两次结果。
-完整方法12个位置均至少成功7/8次；ACT范围为1/8至8/8，DP为0/8至8/8，
-RGBQtoken为3/8至8/8，segNoQtoken为1/8至8/8。
-因此，完整方法的观察优势体现在更多位置上保持较高成功次数。
+ACT+$S$的36次失败中，31次发生在已分离但未入区的情形；完整方法的4次失败也集中于此（图~\ref{fig:timefailure}及表~\ref{tab:failurecounts}）。
+工具--目标向量和目标--区域距离正是为这一过程选择的描述量。
+失败分布与这种设计意图相符，但由于三个查询一同启用，不能将收益分别归因于某个查询，或由阶段日志判断具体接触失效原因。
 
-按列汇总，每列24次，完整方法从左到右为23、24、23、22次成功，
-ACT为6、17、18、13，DP为2、9、19、20，RGBQtoken为12、18、20、22，segNoQtoken为8、17、18、17。
-完整方法相对RGBQtoken新增的20次成功中，17次来自左侧两列。
-按行汇总，每行32次，完整方法从上到下为30、30、32，segNoQtoken为16、14、30。
-二者32次成功数增量中有30次来自上方两行；segNoQtoken的36次失败中有34次位于这两行。
-这些分布说明，加入查询监督后的改善并非仅来自原本容易的位置。
+完整方法在20 s内成功86/96次，30 s内完成全部92次成功试验；ACT和DP在20 s内分别成功48次和40次。
+这说明收益在统一时间预算内体现为更多完整任务，而不只是等待更久。
+成功试验平均耗时为14.77 s，与ACT的14.96 s和DP的15.28 s接近；
+ACT+$Q$和ACT+$S$分别为13.55 s和13.80 s，但各方法成功子集不同，不能据此建立公平的速度排名。
+所有试验均计入时，完整方法的平均控制时长为15.82 s，主要反映超时失败更少。
 
+这一收益伴随额外感知开销。
+完整方法的可训练参数比ACT增加7,176个（约0.014\%），冻结分割器使总参数量增至76.53 M；
+日志中的动作块推理流水线均时为79.24 ms，ACT为12.16 ms。
+这些值包含各自流水线开销，并非查询模块的独立耗时；完整部署配置和时间统计见附录~\ref{app:runtimeprofile}。
 
-
-对位置、物体、列和行分别进行分层置换关联检验，使用200000次置换，对五方法共20项检验统一Holm校正。
-DP与segNoQtoken的12位置关联分别得到$p=0.000100$和$p=0.00144$；
-ACT、DP、RGBQtoken及segNoQtoken的列关联校正后$p$分别为0.0217、0.000100、0.0480和0.0258。
-DP与segNoQtoken还表现出行关联，校正后$p$分别为0.0480和0.000270。
-完整方法的四类关联检验均未检出差异；五种方法的物体类别关联均未达到校正后0.05水平。
-未检出关联不等于证明位置或类别无影响，尤其不能仅凭不同方法各自的$p$值判定方法间的位置敏感性差异显著。
-
-48个物体--位置条件中，两次均成功的条件数依次为ACT 17、DP 18、RGBQtoken 31、segNoQtoken 22和完整方法44。
-完整方法无两次均失败的条件，其余4个条件均为一成一败，分别是方块$(3,1)$、纸球$(3,0)$、螺丝$(2,0)$和蜡笔$(0,1)$。
-在相同条件的成功次数比较中，完整方法相对segNoQtoken在24个条件较好、23个相同、1个较差；
-相对RGBQtoken为16个较好、30个相同、2个较差。
-因此，整体改善并不意味着逐条件严格占优。
-
-\subsection{完成时间与失败阶段}
-表~\ref{tab:timing}及图~\ref{fig:timefailure}同时报告时间和失败分布。
-完整方法20 s内成功86/96次，30 s内成功92/96次；
-RGBQtoken相应为69/96与72/96，segNoQtoken为55/96与57/96。
-成功试验的平均控制时长分别为完整方法14.77 s、RGBQtoken 13.55 s、segNoQtoken 13.80 s、ACT 14.96 s与DP 15.28 s。
-各方法成功子集不同，完整方法并非成功子集平均耗时最短者。
-将全部试验纳入后，完整方法平均控制时长为15.82 s，反映其更少进入超时失败。
-
-
-
-
-按「曾暴露、曾分离、曾入区、最终保存成功」顺序，完整方法为96、96、92、92次，
-segNoQtoken为94、93、62、60，RGBQtoken为93、92、73、72。
-ACT和DP分别为90、89、55、54及93、93、50、50。
-在segNoQtoken的36次失败中，31次到达分离阶段但未入区；完整方法的4次失败均属于这一阶段。
-因此，完整方法的主要改善出现在分离后的目标入区过程，而剩余失败也集中于此。
-「曾入区但最终失败」包含后续条件未满足以及人工标签修正，不能统一解释为恢复遮挡失败。
-
-日志中完整方法的可训练参数为51592082个，相比ACT的51584906个增加7176个，约0.014\%。
-冻结分割器使总参数量增加至76531328个。
-完整方法加权平均动作块推理流水线耗时约79.24 ms，ACT约12.16 ms，DP约255.48 ms，
-RGBQtoken约54.15 ms，segNoQtoken约71.20 ms。
-这些日志值包含各自流水线开销，不能作为仅由查询头造成的延迟或统一硬件基准；
-共享执行前缀和目标频率也不等于各方法实际控制节拍完全一致。
-
-\begin{table*}[!t]
-\centering
-\caption{按最远到达阶段划分的失败计数。各列互斥，合计等于保存为失败的试验数。}
-\label{tab:failurecounts}
-\small
-\begin{tabular}{lccccc}
-\toprule
-方法 & 未暴露 & 暴露未分离 & 分离未入区 & 曾入区但最终失败 & 总失败\\
-\midrule
-ACT & 6 & 1 & 34 & 1 & 42\\
-DP & 3 & 0 & 43 & 0 & 46\\
-RGBQtoken & 3 & 1 & 19 & 1 & 24\\
-segNoQtoken & 2 & 1 & 31 & 2 & 36\\
-viewQtoken & 0 & 0 & 4 & 0 & 4\\
-\bottomrule
-\end{tabular}
-\end{table*}
+\subsection{Connection to the Analysis}
+\label{sec:experimentalevidence}
+本轮实验提供了三个层面的证据：迭代记录展示语义监督的扩展及其质量变化，整体比较验证任务层面的收益，语义--查询四格对照与阶段分布支持任务信息表示的设计动机。
+它们与第~\ref{sec:relationtransfer}节从任务描述量到专家动作重构、再到条件误差迁移的分析相衔接，但不构成对其假设或上界数值的直接验证。
+当前没有独立测量$C_\phi$、$D_\phi$、部署描述量误差或专家选择近似误差，也没有拆分质量筛选与查询监督的贡献。
+因此，本文据此报告联合设计在所测任务上的有效性，而不声称已由实机成功率证明理论保证或标注流程的独立因果作用。

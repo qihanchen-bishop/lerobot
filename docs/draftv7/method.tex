@@ -30,10 +30,10 @@ Bounding boxes and positive and negative point prompts guide bidirectional SAM2 
 The seeds train an initial U-Net segmenter, which predicts candidate masks on new unlabeled videos.
 % 质量合格的标注跨轮累积，每轮重新初始化训练，种子不再用于后续拟合。
 Accepted masks accumulate across iterations, and each subsequent segmenter is reinitialized and trained on this cumulative pool without the original seed videos.
-% 种子改为固定参考，依据分割精度和异常率监测迭代。
-The seed videos then serve as a fixed reference for monitoring segmentation accuracy and temporal anomalies.
-% 不固定迭代次数，以精度保持条件下的异常改善作为继续依据。
-Iteration continues while anomaly rates improve without a material loss of segmentation accuracy.
+% 种子用于检查标签一致性，训练外保留视频用于监测异常。
+The seed videos provide a fixed reference for label agreement, while held-out videos monitor temporal anomalies.
+% 监测迭代过程而不预设扩大标签池必然提升质量。
+Both are tracked across iterations to assess whether expansion compromises annotation quality.
 
 \subsubsection{Video-Level Quality Screening}
 % 质量评估需要区分真实任务变化与偶发分割异常。
@@ -75,17 +75,19 @@ RGB and proprioception remain available for decision cues not captured by the se
 This design targets the descriptor-estimation term in~\eqref{eq:expertreconstruction} through the learned representation, rather than assuming that adding semantic channels improves coverage.
 
 \subsubsection{Joint Visual-Semantic Encoding}
-% 冻结的各视角分割器输出类别概率，并以固定颜色形成软语义图。
+% 冻结的各视角分割器输出类别概率，硬化并过滤后形成固定颜色语义图。
 For view $v$, a frozen segmenter predicts class probabilities $p_t^v(c,\xi)$ from image $I_t^v$.
-We form a soft semantic image as
+We form a semantic image from the filtered class labels:
 \begin{equation}
- S_t^v(\xi)=\sum_{c\in\mathcal C_v}p_t^v(c,\xi)e_c^{\mathrm{sem}},
+ \bar c_t^v=\mathcal T_v\!\left(\operatorname*{arg\,max}_{c\in\mathcal C_v}p_t^v(c,\cdot)\right),
+ \qquad S_t^v(\xi)=e_{\bar c_t^v(\xi)}^{\mathrm{sem}},
  \label{eq:methodsoftsem}
 \end{equation}
-% 定义类别集合、像素和固定颜色；不进行argmax硬化。
-where $\mathcal C_v$ is the view-specific class set, $\xi$ a pixel location, and $e_c^{\mathrm{sem}}\in[0,1]^3$ a fixed class color.
-% 概率加权颜色图允许共享三通道编码器。
-This probability-weighted color representation allows RGB and semantics to use the same three-channel visual encoder without argmax hardening.
+% 定义类别集合、像素、结构过滤算子及固定颜色。
+Here, $\mathcal C_v$ is the view-specific class set, $\xi$ a pixel, $\mathcal T_v$ the class-dependent structural filter, and $e_c^{\mathrm{sem}}\in[0,1]^3$ a fixed class color.
+% 训练读取离线掩码，部署使用冻结分割器；两者均采用硬类别彩色图。
+Offline masks provide these images during policy training; frozen segmenters provide them at deployment.
+The fixed color representation allows RGB and semantics to share a three-channel visual encoder.
 % 各输入流分别编码后与本体信息和查询进入Transformer。
 The encoded streams from all views are combined with proprioceptive and query tokens in a transformer encoder.
 % ACT作为基础实例，不展开其标准生成结构。
@@ -96,35 +98,38 @@ An ACT decoder~\cite{zhao2023act} reads this context to predict the base action 
 We select $K_{\mathrm{rel}}$ descriptor groups $G^{(j)}\in\R^{d_j}$, such as visible area and relative position, which together form the task descriptor vector $G$.
 % 标签来自离线语义掩码，具体任务定义放在附录。
 Fixed geometric operators applied to the offline masks generate pseudo-labels $\widetilde G_t^{(j)}$; the task-specific definitions are given in Appendix~\ref{app:descriptorinstance}.
-% 每组一个查询，查询输出同时用于辅助读出与动作解码。
-Each group has a learnable query whose encoded output $z_t^{(j)}$ supports a prediction head,
-$\widehat G_t^{(j)}=D_j(z_t^{(j)})$, and remains available to the action decoder.
+% 每组共享一个查询，以各视角独立读出监督，查询输出同时用于动作解码。
+Each group has a shared learnable query whose encoded output $z_t^{(j)}$ supports view-specific heads,
+$\widehat G_t^{(j,v)}=D_{j,v}(z_t^{(j)})$, and remains available to the action decoder.
+The view-specific outputs are concatenated rather than averaging geometry across camera coordinates.
 % 约束的是可读出的任务信息，不是指定注意力图。
 Supervision therefore encourages task information to be recoverable from the policy representation without prescribing an attention map.
 
 % 描述量权重依据自身有效性与相关类别的质量，避免无关异常影响监督。
-A weight $\varpi_{n,j}^{G}\in[0,1]$ combines descriptor validity with quality evidence from the relevant semantic classes.
+A weight $\varpi_{n,j,v}^{G}\in[0,1]$ combines descriptor validity with quality evidence from the relevant semantic classes.
 % 可信、存疑及异常标签分别全量、降权或停用。
 Reliable labels receive full weight, uncertain labels are downweighted, and undefined or anomalous labels receive zero weight.
 % 无定义距离与确认的零面积需要区分。
-In particular, a distance is undefined when either object is invisible, whereas a confirmed absence can provide a valid zero-visible-area label.
+In particular, missing objects invalidate geometric relations, while a zero-visible-area label remains eligible subject to quality screening.
 % 只停止辅助监督，不删除动作示范。
 Disabling a descriptor loss does not remove the sample's action supervision.
 % 将组内尺度归一化后的向量误差写为紧凑的辅助损失。
 With descriptors normalized to fixed scales, the training objective is
 \begin{align}
  \mathcal L_{\mathrm{rel}}
- &=\frac{1}{K_{\mathrm{rel}}}\sum_j
-   \frac{\sum_n\varpi_{n,j}^{G}
-      \ell_G(\widehat G_n^{(j)}-\widetilde G_n^{(j)})}
-        {\max(1,\sum_n\varpi_{n,j}^{G})},\nonumber\\
+ &=\frac{1}{K_{\mathrm{rel}}V}\sum_{j,v}
+   \frac{\sum_n\varpi_{n,j,v}^{G}
+      \ell_G(\widehat G_n^{(j,v)}-\widetilde G_n^{(j,v)})}
+        {\max(1,\sum_n m_{n,j,v}^{G})},\nonumber\\
  \mathcal L_{\mathrm{base}}
  &=\mathcal L_{\mathrm{IL}}
    +\lambda_{\mathrm{rel}}\mathcal L_{\mathrm{rel}}.
  \label{eq:methodbaseloss}
 \end{align}
 % 定义批索引、分量平均损失和ACT原有训练目标。
-Here, $n$ indexes minibatch samples, $\ell_G$ is the component-averaged Smooth L1 loss, and $\mathcal L_{\mathrm{IL}}$ is the standard ACT training objective.
+Here, $n$ indexes minibatch samples, $V$ is the number of views, $m_{n,j,v}^{G}$ indicates geometric validity, and $\ell_G$ is the component-averaged Smooth L1 loss.
+The denominator counts geometrically valid labels rather than their quality weights, so poor-quality labels reduce the auxiliary supervision strength.
+$\mathcal L_{\mathrm{IL}}$ is the standard ACT training objective.
 % 质量权重仅用于监督，分割器始终冻结。
 The segmenters remain frozen, and quality weights affect auxiliary supervision rather than online policy inputs.
 % 附录仅补充标签准入及其与描述量误差的关系。
