@@ -1,0 +1,11 @@
+{
+  "source_sha256": {
+    "results/annotation_finaldata/snapshot.json": "48410117625feeff0424d5d5a5def02baa5d8be60a9e2f4f9bab4b2c745c0e44"
+  },
+  "output_sha256": {
+    "figures/annotation_finaldata/annotation_iteration_en.pdf": "ea6214645821202df29d90025bb43e33ec8196249c2efb91496ce396f4cde66d",
+    "figures/annotation_finaldata/annotation_iteration_en.png": "3dade6f76079214cb80a701c1c52916f19db27c130b9ac56a989fbdc77484013",
+    "results/annotation_finaldata/metrics.csv": "8309c40aeee027beeb789cfaacade15bf4dec5b1fa064d441c610b1dcdacc952",
+    "results/annotation_finaldata/iteration_rows_en.tex": "da9f8940634b481cc6631de617ff5739e31ef6d7115ce8a418f73c94cebb80e2"
+  }
+}

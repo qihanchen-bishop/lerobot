@@ -1,0 +1,18 @@
+{
+  "records": 480,
+  "sql_summary_groups": 30,
+  "sql_method_position_groups": 60,
+  "sql_method_object_position_groups": 240,
+  "independently_verified_exact_tests": 60,
+  "prior_sources_identical": {
+    "ACT": true,
+    "DP": true,
+    "RGBQtoken": true,
+    "viewQtoken": true
+  },
+  "stage_nesting_checked": true,
+  "user_confirmed_label_overrides": 1,
+  "invalid_interruption_absent": true,
+  "replacement_present": true,
+  "video_content_not_manually_rescored": true
+}

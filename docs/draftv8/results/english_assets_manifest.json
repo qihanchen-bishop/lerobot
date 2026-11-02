@@ -1,0 +1,63 @@
+{
+  "builder": "build_experiment_assets_en.py",
+  "trials": 480,
+  "condition_cells": 240,
+  "method_labels": {
+    "ACT": "ACT",
+    "DP": "DP",
+    "RGBQtoken": "ACT + Q",
+    "segNoQtoken": "ACT + S",
+    "viewQtoken": "Ours (S + Q)"
+  },
+  "method_colors": {
+    "ACT": "#7A8691",
+    "DP": "#D99026",
+    "RGBQtoken": "#0072B2",
+    "segNoQtoken": "#B76D9C",
+    "viewQtoken": "#009E73"
+  },
+  "typography": {
+    "family": "STIXGeneral",
+    "title_pt": 10,
+    "label_pt": 9,
+    "tick_legend_pt": 8.5,
+    "dense_cell_pt": 8
+  },
+  "source_sha256": {
+    "results/ablation.csv": "b4dbb5b1a18454d9ef7408b48552ba8e3f534a917d92874d3a6fc13031befa6e",
+    "results/ablation_contrasts.csv": "a1d79f81408218edecb56a51ad6a0db5bd700805203669440f4a4357a2493047",
+    "results/association_tests.csv": "8c8f210b5c283045db82a6fc15746c93cd8d2a178ce202a210600a41ac5b9080",
+    "results/by_axis.csv": "9962722400961588a25aa94e4302b4301900d142f07aa6493fef66229e26838f",
+    "results/by_object.csv": "aa2bfc2a684d6011342ad68ca23dfb5844a5f6ac6154387f3325823d13cbc892",
+    "results/by_object_axis.csv": "add5b27b46e102f17165b849321f2c558ae8ef3791ee24bd029cf2506e587b46",
+    "results/by_position.csv": "71ab41a626bbfa5ea7d2dc1514669c8f096f353011c87f1509ab1f9163eb905d",
+    "results/condition_details.csv": "f15905b9fe0a78ea51ac0d84b5f3316835cad93d17e0823286c660448f524006",
+    "results/condition_reliability.csv": "3445a83649c35a156d5547f14fb85d0134300da11228f5f5f9774b4a0a8711c8",
+    "results/deviation_summary.csv": "d4e8e0c51703860787730b0eaa27f7f0062210aa4e117ed6d7e1dad4b872e6ce",
+    "results/failure_annotations.csv": "cd8ecb0263902427f56429a11d2c0efc95fa267e245abed8828b50f5ce63ac0d",
+    "results/failure_details.csv": "ca3c41bc5fa8ea930760bd49775c5f8061322b4d696a808f7fffa6dae08bc207",
+    "results/failure_stages.csv": "a4f5bca3332fbea934410ccbe77aebcb2a8eb451695179b9a9d853b34d890dcc",
+    "results/method_tests.csv": "752e44e59d98492565d757f66a9a972194fb64d0b87aa61696e8fa38e84a9015",
+    "results/seen_unseen.csv": "2aeef21da744a7a86fa1b856d822a713a28585537836759a271c7e000c856980",
+    "results/stages.csv": "8c3105f7b2be1eab5dee0b46fa958230d1f15da9c808e3701e5e5bc898c2e90d",
+    "results/timing.csv": "7d084ba30b4b9cedd3e6d033e9a631c7d553118f10358211d191518fe00f8468",
+    "results/trials.csv": "463ebcd40feb037b9a4fcaf2d7b66ae0f6f9dccaa5e26ef32ca444d94456d80b",
+    "results/summary.json": "c07ac20340330ca3180b49f3d0cd57aaaed01a50152d21c118df4c298b63718b"
+  },
+  "output_sha256": {
+    "figures/results_20261023/overall_objects_en.pdf": "51f2d143ecfb9cf1e2ceef83793493ee6b719f55b271b01fc765486d8a07eda3",
+    "figures/results_20261023/overall_objects_en.png": "5ee2342c0a572f0509a2da39980a6056a728576ef55bbac01f1dc72777b72f09",
+    "figures/results_20261023/ablation_en.pdf": "af9243bc6d8360f0771a6d56dddc55c3b59d44dd73a2cbd3fcd349435d39a48b",
+    "figures/results_20261023/ablation_en.png": "f247c9a7272a55212e3c4923e029908991b95193feb325f498022a57d071522d",
+    "figures/results_20261023/position_en.pdf": "9184eb8f663e99335439ad1ca251777212c0653994a1da743213ae0ad7d2a7b6",
+    "figures/results_20261023/position_en.png": "a0ccab22842e1b323b373d22aa4d63d9af29c3ba4c11747e3f23679d3b40fa29",
+    "figures/results_20261023/object_position_en.pdf": "6748fc98dbfb31341ad058e9949d52473f14cf3cb024965e957e3fe101e61817",
+    "figures/results_20261023/object_position_en.png": "6b69e42d14c67d1fd0cb0bb4c140abb5b5d766140d430a410dabcbee046def7a",
+    "figures/results_20261023/time_failure_en.pdf": "2729ce9d2569e6fd2fc41344308a1b8bb5264615c3b6364013c5be6c6fbabc75",
+    "figures/results_20261023/time_failure_en.png": "cd9d71404ee98c29903e7c8951e74371fa71687bb59d1b97707f4bd58edb4eee",
+    "results/main_table_rows_en.tex": "1509525729929e658661d4c8a8477a278e34e27e14deb0f93caffd7532388335",
+    "results/timing_rows_en.tex": "6122d7f9d8574958afada1d8ed4216ef73c7c5d35cd402a5ced1a8c7e47552a0",
+    "results/failure_rows_en.tex": "9469a20b0881552adb0866b633352e9b9f0c4f9eb9409c0b2ec2775e71791403",
+    "results/contrast_rows_en.tex": "8a33ed7e179eb5d83446f322d4b98ad2c191a47470a39f245e52700119875b68"
+  }
+}
