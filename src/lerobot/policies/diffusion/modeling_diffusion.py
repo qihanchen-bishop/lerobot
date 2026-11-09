@@ -45,6 +45,46 @@ from lerobot.policies.utils import (
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
 
 
+def decode_follower_joint_delta_minmax_actions(
+    predictions: Tensor,
+    state: Tensor,
+    *,
+    action_min: Tensor,
+    action_max: Tensor,
+    state_min: Tensor,
+    state_max: Tensor,
+) -> Tensor:
+    """Integrate denormalized deltas, then encode absolute commands for the standard postprocessor."""
+    if (
+        predictions.ndim != 3
+        or state.ndim != 2
+        or predictions.shape[0] != state.shape[0]
+        or predictions.shape[2] != state.shape[1]
+    ):
+        raise ValueError(
+            "Expected matching (B, steps, joints+gripper) predictions and (B, joints+gripper) state."
+        )
+    if state.shape[-1] < 2:
+        raise ValueError("Expected at least one joint and a final binary gripper.")
+    for value in (action_min, action_max, state_min, state_max):
+        if value.shape != state.shape[-1:] or not torch.isfinite(value).all():
+            raise ValueError("Follower decoding requires finite checkpoint normalization statistics.")
+    if torch.any(action_max < action_min) or torch.any(state_max < state_min):
+        raise ValueError("Invalid follower normalization ranges.")
+    # Match the processor's zero-range convention exactly.
+    action_range = action_max - action_min
+    action_range = torch.where(action_range == 0, 1e-8, action_range)
+    state_range = state_max - state_min
+    state_range = torch.where(state_range == 0, 1e-8, state_range)
+    raw = (predictions + 1) / 2 * action_range + action_min
+    current = (state + 1) / 2 * state_range + state_min
+    absolute = torch.empty_like(raw)
+    absolute[..., :-1] = current[:, None, :-1] + raw[..., :-1].cumsum(dim=1)
+    absolute[..., -1] = (raw[..., -1] >= 0.5).to(raw.dtype)
+    # This transport encoding may exceed [-1, 1]; do not denoising-clip absolute commands.
+    return 2 * (absolute - action_min) / action_range - 1
+
+
 class DiffusionPolicy(PreTrainedPolicy):
     """
     Diffusion Policy as per "Diffusion Policy: Visuomotor Policy Learning via Action Diffusion"
@@ -74,6 +114,20 @@ class DiffusionPolicy(PreTrainedPolicy):
         self._queues = None
 
         self.diffusion = DiffusionModel(config)
+
+        if config.action_target == "follower_joint_delta_gripper_absolute":
+            stats = kwargs.get("dataset_stats")
+            dim = config.output_features[ACTION].shape[0]
+            for prefix, key in (("action", ACTION), ("state", config.follower_state_key)):
+                for bound in ("min", "max"):
+                    value = (
+                        torch.full((dim,), float("nan"))
+                        if stats is None
+                        else torch.as_tensor(stats[key][bound], dtype=torch.float32).reshape(-1)
+                    )
+                    if value.shape != (dim,) or (stats is not None and not torch.isfinite(value).all()):
+                        raise ValueError(f"Invalid {key}.{bound} statistics for follower decoding.")
+                    self.register_buffer(f"follower_{prefix}_{bound}", value.clone())
 
         self.reset()
 
@@ -114,6 +168,16 @@ class DiffusionPolicy(PreTrainedPolicy):
         # stack n latest observations from the queue
         batch = {k: torch.stack(list(self._queues[k]), dim=1) for k in batch if k in self._queues}
         actions = self.diffusion.generate_actions(batch, noise=noise)
+
+        if self.config.action_target == "follower_joint_delta_gripper_absolute":
+            actions = decode_follower_joint_delta_minmax_actions(
+                actions,
+                batch[OBS_STATE][:, -1],
+                action_min=self.follower_action_min,
+                action_max=self.follower_action_max,
+                state_min=self.follower_state_min,
+                state_max=self.follower_state_max,
+            )
 
         return actions
 

@@ -100,6 +100,8 @@ class DiffusionConfig(PreTrainedConfig):
     n_obs_steps: int = 2
     horizon: int = 16
     n_action_steps: int = 8
+    action_target: str = "dataset_action"
+    follower_state_key: str = "observation.state"
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -156,6 +158,14 @@ class DiffusionConfig(PreTrainedConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.action_target not in {"dataset_action", "follower_joint_delta_gripper_absolute"}:
+            raise ValueError(f"Unsupported diffusion action target: {self.action_target}")
+        if self.action_target != "dataset_action":
+            if self.follower_state_key != "observation.state":
+                raise ValueError("Diffusion follower deltas require observation.state.")
+            if any(self.normalization_mapping[k] != NormalizationMode.MIN_MAX for k in ("STATE", "ACTION")):
+                raise ValueError("Diffusion follower decoding requires MIN_MAX state/action normalization.")
 
         """Input validation (not exhaustive)."""
         if not self.vision_backbone.startswith("resnet"):
@@ -219,6 +229,17 @@ class DiffusionConfig(PreTrainedConfig):
         )
 
     def validate_features(self) -> None:
+        if self.action_target != "dataset_action":
+            state = self.input_features.get(self.follower_state_key)
+            action = self.output_features.get("action")
+            if (
+                state is None
+                or action is None
+                or state.shape != action.shape
+                or len(action.shape) != 1
+                or action.shape[0] < 2
+            ):
+                raise ValueError("Follower deltas require matching joint-plus-gripper state/action vectors.")
         if len(self.image_features) == 0 and self.env_state_feature is None:
             raise ValueError("You must provide at least one image or the environment state among the inputs.")
 

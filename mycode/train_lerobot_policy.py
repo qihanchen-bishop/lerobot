@@ -107,13 +107,14 @@ def parse_args() -> argparse.Namespace:
             "follower_joint_delta_gripper_absolute predicts one-step deltas for all joints and the "
             "absolute 0/1 state for the final gripper dimension; "
             "follower_joint_anchor_delta_gripper_absolute uses current-state-anchored joint offsets "
-            "and the same absolute gripper target."
+            "and the same absolute gripper target. Diffusion also supports "
+            "follower_joint_delta_gripper_absolute."
         ),
     )
     parser.add_argument(
         "--act-follower-state-key",
         default="observation.state",
-        help="State feature used to build follower-based ACT targets.",
+        help="State feature used to build follower-based targets.",
     )
     parser.add_argument(
         "--act-gripper-loss-weight",
@@ -725,6 +726,8 @@ def build_policy_config(policy_type: str, meta: LeRobotDatasetMetadata, args: ar
             kwargs["image_camera_embedding_mode"] = args.act_camera_embedding_mode
             kwargs["image_camera_embedding_gate_init"] = args.act_camera_embedding_gate_init
     elif policy_type == "diffusion":
+        kwargs["action_target"] = args.act_action_target
+        kwargs["follower_state_key"] = args.act_follower_state_key
         kwargs["n_obs_steps"] = args.diffusion_n_obs_steps
         kwargs["horizon"] = args.diffusion_horizon
         kwargs["n_action_steps"] = args.diffusion_n_action_steps
@@ -775,7 +778,11 @@ def run_training(args: argparse.Namespace, log_path: Path) -> None:
     if args.policy_type.lower() != "act" and args.act_action_representation != "absolute":
         raise ValueError("--act-action-representation is only valid with --policy-type act.")
     if args.policy_type.lower() != "act" and args.act_action_target != "dataset_action":
-        raise ValueError("--act-action-target is only valid with --policy-type act.")
+        if not (
+            args.policy_type.lower() == "diffusion"
+            and args.act_action_target == "follower_joint_delta_gripper_absolute"
+        ):
+            raise ValueError("Non-ACT follower targets only support diffusion joint delta + absolute gripper.")
     if args.act_action_target in FOLLOWER_ACTION_TARGETS:
         if args.act_action_representation != "absolute":
             raise ValueError(

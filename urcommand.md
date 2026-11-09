@@ -1,5 +1,131 @@
 # UR 数据训练命令
 
+## realsense_rgbd_merged4：ACT / DP，RGB / RGBD，完整过程 follower delta
+
+两队列分别串行执行 RGB -> RGBD，队列之间可并行。完整保留 90 条轨迹、181,652 帧，包含自动复位。
+RGBD 指同一 RealSense 相机的 RGB + TURBO 深度伪彩图，不是两个相机视角，也不是原始深度值。
+
+| 队列 | 实验名称（输出在 outputs/train 下同名目录） |
+|---|---|
+| task1 / ACT RGB | UR-FDeltaSeparateGrip-ACT-RGB-realsense-merged4-fullprocess |
+| task1 / ACT RGBD | UR-FDeltaSeparateGrip-ACT-RGBD-realsense-merged4-fullprocess |
+| task2 / DP RGB | UR-FDeltaGripAbs-DP-RGB-realsense-merged4-fullprocess |
+| task2 / DP RGBD | UR-FDeltaGripAbs-DP-RGBD-realsense-merged4-fullprocess |
+
+### 动作定义与对照条件
+
+- 两类策略均输入当前 follower state；第 k 个关节目标是 `state[t+k+1,:12]-state[t+k,:12]`。
+  不监督原始控制器 action，不使用固定锚点 delta。夹爪目标为下一帧 `state[...,12]` 的绝对 0/1 命令。
+- ACT 沿用上一轮专用 UR 入口和独立夹爪 BCE 头。DP 的关节 delta 和夹爪绝对值一起参与扩散去噪，没有独立 BCE 头。
+- DP 新增可选 follower 目标及推理解码；`--act-action-target` 是复用的历史参数名，此目标现也支持 diffusion。
+  去噪结果先反归一化，关节从当前 state 累加，夹爪按 0.5 二值化。标准 policy + postprocessor 返回绝对关节指令。
+  部署端不要再次累加。直接调用内部 `diffusion.generate_actions` 不包含此解码，应使用标准策略入口。
+- 两类均单帧、原始 668x742 全图、ImageNet 预训练 ResNet18、图像 ImageNet mean/std、batch=8、100k steps、seed=1000、workers=16。
+- ACT state/delta 使用 mean/std；DP state/delta 使用 MIN_MAX 到 [-1,1]，与去噪裁剪一致。两方法的 loss 数值不能直接比较。
+- ACT 预测60步；DP horizon=64（符合 U-Net 下采样要求），两者默认执行60步。DP 不丢弃 episode 末尾采样点，补齐动作不计入去噪损失。
+- DP 沿用 DDPM、100 个训练噪声等级、50 步推理；不是 DDIM。DP backbone LR=1e-5，其余LR=1e-4；ACT LR=1e-5。
+- 每个方法内部 RGB/RGBD 仅视觉输入不同；跨 ACT/DP 仍有损失、归一化和结构差异，不是只替换骨干的严格消融。
+- 实际采集平均约23.36 Hz，存储标称30 Hz；本轮不重采样。全流程关节统计小幅偏差作为已知问题保留，派生delta统计重新生成。
+
+### 运行命令
+
+```bash
+# task1: ACT RGB -> ACT RGBD
+cd /home/qihan/data/lerobot
+bash run_ur_merged4_act.sh
+```
+
+```bash
+# task2: DP RGB -> DP RGBD
+cd /home/qihan/data/lerobot
+bash run_ur_merged4_dp.sh
+```
+
+用 `DRY_RUN=1 bash run_ur_merged4_act.sh` 或 `DRY_RUN=1 bash run_ur_merged4_dp.sh` 查看完整独立命令。
+脚本使用锁防止重复启动，拒绝覆盖任何已有实验输出；前一个实验失败时队列停止。没有自动续训或删除数据。
+脚本本身不固定GPU；本次tmux启动分别设置 `CUDA_VISIBLE_DEVICES=0`（ACT）和 `1`（DP）。
+实时日志：`outputs/logs/<实验名称>.log`；checkpoint：`outputs/train/<实验名称>/checkpoints/last/pretrained_model`。
+DP 部署环境必须包含本次新增的 follower 解码代码，并加载同一 checkpoint 的预处理、后处理和统计量。
+
+## realsense_rgbd_new1_train：完整过程 follower delta，RGB / RGBD 对照
+
+保留全部 60 条轨迹、121,044 帧，包括人工操作和自动复位，不裁剪、不重采样。
+两组都用 `mycode/train_bi_ur3_policy.py`，不使用原数据的控制器 `action` 值作为监督：
+
+- 输入：当前 `observation.state`（12 个实际关节角，单位 rad；右夹爪命令 0/1）和选定图像。
+- 关节目标：第 k 个输出为 `state[t+k+1, :12] - state[t+k, :12]`，k=0,...,59。
+  这是相邻帧逐步 delta，不是固定锚点 delta；部署时从当前关节状态累加还原绝对指令。
+- 夹爪：独立输出头预测 `state[t+k+1, 12]` 的绝对 0/1，使用加权 BCE，loss weight=0.2、positive weight=2.5，沿用前面的 UR 配置。
+  这里的夹爪 state 是采集的二值命令，不是实际夹爪位置测量值。
+- 分辨率：原始 H=668、W=742；RGBD 是同一相机的 RGB + 深度伪彩图，不是前侧双视角。
+- 标准化沿用该 UR 入口：视觉使用 ImageNet mean/std；state 使用数据集 mean/std；delta action 的统计在派生数据视图中重新计算。
+  两组使用相同 state/action 数据和统计，不修改源数据。
+- 公共配置：ImageNet 预训练 ResNet18、100k steps、batch=8、seed=1000、workers=16；预测 60 步，默认执行 60 步。
+  不增加相机或模态 embedding。两组分别生成独立派生视图和 checkpoint。
+- 数据仍按标称 30 Hz 加载，但实际采集平均约 22.94 Hz；本命令不修正物理时间。
+  60 个样本不能直接视为原示范的真实 2 秒；部署执行频率与重规划间隔须另行设置并核对。
+
+### RGB：只使用 front 彩色图
+
+```bash
+cd /home/qihan/data/lerobot
+conda run --no-capture-output -n lerobot python -u mycode/train_bi_ur3_policy.py \
+  --root /home/qihan/data/lerobot/data/realsense_rgbd_new1_train \
+  --repo-id local/realsense_rgbd_new1_train \
+  --image-keys observation.images.front \
+  --state-keys observation.state \
+  --act-action-target follower_joint_delta_gripper_absolute \
+  --act-follower-state-key observation.state \
+  --act-gripper-loss-weight 0.2 \
+  --act-gripper-positive-weight 2.5 \
+  --output-dir outputs/train/UR-FDeltaSeparateGrip-ACT-RGB-realsense-new1-fullprocess \
+  --job-name UR-FDeltaSeparateGrip-ACT-RGB-realsense-new1-fullprocess \
+  --chunk-size 60 \
+  --n-action-steps 60 \
+  --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 \
+  --batch-size 8 \
+  --steps 100000 \
+  --seed 1000 \
+  --num-workers 16 \
+  --device cuda \
+  --video-backend pyav \
+  --log-freq 200 \
+  --save-freq 20000 \
+  --eval-freq 0
+```
+
+### RGBD：front 彩色图 + 同视角深度伪彩图
+
+```bash
+cd /home/qihan/data/lerobot
+conda run --no-capture-output -n lerobot python -u mycode/train_bi_ur3_policy.py \
+  --root /home/qihan/data/lerobot/data/realsense_rgbd_new1_train \
+  --repo-id local/realsense_rgbd_new1_train \
+  --image-keys observation.images.front observation.images.depth_preview \
+  --state-keys observation.state \
+  --act-action-target follower_joint_delta_gripper_absolute \
+  --act-follower-state-key observation.state \
+  --act-gripper-loss-weight 0.2 \
+  --act-gripper-positive-weight 2.5 \
+  --output-dir outputs/train/UR-FDeltaSeparateGrip-ACT-RGBD-realsense-new1-fullprocess \
+  --job-name UR-FDeltaSeparateGrip-ACT-RGBD-realsense-new1-fullprocess \
+  --chunk-size 60 \
+  --n-action-steps 60 \
+  --pretrained-backbone-weights ResNet18_Weights.IMAGENET1K_V1 \
+  --batch-size 8 \
+  --steps 100000 \
+  --seed 1000 \
+  --num-workers 16 \
+  --device cuda \
+  --video-backend pyav \
+  --log-freq 200 \
+  --save-freq 20000 \
+  --eval-freq 0
+```
+
+首次执行会生成派生训练视图；未设置 `--overwrite-output`，不会自动删除已有训练结果。
+此处只提供命令，不自动启动训练或同步 Git。
+
 ## test1 基础 ACT：关节状态输入，关节目标输出
 
 `observation.state` 和 `action` 均为 13 维：左臂 6 个关节、右臂 6 个关节、右夹爪 1 维。
