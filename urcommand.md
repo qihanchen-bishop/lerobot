@@ -1,5 +1,62 @@
 # UR 数据训练命令
 
+## UR-SemQ-v1：merged4 分割输入与五个任务查询（RGB / RGBD）
+
+本实验使用 `data/realsense_rgbd_merged4_seg`，保留全部90条轨迹、181652帧及复位过程。
+独立入口 `mycode/train_ur_semq_policy.py`，不修改 SO-ARM 的类别、查询布局、训练入口或旧 checkpoint。
+
+| 实验 | 视觉输入 | 输出目录（outputs/train/下） |
+|---|---|---|
+| RGB + 语义 + Qtoken | front RGB + front 硬分割彩色图 | UR-SemQ-v1-RGB-realsense-merged4-fullprocess |
+| RGBD + 语义 + Qtoken | front RGB + depth_preview + front 硬分割彩色图 | UR-SemQ-v1-RGBD-realsense-merged4-fullprocess |
+
+### 模型与监督定义
+
+- 共享可训练 ImageNet ResNet18；所有视觉输入使用 ImageNet mean/std；无相机/模态 embedding。
+  RGBD 是同一相机的深度伪彩图。原始全分辨率668x742，不裁剪、不重采样。
+- 动作、标准化与前面 UR ACT 一致：12维 follower 相邻帧 joint delta + 独立夹爪绝对0/1 BCE头；
+  夹爪权重0.2、positive_weight=2.5，state/delta使用mean/std；预测/默认执行60步。
+- 5个 encoder query token，独立输出维度 `[1,1,1,1,2]`：object面积、organ面积、object-region中心距离、occluder面积、object二维位置。
+- 面积为可见像素数/(H*W)；二维位置为 `(cx/(W-1), cy/(H-1))`；距离为像素质心距离/图像对角线。
+  距离不是入区判定，object落入region时不会强制为0。
+- region每条episode单独用前20帧建立：质量>=0.8、非异常、面积>=20像素，至少10帧；
+  质量加权多数投票，候选与参考mask的中位IoU>=0.8才接受。参考质量=候选平均质量*该中位IoU。
+  距离监督从第21帧开始；参考不可靠则整条轨迹的距离头不监督，绝不搜索未来帧替代。
+- 面积0仍监督；object不可见时不监督位置与距离。异常类别只屏蔽依赖该类别的查询，不屏蔽动作损失。
+  其余查询乘对应类别质量分数，距离乘 `min(object当前质量, region参考质量)`。
+  固定region只用于计算标签，不覆盖当前分割输入，不把标签直接输入策略，也不自动赋予策略历史记忆。
+- 三个面积头以训练集可靠正样本的95%分位数（下限0.001）作固定尺度；距离/位置尺度为1。
+  head预测缩放后的值，推理描述量乘回缓存中的scale。5头等权，位置两个坐标先平均。
+  损失为 `原ACT损失 + 0.1 * 质量加权SmoothL1(beta=0.1)`，不以质量权重和归一化而抵消低质量降权。
+- 单帧、batch8、100k steps、seed1000、LR1e-5、workers16、每20k保存一次；未开启混合精度。
+
+### 加速与运行
+
+```bash
+cd /home/qihan/data/lerobot
+# 首次离线合并7路二值mask为无损uint8类别缓存，并预计算描述量/质量权重/每episode区域。
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 /home/qihan/miniconda3/envs/lerobot/bin/python -u mycode/prepare_ur_semq.py \
+  --root data/realsense_rgbd_merged4_seg --output-dir outputs/cache/ur_semq_v1_merged4 --workers 12
+
+# task1，RGB组
+bash run_ur_semq_v1.sh rgb
+# task2，RGBD组；可与上一组同时运行
+bash run_ur_semq_v1.sh rgbd
+```
+
+两个模式共享只读无损类别缓存（约90GB十进制），但拥有独立派生训练视图、模型、优化器和日志。
+训练不运行U-Net或逐帧计算几何，只解码RGB/深度并读取类别缓存；GPU查色表、uint8传输、persistent workers、
+pin memory、prefetch、TF32/cuDNN benchmark。缓存锁防止两个脚本同时生成；已有输出不覆盖。
+
+日志：`outputs/logs/<实验名称>.log`，完整分项均值在 `outputs/train/<实验名称>/metrics/train_metrics.jsonl`。
+模型：`outputs/train/<实验名称>/checkpoints/last/pretrained_model`，包含U-Net TorchScript、过滤/颜色规则和`ur_semq.json`。
+部署使用 `mycode/ur_semq_inference.py` 的 `URSemQInference`：原始RGB/深度[0,1]、follower弧度输入，
+返回已解码的绝对关节动作块和6维描述量，不能再次累加delta。此适配器不控制真实机器人。
+部署无需标注质量数组或query监督标签；U-Net使用随checkpoint保存的版本，不更新SO-ARM分割模型。
+
+端到端预检入口：`mycode/check_ur_semq.py --output-dir outputs/dataset_checks/<新目录> --device cuda`。
+两组会短训3步并验证checkpoint、冻结U-Net推理、动作解码和重载一致性；短训结果不是正式实验结果。
+
 ## realsense_rgbd_merged4：ACT / DP，RGB / RGBD，完整过程 follower delta
 
 两队列分别串行执行 RGB -> RGBD，队列之间可并行。完整保留 90 条轨迹、181,652 帧，包含自动复位。
