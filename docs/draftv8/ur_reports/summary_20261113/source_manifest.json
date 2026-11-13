@@ -1,0 +1,617 @@
+[
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/eval_results.jsonl",
+    "sha256": "ae924ead9f38d3d025c73b927a672e60ad2d4716de5bda9b771cfd590b2993ac",
+    "bytes": 488217
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_135119_302116/evaluation_result.json",
+    "sha256": "fd83d7f03e9ac2a7551e0e0c4533afe2e60a4b88aa794b251bdb31012ebf5466",
+    "bytes": 31090
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_135119_302116/run_metadata.json",
+    "sha256": "54857bfca6d88d15b02b88126976d7ac5a6150862d55c4439b35e20749091ae3",
+    "bytes": 31083
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_140842_122029/evaluation_result.json",
+    "sha256": "0c412a4f4daa173fbef2c21073238c01d3ec3540d8d61ffe6e677599d650c3ae",
+    "bytes": 31105
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_140842_122029/run_metadata.json",
+    "sha256": "e692190a43cbbc1e9ac649aa043248706f9c7641955cda83cb9c663187805bca",
+    "bytes": 31101
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_141215_569827/evaluation_result.json",
+    "sha256": "fe7cb4b08d8047e924b0bec1e3f90e4d2e5b78e45be1198ac2efe15ba21c0bb2",
+    "bytes": 31108
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_141215_569827/run_metadata.json",
+    "sha256": "5a12da2236fd0c489e4de91a83a6b6422d9d981ae0d6f90fcc47a5a24f1548e5",
+    "bytes": 31101
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_141732_224461/evaluation_result.json",
+    "sha256": "d1127cbb23451b23430456f0ecf6b6422cd81ae65f72f30e5683c88f2b1e1844",
+    "bytes": 31105
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_141732_224461/run_metadata.json",
+    "sha256": "7cfb4f0d1adf4dfa119fdc7d929a9d203728a6ebed3ed648252626b5097664ea",
+    "bytes": 31088
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_142024_690183/evaluation_result.json",
+    "sha256": "3ad51b18d67dc5b3cb1d31a781e9229ab8804d8a1cc0617cab7aefb8b7f65b69",
+    "bytes": 31112
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_142024_690183/run_metadata.json",
+    "sha256": "33d1cc304323896fddf4a5417d162433eca4df925600d781ae9429a45c3eb165",
+    "bytes": 31100
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_142619_179373/evaluation_result.json",
+    "sha256": "0cac95a3c4389592ad89c4b958ae19a4538c70819832db9208dfaf71c18c1a2a",
+    "bytes": 31096
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_142619_179373/run_metadata.json",
+    "sha256": "4f21bc942655e126ab33ec7c3303ac6ed6f2160f4476820b52831de4c241ce2f",
+    "bytes": 31091
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_143745_664670/evaluation_result.json",
+    "sha256": "dd48361fa22deaf54ec4ffeb337fcaed16a7df12cf2e3af4a5ac96707cba6fc2",
+    "bytes": 31695
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_143745_664670/run_metadata.json",
+    "sha256": "6a0285efdd2ed0f2f82cb8fccbfbcf1aa3eb36241de66b77ba1192f3491d2f55",
+    "bytes": 31679
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_144047_538415/evaluation_result.json",
+    "sha256": "f020e9c4934b9fa67cc16c6165793c434d64af3661ad557d4b6d531283746478",
+    "bytes": 31846
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_144047_538415/run_metadata.json",
+    "sha256": "2989b96bbe905da6a39e56f2469c2b6809b064b5dbc5a794ca4b011614f55f80",
+    "bytes": 31836
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_145349_797300/evaluation_result.json",
+    "sha256": "cb2b76a3df315838fb9dfb37cd22748d0e92b518e70dcbf138656e7c9a6e6c9f",
+    "bytes": 31707
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_145349_797300/run_metadata.json",
+    "sha256": "fbfe16210a2402738a2b10839f65a16959e7d3960aab695ea343488268132fac",
+    "bytes": 31692
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_145649_340054/evaluation_result.json",
+    "sha256": "7cfdb395cd7fb5c26214bcd83882457f8d083e8e621a1a789fdf36eb2d0efb57",
+    "bytes": 31699
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_145649_340054/run_metadata.json",
+    "sha256": "ecb731be2515ab822c7db8c7055c267972aa0d9dbc4d28d75602d1fe87041e78",
+    "bytes": 31687
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_145947_449426/evaluation_result.json",
+    "sha256": "ec913a40fafafdb8a08ca33646a44a1e56d481901da8e269c1c7ca1617fef554",
+    "bytes": 33541
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_145947_449426/run_metadata.json",
+    "sha256": "0ad47d9601fb717b3bd4cf6dd72c20dba8492bd94bae78fe0f89914ffeabc7f4",
+    "bytes": 33534
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_151114_439972/evaluation_result.json",
+    "sha256": "51f97779a27c722a3e4dc9ed3e9a2cefbc602c88e8d71604be2fd911d036f564",
+    "bytes": 34135
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261112_151114_439972/run_metadata.json",
+    "sha256": "a11f90a5f6ef1e7e57d6451dcfbcefc865230cdb905530452375bdd1955116d0",
+    "bytes": 34128
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_103026_380695/evaluation_result.json",
+    "sha256": "068d3a358f83d82fcda2668fe228feab6d5400cb7a7f27e5c6eda12d9ca99b2e",
+    "bytes": 34130
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_103026_380695/run_metadata.json",
+    "sha256": "3a43254ac7c71487de0c33da0eb9550ee2e6acd7cdaf06ae17be9fbed67770f8",
+    "bytes": 34127
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_103259_040245/evaluation_result.json",
+    "sha256": "aa3f625121a1aa024f70c7fa02d74ce7a743fb51aceacbc49657ec7be51b4a67",
+    "bytes": 34154
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_103259_040245/run_metadata.json",
+    "sha256": "ccf198ddacd71183bda77228b9f4a17d7fd8c3236f7788bb5cf76469da2cb857",
+    "bytes": 34144
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_103532_148743/evaluation_result.json",
+    "sha256": "b359addd1b43d08f131c8fadd3fde7c5b805f6adb1e98ff4017e97aa63a8bfa7",
+    "bytes": 34632
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_103532_148743/run_metadata.json",
+    "sha256": "5cd51f75d2497145324e723e412ae974c650a60074a830388b8f86aa7420b585",
+    "bytes": 34628
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_103819_531430/evaluation_result.json",
+    "sha256": "3398be8e47c7f1f26baa90a0dfb7c2a9be89ea3d1aa1d10de4c1b9362e14438b",
+    "bytes": 34429
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_103819_531430/run_metadata.json",
+    "sha256": "6c80bced19247696d83aed17cafe082ad0f69b1d359a844d85285b83728fabac",
+    "bytes": 34423
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_104153_643204/evaluation_result.json",
+    "sha256": "9a9af69d366926c6d8ed323d34117d0cebd60beb8904feb8761236cd3725a1f4",
+    "bytes": 34155
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_104153_643204/run_metadata.json",
+    "sha256": "4a44364c4cd679c62e1050b8066a5869b712ea8c1facbcd0c22df6c6a95e9b49",
+    "bytes": 34144
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_104524_156009/evaluation_result.json",
+    "sha256": "38200272f53d40371388e71252b59c020a1f0e6cf8fc4bdf8a3e02a8672613fe",
+    "bytes": 28695
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_104524_156009/run_metadata.json",
+    "sha256": "38200272f53d40371388e71252b59c020a1f0e6cf8fc4bdf8a3e02a8672613fe",
+    "bytes": 28695
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_105201_431977/evaluation_result.json",
+    "sha256": "2a5f059200e63225f2110e2fb81995fc17a42e743ff86197bc9baac5fed9ff3b",
+    "bytes": 30891
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_105201_431977/run_metadata.json",
+    "sha256": "57fea333d934a411b68b9d0fab68e5f62bb10fd503748cb3f50068077bd0f744",
+    "bytes": 30884
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_105636_914832/evaluation_result.json",
+    "sha256": "622be06f7a232e882148ae3335fb95e9e0334294db4c55f3843af4fd1609d5c8",
+    "bytes": 34733
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_Qtoken_RGBD/run_20261113_105636_914832/run_metadata.json",
+    "sha256": "3f5a70c8856583e08d1889fc121cac1d93887f08c8588fbcc6f46c4818c8657c",
+    "bytes": 34726
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/eval_results.jsonl",
+    "sha256": "6fb9c1f9804a5af33ea661ccc3af619fe2a903523862dc9f3783142e599b5fd2",
+    "bytes": 447506
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_110421_380372/evaluation_result.json",
+    "sha256": "5a5686ebbd33924a2251a890dcd1d61de9e98e7bf555923e37f587b3bece7d03",
+    "bytes": 32779
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_110421_380372/run_metadata.json",
+    "sha256": "60ccb661aa8e0ebe3b4c80e4b99864b456d2fe4e1cc1c708e2e37f1092ddb663",
+    "bytes": 32765
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_110652_257131/evaluation_result.json",
+    "sha256": "dd0e35a0bf9ce6bb63f86c389c2cda53c3126985db9fb452cddec3eac6b26263",
+    "bytes": 32506
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_110652_257131/run_metadata.json",
+    "sha256": "006c17be8b326bee9904df0fa58cf01b78c2eda07a4907848fefd8eea5fad233",
+    "bytes": 32500
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_110944_534447/evaluation_result.json",
+    "sha256": "9931e98f0e2ee41f64b3423bf4b70d93247875cb1dd39825432df58c8efa532c",
+    "bytes": 26673
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_110944_534447/run_metadata.json",
+    "sha256": "601ecc4b0033cbe07e7b7035b7f5f9467d89cf0f004c09e8894703f0678d1753",
+    "bytes": 28950
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_111105_987824/evaluation_result.json",
+    "sha256": "64daf20b03bd950f213fdd544c019c92eec84c57164f51b62c639a9ba861d46a",
+    "bytes": 26645
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_111105_987824/run_metadata.json",
+    "sha256": "401de80c057b24b8c30169203592a715ba35639c7e795f8635d319742894d04e",
+    "bytes": 26638
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_111258_701398/evaluation_result.json",
+    "sha256": "b37661d31f1d4da01de58d1e4fb45e7b41272254df9c758cc5af1da10f19c195",
+    "bytes": 33106
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_111258_701398/run_metadata.json",
+    "sha256": "8d25268ce57a9d23b79c4aa11f36b5f64b1627ddf4fb8692cc3ba1a586a09f1d",
+    "bytes": 33100
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_111559_099361/evaluation_result.json",
+    "sha256": "9e19695723b56529bfc06e9bcf8bd3eef585759ed9af9dad709a7e12abd1c2f7",
+    "bytes": 27363
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_111559_099361/run_metadata.json",
+    "sha256": "840f1ecf91a995ad126dac3a00d5d9d501f932e62f5c9cbcca2ba5ac17644f12",
+    "bytes": 29642
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_111843_942596/evaluation_result.json",
+    "sha256": "6baf12d8c06cfe2a61b58d613fad62d8536e2d1bc0d7e346734b992beb5b0b74",
+    "bytes": 33106
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_111843_942596/run_metadata.json",
+    "sha256": "de4298191226b4fec472e62a5163ad5ecdd1808e5c08e318160f12366713c64d",
+    "bytes": 33096
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_112114_285560/evaluation_result.json",
+    "sha256": "d1292e78466e9bd98f2ec8bfec942e443cc5f92f6620ef12abdcfc60a37291a8",
+    "bytes": 33100
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_112114_285560/run_metadata.json",
+    "sha256": "e9e1fca19a9bea46c19ee155322246ec2bb7acc6f882b89dd30b60e27eac9f9c",
+    "bytes": 33101
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_112349_561783/evaluation_result.json",
+    "sha256": "80ecd2157208eccf00b42e03d9e203a44b5a43e3e1ea1083af552b76fc179f20",
+    "bytes": 27262
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_112349_561783/run_metadata.json",
+    "sha256": "75cef381025c382d30d0dfdd0a73ca6b0044615352bac3e4578f1175912e1f1c",
+    "bytes": 29546
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_112622_991466/evaluation_result.json",
+    "sha256": "55a4674e3130ab15969cf1e0895b135d78b05ed38c8ae3287467fab2d890eb18",
+    "bytes": 27253
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_112622_991466/run_metadata.json",
+    "sha256": "8150536f9f704f8798a151123d063ec168b49becfcfe9951d86c93d7b3160ba3",
+    "bytes": 29529
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_112809_864482/evaluation_result.json",
+    "sha256": "3551653a782fb34ed38baedd329cdd1c980080f7498a18277586c405cff912f9",
+    "bytes": 33091
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_112809_864482/run_metadata.json",
+    "sha256": "74f9504d187193e00a6ef4b1636ed1f102f33c969cee2f19878becd81a99057a",
+    "bytes": 33092
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_113204_577368/evaluation_result.json",
+    "sha256": "f2e33a61852d0dd0f3742c2baf45ea9ad20b6aae3f2fc560b90e1fbf9efb52e7",
+    "bytes": 27255
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_113204_577368/run_metadata.json",
+    "sha256": "807cc9a0f892750dd5c2bce8c539c072a6c6bae7b6926f7a71e9bd08a48445d8",
+    "bytes": 29534
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_113314_422081/evaluation_result.json",
+    "sha256": "5754e2484e9b638f0b18d14a588da990a7e5d9263faa70b40d8fba739bcf1b9b",
+    "bytes": 33119
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_113314_422081/run_metadata.json",
+    "sha256": "5a37236fa4c8c44691ea83567c6d789a00a30deb64c84e246504e0e290f09001",
+    "bytes": 33110
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_113607_198300/evaluation_result.json",
+    "sha256": "4b2335195d9653d61f343d1aded709a9e8ef6be09c097d2b9a1a4b417d4b92a4",
+    "bytes": 27257
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_113607_198300/run_metadata.json",
+    "sha256": "e2ebe55d62918464bdd2974c29f37b072d6db36ae7e886588704a10228afc341",
+    "bytes": 29535
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_113719_696075/evaluation_result.json",
+    "sha256": "e1c3cedcbcee56ce3a0c51a643c1e8d2df4ef2f89d99193b598771a39ad708b4",
+    "bytes": 27255
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_113719_696075/run_metadata.json",
+    "sha256": "8f7c07591dddba08cac55ce05273e0e04f5b4e7a182ab72bfe4f88f6cd719c2f",
+    "bytes": 29532
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_114011_547087/evaluation_result.json",
+    "sha256": "23a0844054081b6526105c507e91a08de77c169ad36d701788cd3b94b62f10e3",
+    "bytes": 33098
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_114011_547087/run_metadata.json",
+    "sha256": "0d241a3047376b915e29f7f451fa6afc4f50876ffd77e3400e8fa24bd3e9a3b6",
+    "bytes": 33092
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_114248_882268/evaluation_result.json",
+    "sha256": "5d6d27f9def972c25b271f6c9ea0c444a9004158751ad6283c084bc9e8f46e38",
+    "bytes": 27256
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_114248_882268/run_metadata.json",
+    "sha256": "57f8efaed4583abb2b5011509da62f01cba21d7f35827f416e93716ac5fb34bf",
+    "bytes": 29534
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_114405_753578/evaluation_result.json",
+    "sha256": "b6b92da40375b16a7167391e5bcfea0a2b94f08e4c3d5d70620fd82b2b3990a4",
+    "bytes": 27249
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_114405_753578/run_metadata.json",
+    "sha256": "2dffa71bd290ea0c18080a02d065733627bf48148a2d8b6d75c390dd9ea6d8e8",
+    "bytes": 29523
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_114510_757466/evaluation_result.json",
+    "sha256": "c11583040432115db883d5b65f31a9c98cca8ab18ff51dbbf8a62188b7ef984a",
+    "bytes": 27389
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_114510_757466/run_metadata.json",
+    "sha256": "046eebfb682041f98d86c0edaaa6d14b8cf2941dcca47ece9648fd7f600938e2",
+    "bytes": 29671
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_114620_761944/evaluation_result.json",
+    "sha256": "3e170c64b72bef1dc5f3edc9e3e40a998acda6a4e90bf131412fa01e5dcd8b55",
+    "bytes": 27256
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_act/run_20261113_114620_761944/run_metadata.json",
+    "sha256": "b4b2afa821bd0de78c7c1995f0b06da4fc50be912ec48e9eba063775ab3278c1",
+    "bytes": 29539
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/eval_results.jsonl",
+    "sha256": "ed5150a9b5ce26731accaa1c9ec427b0496035719ca8afe199ada089a8a5a2b5",
+    "bytes": 450725
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_131552_217601/evaluation_result.json",
+    "sha256": "946b88e222fa3cbcd536ebf799a06c9742efe25dc546c77bf839d2ccbd9707e1",
+    "bytes": 26460
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_131552_217601/run_metadata.json",
+    "sha256": "65a42c104b78b4c21dbd95ee89e9369843c4237273eecb9d68db7502707cf0ac",
+    "bytes": 28734
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_133934_346251/evaluation_result.json",
+    "sha256": "7428eb32faf6fa008180bfc601650a7055f94ce9199290e6aba3a7190ec9a70f",
+    "bytes": 32316
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_133934_346251/run_metadata.json",
+    "sha256": "6ee9183171b742fb4029033ec12d587982a2ccf3159297bc73ccf1d283590b03",
+    "bytes": 32308
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_134211_721868/evaluation_result.json",
+    "sha256": "a9f7f783233c234befeaf66d94b2450be26195f402df16ca846ac19768ecf666",
+    "bytes": 32298
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_134211_721868/run_metadata.json",
+    "sha256": "ea38d32bd36b15960c18b07f30fcfc34d4bedf3056938816ce3b0e2cd257202d",
+    "bytes": 32298
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_134437_795103/evaluation_result.json",
+    "sha256": "71543abe2c015ad60e2bdc7d781fe8322c4eb89abd4c529dcdecb12c3a5f8236",
+    "bytes": 26608
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_134437_795103/run_metadata.json",
+    "sha256": "d70abad7c24963e62fd9b9a2eb76f6f08bfc34685de287b1c36cf0d335a75596",
+    "bytes": 28886
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_134624_773721/evaluation_result.json",
+    "sha256": "d149d43bdf22f5d0fb0dcd3bde66f98e7d6fec5287e274a090f1575d857b30ac",
+    "bytes": 26595
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_134624_773721/run_metadata.json",
+    "sha256": "7a718e4491b58bd8e32360d8cf81443e59c7020e6e4f4765c497c631fdf58964",
+    "bytes": 28876
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_134907_348436/evaluation_result.json",
+    "sha256": "830fce5fa9949df70163502f7e12f57c32d4de1b4c2f6665be0e6bbca3eeb9bb",
+    "bytes": 26457
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_134907_348436/run_metadata.json",
+    "sha256": "69f4379817ebe2a0f67ec56155ffa84a2adf50dea2e6651f39fe6266a5506e2e",
+    "bytes": 28735
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_135055_487091/evaluation_result.json",
+    "sha256": "b168c90c0c3a3561d71cad8fac49f0d28bd3ea241215a1a493170b1f71ce4123",
+    "bytes": 32326
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_135055_487091/run_metadata.json",
+    "sha256": "ace9552c6ca4d44ba528559e0f9d6ba0d4910aff749b7db3c9597947708052b1",
+    "bytes": 32317
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_135339_422716/evaluation_result.json",
+    "sha256": "eea578e2e316577556c1294d2621316ad45e2eb1bb974d4e2f4b94a8730e5ba4",
+    "bytes": 32320
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_135339_422716/run_metadata.json",
+    "sha256": "2650826708c15e0578b9a7e96213f30fea3639f711a2f14c2f79bd5b0bccfa54",
+    "bytes": 32316
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_135648_633452/evaluation_result.json",
+    "sha256": "90fb9805ee6ba8ade06181ebb99ae73cd279f8d2f87276876cc14a3db6cd6343",
+    "bytes": 26972
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_135648_633452/run_metadata.json",
+    "sha256": "56c99bdc78f641e204bd8aec631abc537b97dcddf282324333274754116a87b2",
+    "bytes": 26965
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_140208_938250/evaluation_result.json",
+    "sha256": "cbbfc6bf327ca2dd948a09f9f6552a2d305479948b51922849144340648d8d73",
+    "bytes": 32318
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_140208_938250/run_metadata.json",
+    "sha256": "59f8177023b103adb33300a1041e663ec9ca87680715bf76e2b0ce01dbbfd870",
+    "bytes": 32312
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_140520_416630/evaluation_result.json",
+    "sha256": "d176ff74bf1a9c889332a603d9f75b6a831a883fa1718968abe249aeb128ee8f",
+    "bytes": 32337
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_140520_416630/run_metadata.json",
+    "sha256": "2492d226c5589485ac99666195250c0e06713b0739c4f2cfb15c403bbc906a40",
+    "bytes": 32328
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_140820_627626/evaluation_result.json",
+    "sha256": "7e2b9cd42481b1bdc5e376b025f94c91c8d5d946182d18ca649317fdb09d4b37",
+    "bytes": 32326
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_140820_627626/run_metadata.json",
+    "sha256": "9305b8fb473b411eb9d7151b2a1662cdd14b4156062cc2caf5d3fb49b22ab393",
+    "bytes": 32314
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_141131_773308/evaluation_result.json",
+    "sha256": "adf7d64ae30463aeb21421659e9beeddf35ab7fd55294f17af221e81d9513bbd",
+    "bytes": 32316
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_141131_773308/run_metadata.json",
+    "sha256": "727cb463db2f3bb622775139cfdba77dc3ff37dc5adc9c483822daf58ac79571",
+    "bytes": 32313
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_141431_351356/evaluation_result.json",
+    "sha256": "db471d48db4d1b18834575e2c5d92feabf4b765f84cf53b1eaf7150e884b7e8e",
+    "bytes": 26478
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_141431_351356/run_metadata.json",
+    "sha256": "1eabd8c0a9ffaa859b541f0527e5ac35bcaa5f618b0da840b66ece5eb37b0c64",
+    "bytes": 28760
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_141618_424039/evaluation_result.json",
+    "sha256": "2ecfd42ca2378055024df12c1c8144147a2ae9c91338a38675813312f3316812",
+    "bytes": 32599
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_141618_424039/run_metadata.json",
+    "sha256": "22f9de5fa80960162b71fa09403bb8aac7bf508c06acab44b4afc9dbcb9eb36d",
+    "bytes": 32592
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_141914_873362/evaluation_result.json",
+    "sha256": "2c87f81ff6c7a2ecd34164ffcf872c02ff258c249740bd4e26a9ac2c360e29b5",
+    "bytes": 26472
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_141914_873362/run_metadata.json",
+    "sha256": "cecf74189b58e2ee47f7925a2e6c89ff4cd78eb44b79f8d5f78e837c903111ec",
+    "bytes": 28759
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_142028_037101/evaluation_result.json",
+    "sha256": "29ee1fbad91caca8dff5f87c1043bca770b5d2f814ec484f2b7be5abd7fe9e72",
+    "bytes": 26469
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_142028_037101/run_metadata.json",
+    "sha256": "1a51c0dd8e283d5bfde47abcca9bb641bde72733d166665526c1cfbe60db2c3d",
+    "bytes": 28754
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_142252_045210/evaluation_result.json",
+    "sha256": "e1dcd3340e8aa1bd77410f76424529563613683d026916ecfeffef6cc4fc1995",
+    "bytes": 32335
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_142252_045210/run_metadata.json",
+    "sha256": "806e271884e338cae76f88ab74bc6fe102313d8ad6c2339a21ac0df1995ad94a",
+    "bytes": 32333
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_142546_921195/evaluation_result.json",
+    "sha256": "63f7397dc71f5b9afe816a4ea488d6b6ed831abae5bc7e9b0f8081463e3b6de1",
+    "bytes": 26610
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_142546_921195/run_metadata.json",
+    "sha256": "87b3ec1c958255da06af59e664102568911834760f4158fb5a8ad7c36cb9e713",
+    "bytes": 28890
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_164434_639244/evaluation_result.json",
+    "sha256": "b51f56140ebbd12c70fb6b6b7ead754aeeb4e1e1897361e8e772e1507d1e6900",
+    "bytes": 32315
+  },
+  {
+    "path": "/home/romilab/Projects/gello-ur/eval/mergedata/merge_rgbd_dp/run_20261113_164434_639244/run_metadata.json",
+    "sha256": "0bdda0fa2e4994ac92857469558331a002baf1591cda9281d58e427b081ad364",
+    "bytes": 32308
+  }
+]
