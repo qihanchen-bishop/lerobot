@@ -3,6 +3,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import pytest
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mycode"))
 from ur_semq import descriptor_weights, descriptors, query_loss, reference_region
@@ -74,3 +76,47 @@ def test_ur_import_does_not_change_soarm_layout():
     assert view_qtoken.CLASSES == ("occluder", "object", "region", "tool", "leftarm", "rightarm")
     assert view_qtoken.OUTPUT_DIMS == (2, 4, 2)
     assert ACTConfig().metric_mode is None
+
+
+@pytest.mark.parametrize("variant,semantic,query", [
+    ("full", True, True), ("semantic-no-query", True, False), ("rgb-query", False, True),
+])
+def test_variant_data_paths(variant, semantic, query):
+    from train_ur_semq_policy import URQueryDataset, prepare_batch, variant_flags
+
+    assert variant_flags(SimpleNamespace(variant=variant)) == (semantic, query)
+    sample = {
+        "episode_index": 0, "frame_index": 0,
+        "observation.images.front": torch.zeros(3, 4, 5),
+        "observation.state": torch.zeros(13), "action": torch.zeros(60, 13),
+        "action_is_pad": torch.zeros(60, dtype=torch.bool),
+    }
+    calls = []
+    def labels(index):
+        assert semantic, "RGB-only must not read masks"
+        calls.append(index)
+        return np.zeros((4, 5), np.uint8)
+    cache = SimpleNamespace(
+        arrays={"episode_index": [0], "frame_index": [0],
+                "targets": np.zeros((1, 6), np.float32),
+                "valid": np.ones((1, 6), bool), "weights": np.ones((1, 6), np.float32)},
+        labels=labels,
+    )
+    data = URQueryDataset([sample], cache, ["observation.images.front"], semantic, query)
+    raw = torch.utils.data.default_collate([data[0]])
+    assert ("semantic_ids" in raw) == semantic
+    assert ("query_targets" in raw) == query
+    batch, target, valid, weights = prepare_batch(raw, torch.zeros(8, 3), lambda x: x, "cpu")
+    assert ("observation.images.ur_semantic" in batch) == semantic
+    assert not any(k.startswith("query_") for k in batch)
+    assert (target is not None) == query
+    assert (valid is not None) == query and (weights is not None) == query
+    assert bool(calls) == semantic
+
+
+def test_variant_default_preserves_existing_experiments():
+    from train_ur_semq_policy import variant_flags
+
+    assert variant_flags(SimpleNamespace()) == (True, True)
+    with pytest.raises(ValueError, match="Unknown UR variant"):
+        variant_flags(SimpleNamespace(variant="typo"))

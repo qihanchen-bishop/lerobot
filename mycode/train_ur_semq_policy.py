@@ -28,9 +28,20 @@ from lerobot.utils.random_utils import set_seed
 from lerobot.utils.train_utils import get_step_checkpoint_dir, save_checkpoint, update_last_checkpoint
 
 
+VARIANTS = ("full", "semantic-no-query", "rgb-query")
+
+
+def variant_flags(args):
+    variant = getattr(args, "variant", "full")
+    if variant not in VARIANTS:
+        raise ValueError(f"Unknown UR variant: {variant}")
+    return variant != "rgb-query", variant != "semantic-no-query"
+
+
 class URQueryDataset(Dataset):
-    def __init__(self, dataset, cache, image_keys):
+    def __init__(self, dataset, cache, image_keys, semantic_input=True, query_supervision=True):
         self.dataset, self.cache, self.image_keys = dataset, cache, image_keys
+        self.semantic_input, self.query_supervision = semantic_input, query_supervision
 
     def __len__(self):
         return len(self.dataset)
@@ -43,14 +54,17 @@ class URQueryDataset(Dataset):
         ):
             raise ValueError("Cache and training sample index mismatch.")
         result = {k: sample[k] for k in [*self.image_keys, "observation.state", "action", "action_is_pad"]}
-        result["semantic_ids"] = torch.from_numpy(self.cache.labels(index))
-        for name in ("targets", "valid", "weights"):
-            result[f"query_{name}"] = torch.from_numpy(self.cache.arrays[name][index].copy())
+        if self.semantic_input:
+            result["semantic_ids"] = torch.from_numpy(self.cache.labels(index))
+        if self.query_supervision:
+            for name in ("targets", "valid", "weights"):
+                result[f"query_{name}"] = torch.from_numpy(self.cache.arrays[name][index].copy())
         return result
 
 
 def build_data(args):
     root = args.root.resolve()
+    semantic_input, query_supervision = variant_flags(args)
     images = [FRONT_KEY] + (["observation.images.depth_preview"] if args.mode == "rgbd" else [])
     validate_dataset(root, images, ["observation.state"])
     cache = URSemanticCache(args.cache, root)
@@ -66,7 +80,8 @@ def build_data(args):
     meta = LeRobotDatasetMetadata("local/ur_semq_merged4", root=view)
     features = dataset_to_policy_features(meta.features)
     inputs = {k: features[k] for k in ["observation.state", *images]}
-    inputs[SEMANTIC_KEY] = copy.deepcopy(inputs[FRONT_KEY])
+    if semantic_input:
+        inputs[SEMANTIC_KEY] = copy.deepcopy(inputs[FRONT_KEY])
     config = ACTConfig(
         input_features=inputs,
         output_features={"action": features["action"]},
@@ -78,9 +93,9 @@ def build_data(args):
         separate_gripper_head=True,
         gripper_loss_weight=0.2,
         gripper_positive_weight=2.5,
-        metric_mode="encoder_tokens",
+        metric_mode="encoder_tokens" if query_supervision else None,
         metric_dim=5,
-        metric_token_output_dims=[1, 1, 1, 1, 2],
+        metric_token_output_dims=[1, 1, 1, 1, 2] if query_supervision else None,
     )
     config.validate_features()
     stats = copy.deepcopy(meta.stats)
@@ -97,33 +112,39 @@ def build_data(args):
     )
     if len(dataset) != cache.manifest["shape"][0]:
         raise ValueError("Training view/cache lengths differ.")
-    return URQueryDataset(dataset, cache, images), config, stats, view
+    return URQueryDataset(dataset, cache, images, semantic_input, query_supervision), config, stats, view
 
 
 def prepare_batch(batch, palette, preprocessor, device):
     batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-    targets, valid, weights = (batch.pop(f"query_{name}") for name in ("targets", "valid", "weights"))
-    batch[SEMANTIC_KEY] = palette[batch.pop("semantic_ids").long()].permute(0, 3, 1, 2).contiguous()
+    targets, valid, weights = (batch.pop(f"query_{name}", None) for name in ("targets", "valid", "weights"))
+    if "semantic_ids" in batch:
+        batch[SEMANTIC_KEY] = palette[batch.pop("semantic_ids").long()].permute(0, 3, 1, 2).contiguous()
     return preprocessor(batch), targets, valid, weights
 
 
 def save_bundle(checkpoint, args, cache):
+    semantic_input, query_supervision = variant_flags(args)
     pretrained = checkpoint / "pretrained_model"
     source = args.root / "models/unet_front"
     destination = pretrained / "semantic_model"
-    destination.mkdir()
-    for name in ("model.ts", "model_config.json", "filter_policy.json"):
-        shutil.copy2(source / name, destination / name)
+    if semantic_input:
+        destination.mkdir()
+        for name in ("model.ts", "model_config.json", "filter_policy.json"):
+            shutil.copy2(source / name, destination / name)
     metadata = {
         "experiment": "UR-SemQ-v1",
         "mode": args.mode,
+        "variant": getattr(args, "variant", "full"),
+        "semantic_input": semantic_input,
+        "query_supervision": query_supervision,
         "labels": LABELS,
-        "heads": HEAD_NAMES,
+        "heads": HEAD_NAMES if query_supervision else [],
         "scales": cache.manifest["scales"],
-        "query_weight": args.query_weight,
+        "query_weight": args.query_weight if query_supervision else 0.0,
         "semantic_key": SEMANTIC_KEY,
         "semantic_normalization": "imagenet",
-        "semantic_model_sha256": digest(destination / "model.ts"),
+        "semantic_model_sha256": digest(destination / "model.ts") if semantic_input else None,
         "cache_manifest_sha256": digest(args.cache / "manifest.json"),
         "region_initial_frames": 20,
         "region_scope": "per episode; labels only, never policy input",
@@ -177,11 +198,11 @@ def train(args):
     scales = torch.tensor(dataset.cache.manifest["scales"], device=args.device)
     sums, count, started = {}, 0, time.monotonic()
     print(
-        f"UR-SemQ-v1 {args.mode}: {len(dataset)} frames, {dataset.dataset.num_episodes} episodes; images={list(config.image_features)}",
+        f"UR-SemQ-v1 {args.mode} {getattr(args, 'variant', 'full')}: {len(dataset)} frames, {dataset.dataset.num_episodes} episodes; images={list(config.image_features)}",
         flush=True,
     )
     print(
-        f"query_weight={args.query_weight}; scales={scales.tolist()}; FP32/TF32; shared ResNet; no identity embeddings",
+        f"query_weight={args.query_weight if dataset.query_supervision else 0.0}; scales={scales.tolist()}; FP32/TF32; shared ResNet; no identity embeddings",
         flush=True,
     )
     iterator = iter(loader)
@@ -198,8 +219,11 @@ def train(args):
             policy.train()
             optimizer.zero_grad(set_to_none=True)
             action_loss, metrics = policy(batch)
-            prediction = metrics.pop(METRIC_PRED)
-            auxiliary_loss, query_metrics = query_loss(prediction, target, valid, weights, scales)
+            if dataset.query_supervision:
+                prediction = metrics.pop(METRIC_PRED)
+                auxiliary_loss, query_metrics = query_loss(prediction, target, valid, weights, scales)
+            else:
+                auxiliary_loss, query_metrics = action_loss.new_zeros(()), {}
             loss = action_loss + args.query_weight * auxiliary_loss
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"Non-finite loss at step {step}")
@@ -247,6 +271,7 @@ def parse_args():
     parser.add_argument("--root", type=Path, default=Path("data/realsense_rgbd_merged4_seg"))
     parser.add_argument("--cache", type=Path, default=Path("outputs/cache/ur_semq_v1_merged4"))
     parser.add_argument("--mode", choices=("rgb", "rgbd"), required=True)
+    parser.add_argument("--variant", choices=VARIANTS, default="full")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--steps", type=int, default=100000)

@@ -1,5 +1,52 @@
 # UR 数据训练命令
 
+## UR-SemQ-v1 消融：RGB+语义无Q / RGB+Q无语义输入
+
+两组都以已完成的 `UR-SemQ-v1-RGB-realsense-merged4-fullprocess` 为配置基准，从头训练，
+不加载旧策略权重、不加深度。数据仍为 `realsense_rgbd_merged4_seg` 的全部90条轨迹及复位过程。
+这两组对应 SO-ARM 的 `final-SEM-FS-NoQ` / `final-RGB-FS-Qtoken` 消融思想，
+但使用独立 UR 类别、五个描述量、follower 动作监督与 UR 输出目录，不修改 SO-ARM 实现。
+
+| 实验名 | ACT视觉输入 | 查询监督 | 推理是否运行U-Net |
+|---|---|---|---|
+| UR-Sem-v1-RGB-NoQ-realsense-merged4-fullprocess | front RGB + 硬分割彩色图 | 无，移除query token及其head | 是 |
+| UR-Q-v1-RGB-NoSem-realsense-merged4-fullprocess | front RGB | 原有5个query、6维输出，质量加权监督 | 否 |
+
+- 第一组不是“只有语义图”：保留RGB和语义输入，彻底移除Qtoken，不是只把监督权重设为0。
+- 第二组语义只用于离线计算监督标签。训练不读取语义图像、不将真实描述量输入策略；
+  推理只需RGB和follower state，描述量由query heads预测，无需region初始化、质量数组或U-Net。
+- 两组保持原动作定义：12维follower逐步delta + 独立夹爪绝对0/1头，MEAN_STD动作/state标准化；
+  RGB及语义图保持ImageNet mean/std。共享可训练ResNet18，无视角/模态embedding。
+- 100k steps、batch8、seed1000、LR1e-5、chunk60、workers16，每20k保存；
+  NoQ只计算原ACT损失，RGB-Q为原ACT损失+0.1*原质量加权query损失。
+- 复用经过全量验证的只读缓存 `outputs/cache/ur_semq_v1_merged4`，启动时校验来源指纹。
+  NoQ不搬运query标签；RGB-Q不读取类别图。均保留persistent workers、pin memory和TF32加速。
+
+```bash
+cd /home/qihan/data/lerobot
+# task1：RGB + 语义，无Qtoken
+CUDA_VISIBLE_DEVICES=0 bash run_ur_semq_ablations_v1.sh semantic-no-query
+# task2：RGB + Qtoken，无语义视觉输入；可与上组并行
+CUDA_VISIBLE_DEVICES=1 bash run_ur_semq_ablations_v1.sh rgb-query
+```
+
+GPU编号仅用于本机分配，可省略或按空闲情况调整。脚本拒绝覆盖已有输出并带独占锁。
+日志为 `outputs/logs/<实验名>.log`，指标为 `outputs/train/<实验名>/metrics/train_metrics.jsonl`，
+最终模型为 `outputs/train/<实验名>/checkpoints/last/pretrained_model`。
+公平比较采用 `action_loss`，而不是含query辅助项的总 `loss`。
+
+两组均使用 `URSemQInference` 推理适配器，动作已转换成绝对指令，不能再次累加delta。
+NoQ返回 `(actions, None)`；RGB-Q返回 `(actions, descriptors)`，且checkpoint不打包分割模型。
+原有完整 UR-SemQ checkpoint 仍兼容，默认训练开关仍为 `--variant full`。
+
+可重复执行的预检（使用新的输出目录，短训不代表正式训练）：
+
+```bash
+/home/qihan/miniconda3/envs/lerobot/bin/python -u mycode/check_ur_semq.py \
+  --output-dir outputs/dataset_checks/ur_semq_ablations_v1_20261112 \
+  --modes rgb --variants semantic-no-query rgb-query --device cuda
+```
+
 ## UR-SemQ-v1：merged4 分割输入与五个任务查询（RGB / RGBD）
 
 本实验使用 `data/realsense_rgbd_merged4_seg`，保留全部90条轨迹、181652帧及复位过程。

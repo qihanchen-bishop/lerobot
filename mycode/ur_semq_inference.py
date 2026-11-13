@@ -21,11 +21,15 @@ class URSemQInference:
         self.metadata = json.loads((checkpoint / "ur_semq.json").read_text())
         if self.metadata["experiment"] != "UR-SemQ-v1" or tuple(self.metadata["labels"]) != LABELS:
             raise ValueError("Not a UR-SemQ-v1 checkpoint.")
-        if digest(checkpoint / "semantic_model/model.ts") != self.metadata["semantic_model_sha256"]:
+        semantic_input = self.metadata.get("semantic_input", True)
+        query_supervision = self.metadata.get("query_supervision", True)
+        if semantic_input and digest(checkpoint / "semantic_model/model.ts") != self.metadata["semantic_model_sha256"]:
             raise ValueError("Segmentation bundle hash mismatch.")
         cfg = PreTrainedConfig.from_pretrained(checkpoint, local_files_only=True)
         if not isinstance(cfg, ACTConfig):
             raise ValueError("UR-SemQ requires an ACT checkpoint.")
+        if (SEMANTIC_KEY in cfg.input_features) != semantic_input or (cfg.metric_mode == "encoder_tokens") != query_supervision:
+            raise ValueError("UR variant metadata and ACT configuration disagree.")
         cfg.device = device
         self.policy = (
             ACTPolicy.from_pretrained(checkpoint, config=cfg, local_files_only=True, strict=True)
@@ -40,9 +44,10 @@ class URSemQInference:
                 "normalizer_processor": {"device": device},
             },
         )
-        self.segmenter = FrozenExportedUNet(
-            checkpoint / "semantic_model/model.ts", expected_labels=LABELS
-        ).to(device)
+        self.segmenter = (
+            FrozenExportedUNet(checkpoint / "semantic_model/model.ts", expected_labels=LABELS).to(device)
+            if semantic_input else None
+        )
         self.scales = torch.tensor(self.metadata["scales"])
 
     def reset(self):
@@ -51,9 +56,13 @@ class URSemQInference:
     @torch.inference_mode()
     def predict_action_chunk(self, observations):
         batch = dict(observations)
-        probabilities = self.segmenter(batch[FRONT_KEY])
-        ids = probabilities.argmax(1)
-        batch[SEMANTIC_KEY] = self.segmenter.palette[ids].permute(0, 3, 1, 2).contiguous()
+        if self.segmenter is not None:
+            probabilities = self.segmenter(batch[FRONT_KEY])
+            ids = probabilities.argmax(1)
+            batch[SEMANTIC_KEY] = self.segmenter.palette[ids].permute(0, 3, 1, 2).contiguous()
+        batch = {key: batch[key] for key in self.policy.config.input_features}
         actions = self.post(self.policy.predict_action_chunk(self.pre(batch)))
-        descriptors = self.policy.latest_inference_metrics() * self.scales
+        descriptors = self.policy.latest_inference_metrics()
+        if descriptors is not None:
+            descriptors = descriptors * self.scales
         return actions, descriptors

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 from torch.utils.data import default_collate
-from train_ur_semq_policy import build_data, prepare_batch, train
+from train_ur_semq_policy import VARIANTS, build_data, prepare_batch, train, variant_flags
 from ur_semq import FRONT_KEY, SEMANTIC_KEY, query_loss
 from ur_semq_inference import URSemQInference
 
@@ -19,16 +19,17 @@ from lerobot.policies.act.modeling_act import METRIC_PRED, ACTPolicy
 from lerobot.policies.act.processor_act import make_act_pre_post_processors
 
 
-def check(root, cache, output, device):
+def check(root, cache, output, device, modes=("rgb", "rgbd"), variants=("full",)):
     output.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(4)
     reports = []
-    for mode in ("rgb", "rgbd"):
+    for mode, variant in ((mode, variant) for mode in modes for variant in variants):
         args = SimpleNamespace(
             root=root,
             cache=cache,
-            output_dir=output / mode,
+            output_dir=output / (mode if variant == "full" else f"{mode}-{variant}"),
             mode=mode,
+            variant=variant,
             device=device,
             seed=1000,
             steps=3,
@@ -39,6 +40,14 @@ def check(root, cache, output, device):
             query_weight=0.1,
         )
         dataset, config, stats, view = build_data(args)
+        semantic_input, query_supervision = variant_flags(args)
+        assert (SEMANTIC_KEY in config.input_features) == semantic_input
+        assert (config.metric_mode == "encoder_tokens") == query_supervision
+        if not semantic_input:
+            # Fail immediately if the RGB-only data path tries to read mask images.
+            def forbidden_labels(index):
+                raise AssertionError("RGB-only variant read a semantic image.")
+            dataset.cache.labels = forbidden_labels
         # Match the previous ACT experiment's action/state normalization exactly.
         baseline = Path(
             f"outputs/train/dataset_views/UR-FDeltaSeparateGrip-ACT-{mode.upper()}-realsense-merged4-fullprocess/meta/stats.json"
@@ -56,8 +65,12 @@ def check(root, cache, output, device):
             row = dataset.dataset.meta.episodes[episode]
             for index in (int(row["dataset_from_index"]), int(row["dataset_to_index"]) - 1):
                 sample = dataset[index]
-                assert sample["semantic_ids"].shape == tuple(config.input_features[FRONT_KEY].shape[1:])
-                assert sample["semantic_ids"].max() < 8 and torch.isfinite(sample["action"]).all()
+                assert ("semantic_ids" in sample) == semantic_input
+                assert ("query_targets" in sample) == query_supervision
+                if semantic_input:
+                    assert sample["semantic_ids"].shape == tuple(config.input_features[FRONT_KEY].shape[1:])
+                    assert sample["semantic_ids"].max() < 8
+                assert torch.isfinite(sample["action"]).all()
                 checked += 1
         policy = ACTPolicy(config, dataset_stats=stats).to(device)
         pre, post = make_act_pre_post_processors(config, stats)
@@ -68,12 +81,19 @@ def check(root, cache, output, device):
         raw = default_collate([dataset[len(dataset) // 2 + 100]])
         batch, target, valid, weights = prepare_batch(raw, palette, pre, device)
         action_loss, values = policy(batch)
-        query, _ = query_loss(values[METRIC_PRED], target, valid, weights, scales)
+        if query_supervision:
+            query, _ = query_loss(values[METRIC_PRED], target, valid, weights, scales)
+        else:
+            assert METRIC_PRED not in values
+            assert not hasattr(policy.model, "encoder_metric_token_embed")
+            assert not hasattr(policy.model, "metric_heads")
+            query = action_loss.new_zeros(())
         (action_loss + 0.1 * query).backward()
-        assert policy.model.encoder_metric_token_embed.weight.grad.abs().sum() > 0
-        for head, columns in zip(policy.model.metric_heads, ((0,), (1,), (2,), (3,), (4, 5)), strict=True):
-            if weights[:, list(columns)].sum() > 0:
-                assert head.weight.grad is not None and head.weight.grad.abs().sum() > 0
+        if query_supervision:
+            assert policy.model.encoder_metric_token_embed.weight.grad.abs().sum() > 0
+            for head, columns in zip(policy.model.metric_heads, ((0,), (1,), (2,), (3,), (4, 5)), strict=True):
+                if weights[:, list(columns)].sum() > 0:
+                    assert head.weight.grad is not None and head.weight.grad.abs().sum() > 0
         assert all(torch.isfinite(p.grad).all() for p in policy.parameters() if p.grad is not None)
         policy.eval()
         with torch.no_grad():
@@ -86,12 +106,17 @@ def check(root, cache, output, device):
         train(args)
         checkpoint = args.output_dir / "checkpoints/last/pretrained_model"
         adapter = URSemQInference(checkpoint, device=device)
+        assert (adapter.segmenter is not None) == semantic_input
+        assert (checkpoint / "semantic_model").exists() == semantic_input
         observations = {
             k: v for k, v in raw.items() if k in adapter.policy.config.input_features and k != SEMANTIC_KEY
         }
         commands, descriptors = adapter.predict_action_chunk(observations)
-        assert commands.shape == (1, 60, 13) and descriptors.shape == (1, 6)
-        assert torch.isfinite(commands).all() and torch.isfinite(descriptors).all()
+        assert commands.shape == (1, 60, 13) and torch.isfinite(commands).all()
+        if query_supervision:
+            assert descriptors.shape == (1, 6) and torch.isfinite(descriptors).all()
+        else:
+            assert descriptors is None
         # Reload the checkpoint's own preprocessing/weights, then compare the cached-mask path.
         first = postprocessed_cached(adapter, raw, palette)
         adapter2 = URSemQInference(checkpoint, device=device)
@@ -100,11 +125,14 @@ def check(root, cache, output, device):
         reports.append(
             {
                 "mode": mode,
+                "variant": variant,
+                "semantic_input": semantic_input,
+                "query_supervision": query_supervision,
                 "samples_checked": checked,
                 "normalization_matches_baseline": True,
-                "forward_backward_query_gradient": "PASS",
+                "forward_backward_variant_isolation": "PASS",
                 "training_and_checkpoint": "PASS",
-                "online_unet_inference": "PASS",
+                "online_inference": "PASS (U-Net)" if semantic_input else "PASS (no U-Net)",
                 "reload_parity": "PASS",
                 "checkpoint": str(checkpoint.resolve()),
             }
@@ -119,7 +147,8 @@ def check(root, cache, output, device):
 @torch.inference_mode()
 def postprocessed_cached(adapter, raw, palette):
     observations = {k: v for k, v in raw.items() if k in adapter.policy.config.input_features}
-    observations[SEMANTIC_KEY] = palette[raw["semantic_ids"].to(palette.device).long()].permute(0, 3, 1, 2)
+    if SEMANTIC_KEY in adapter.policy.config.input_features:
+        observations[SEMANTIC_KEY] = palette[raw["semantic_ids"].to(palette.device).long()].permute(0, 3, 1, 2)
     return adapter.post(adapter.policy.predict_action_chunk(adapter.pre(observations)))
 
 
@@ -129,5 +158,7 @@ if __name__ == "__main__":
     parser.add_argument("--cache", type=Path, default=Path("outputs/cache/ur_semq_v1_merged4"))
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--modes", nargs="+", choices=("rgb", "rgbd"), default=("rgb", "rgbd"))
+    parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=("full",))
     args = parser.parse_args()
-    check(args.root, args.cache, args.output_dir, args.device)
+    check(args.root, args.cache, args.output_dir, args.device, args.modes, args.variants)
