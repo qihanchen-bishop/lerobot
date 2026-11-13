@@ -1,5 +1,42 @@
 # UR 数据训练命令
 
+## RGBD 消融：对比 UR-SemQ-v1-RGBD
+
+以下两组在 RGB 消融基础上增加同一 RealSense 相机的 `observation.images.depth_preview`，
+对照 `UR-SemQ-v1-RGBD-realsense-merged4-fullprocess`。它是 TURBO 深度伪彩图，不是原始深度值，
+也不是新增相机视角。两组均从头训练，不覆盖或续训已有 RGB 实验。
+
+| 实验名 | 视觉输入 | Qtoken |
+|---|---|---|
+| UR-Sem-v1-RGBD-NoQ-realsense-merged4-fullprocess | front RGB + depth_preview + front 语义图 | 完全移除查询token及head |
+| UR-Q-v1-RGBD-NoSem-realsense-merged4-fullprocess | front RGB + depth_preview | 原5个查询、6维描述量及质量加权监督 |
+
+数据与缓存、全分辨率、共享ImageNet ResNet18、图像ImageNet mean/std、动作/state MEAN_STD、
+12维follower逐步delta、独立夹爪0/1头、chunk60、100k steps、batch8、seed1000、LR1e-5、workers16
+均与完整RGBD方法一致。Qtoken仍仅由front分割标签离线计算，不从深度重新定义监督量。
+第一组推理需要U-Net生成语义图；第二组推理不运行U-Net，只需RGB、深度伪彩图与follower state。
+两组复用只读缓存，独立输出目录，不修改SO-ARM或旧UR结果。
+
+```bash
+cd /home/qihan/data/lerobot
+# task1：RGBD + 语义，无Qtoken
+CUDA_VISIBLE_DEVICES=0 bash run_ur_semq_ablations_v1.sh semantic-no-query rgbd
+# task2：RGBD + Qtoken，无语义视觉输入
+CUDA_VISIBLE_DEVICES=1 bash run_ur_semq_ablations_v1.sh rgb-query rgbd
+```
+
+省略脚本第二参数时仍为原来的 `rgb`，旧命令保持不变。日志与模型位于
+`outputs/logs/<实验名>.log` 和 `outputs/train/<实验名>/checkpoints/last/pretrained_model`。
+对比动作拟合应使用 `action_loss`，不比较包含不同辅助损失的总loss。
+
+RGBD真实数据预检（3步短训、归一化一致性、输入隔离、checkpoint重载及推理解码）：
+
+```bash
+/home/qihan/miniconda3/envs/lerobot/bin/python -u mycode/check_ur_semq.py \
+  --output-dir outputs/dataset_checks/ur_semq_rgbd_ablations_v1_20261113 \
+  --modes rgbd --variants semantic-no-query rgb-query --device cuda
+```
+
 ## UR-SemQ-v1 消融：RGB+语义无Q / RGB+Q无语义输入
 
 两组都以已完成的 `UR-SemQ-v1-RGB-realsense-merged4-fullprocess` 为配置基准，从头训练，

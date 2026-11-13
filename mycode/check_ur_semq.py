@@ -43,10 +43,13 @@ def check(root, cache, output, device, modes=("rgb", "rgbd"), variants=("full",)
         semantic_input, query_supervision = variant_flags(args)
         assert (SEMANTIC_KEY in config.input_features) == semantic_input
         assert (config.metric_mode == "encoder_tokens") == query_supervision
+        depth_key = "observation.images.depth_preview"
+        expected_images = [FRONT_KEY] + ([depth_key] if mode == "rgbd" else [])
+        assert list(config.image_features) == expected_images + ([SEMANTIC_KEY] if semantic_input else [])
         if not semantic_input:
-            # Fail immediately if the RGB-only data path tries to read mask images.
+            # RGB/RGBD without semantic inputs must never read mask images.
             def forbidden_labels(index):
-                raise AssertionError("RGB-only variant read a semantic image.")
+                raise AssertionError("No-semantic-input variant read a semantic image.")
             dataset.cache.labels = forbidden_labels
         # Match the previous ACT experiment's action/state normalization exactly.
         baseline = Path(
@@ -67,6 +70,10 @@ def check(root, cache, output, device, modes=("rgb", "rgbd"), variants=("full",)
                 sample = dataset[index]
                 assert ("semantic_ids" in sample) == semantic_input
                 assert ("query_targets" in sample) == query_supervision
+                for key in expected_images:
+                    assert list(sample[key].shape) == list(config.input_features[key].shape)
+                    assert torch.isfinite(sample[key]).all()
+                    assert sample[key].min() >= 0 and sample[key].max() <= 1
                 if semantic_input:
                     assert sample["semantic_ids"].shape == tuple(config.input_features[FRONT_KEY].shape[1:])
                     assert sample["semantic_ids"].max() < 8
@@ -127,6 +134,7 @@ def check(root, cache, output, device, modes=("rgb", "rgbd"), variants=("full",)
                 "mode": mode,
                 "variant": variant,
                 "semantic_input": semantic_input,
+                "image_keys": list(config.image_features),
                 "query_supervision": query_supervision,
                 "samples_checked": checked,
                 "normalization_matches_baseline": True,
