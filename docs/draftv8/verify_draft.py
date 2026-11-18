@@ -102,8 +102,12 @@ def equations(text):
   for label in re.findall(r'\\label\{([^}]+)\}',m.group()):result[label]=m.group()
  return result
 pairs=[('formulation.tex','formulation.tex'),('action_analysis.tex','action_analysis.tex'),('representation_analysis.tex','representation_analysis.tex'),('action_analysis_proofs.tex','action_analysis_proofs.tex'),('representation_feedback_proofs.tex','representation_feedback_proofs.tex')]
-for name in ['references.bib','build.sh','experiments.tex','evaluation_details.tex']:
+for name in ['build.sh','experiments.tex','evaluation_details.tex']:
  assert (P/name).read_bytes()==(P.parent/'draftv7'/name).read_bytes(), name+' differs from v7'
+# Preserve every inherited bibliography entry while allowing newly cited work
+# to be appended for the revised introduction and related-work section.
+old_bib=(P.parent/'draftv7'/'references.bib').read_bytes()
+assert (P/'references.bib').read_bytes().startswith(old_bib), 'inherited bibliography changed'
 checked=0
 for new,old in pairs:
  a=equations((P/new).read_text());b=equations((P.parent/'draftv7'/old).read_text())

@@ -32,7 +32,7 @@
 \newtheorem{assumption}{Assumption}
 \renewcommand{\IEEEproofname}{证明}
 \renewcommand{\refname}{参考文献}
-\title{Imitation Learning with Task-Relevant Representations for Bimanual Exposure and Execution}
+\title{Bimanual Exposure and Execution via Task-Aware Imitation Learning}
 \author{}
 \makeatletter
 \let\tableinput\@@input
@@ -40,13 +40,7 @@
 \begin{document}
 \maketitle
 \begin{abstract}
-% 改善动作块模仿策略的任务完成表现。
-% 研究针对两个互补缺口：有限动作监督未必充分保留任务相关关系，
-% 而生成动作块时的观察也未必足以解释执行期间的动态变化。
-% 为此，基础策略结合语义输入与几何监督查询生成动作块，
-% 条件性分析以动作的后续任务损失为共同尺度，
-% 区分表示造成的决策信息损失、历史的潜在价值与实际决策误差，
-% \draftnote{待补：最终实验平台、任务范围、对照结果及定量结论；摘要在完整评测后定稿。}
+Bimanual exposure and execution under deformable occlusion require a robot to reveal an initially hidden target, manipulate it into a designated region, and restore the covering while adapting later actions to the outcomes of earlier interactions. Conventional visuomotor imitation learning primarily supervises action prediction and may therefore fail to preserve the task information needed to determine whether exposure is sufficient and how execution should proceed. We present a task-aware imitation learning framework that explicitly encourages the policy representation to retain target visibility and interaction geometry. A quality-aware iterative annotation procedure expands semantic supervision from a small set of reviewed videos. The resulting semantic maps provide object-level visual structure, while supervised query tokens encode task descriptors, including target visibility, tool--target displacement, and target--goal distance, jointly with action-chunk prediction. We further derive conditions linking imitation error and representation quality to complete-task failure. Our real-robot evaluation comprises 480 trials across five policies, four object types, and 12 initial positions using the same fixed demonstration set. The proposed method succeeds in 92 of 96 trials (95.8\%), compared with 54 of 96 (56.2\%) for ACT and 50 of 96 (52.1\%) for Diffusion Policy. Factorial ablations achieve 60 of 96 trials with semantic inputs alone and 72 of 96 with supervised queries alone, while their combination performs best. These results show that explicitly preserving task-relevant information can substantially improve complete-task execution from limited demonstrations.
 \end{abstract}
 \begin{IEEEkeywords}
 Imitation learning, semantic representations, visuomotor control.
