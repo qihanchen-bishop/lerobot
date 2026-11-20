@@ -3,7 +3,8 @@
 Preserving Task-Relevant Information in Imitation Learning for Bimanual Exposure and Execution
 
 Bimanual Exposure and Execution via Task-aware Imitation Learning
-
+# 核心论点
+本文提出一种结合语义观测与任务描述量监督查询表示的任务感知模仿学习方法，促使策略保留后续决策所需的任务状态信息，从而提高双臂机器人在有限示范下执行序列操作的可靠性，并在可形变遮挡下的“暴露—执行—恢复”任务中进行验证
 # 主要思路
 
 1. 机器人要完成什么任务？sequential manipulation task

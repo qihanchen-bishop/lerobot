@@ -15,19 +15,28 @@ P = Path(__file__).resolve().parent
 OUT = P / "figures/results_20261023"
 OUT.mkdir(parents=True, exist_ok=True)
 METHODS = ["ACT", "DP", "RGBQtoken", "segNoQtoken", "viewQtoken"]
-NAMES = dict(zip(METHODS, ["ACT", "DP", "ACT + Q", "ACT + S", "Ours (S + Q)"]))
-COLORS = dict(zip(METHODS, ["#7A8691", "#D99026", "#0072B2", "#B76D9C", "#009E73"]))
+COMPARISON_METHODS = ["ACT", "DP", "viewQtoken"]
+ABLATION_METHODS = ["ACT", "RGBQtoken", "segNoQtoken", "viewQtoken"]
+NAMES = dict(zip(METHODS, [
+    "ACT",
+    "DP",
+    "Ours w/o semantics",
+    "Ours w/o task queries",
+    "Ours",
+]))
+COLORS = dict(zip(METHODS, ["#6C757D", "#D8891C", "#3A78A8", "#B5658C", "#25866A"]))
 OBJECTS = ["cube", "paperball", "screw", "crayon"]
 OBJECT_NAMES = ["Cube", "Paper ball", "Screw", "Crayon*"]
-RATE_MAP = LinearSegmentedColormap.from_list("success", ["#F2F5F7", "#8ABCC3", "#194F62"])
+RATE_MAP = LinearSegmentedColormap.from_list(
+    "success", ["#F7FBFF", "#BDD7E7", "#6BAED6", "#2171B5"])
 # Bundled Times-style TrueType avoids CFF embedding warnings in Matplotlib PDFs.
 FONT = "STIXGeneral"
-LABEL_SIZE = 9
-SMALL_SIZE = 8.5
-DENSE_SIZE = 8
+LABEL_SIZE = 9.5
+SMALL_SIZE = 9
+DENSE_SIZE = 8.5
 plt.rcParams.update({
-    "font.family": FONT, "font.size": LABEL_SIZE, "axes.titlesize": 10,
-    "axes.titleweight": "bold", "axes.titlepad": 8,
+    "font.family": FONT, "font.size": LABEL_SIZE, "axes.titlesize": 10.5,
+    "axes.titleweight": "semibold", "axes.titlepad": 7,
     "axes.labelsize": LABEL_SIZE, "axes.labelpad": 4,
     "xtick.labelsize": SMALL_SIZE, "ytick.labelsize": SMALL_SIZE,
     "legend.fontsize": SMALL_SIZE, "legend.labelspacing": .4,
@@ -122,28 +131,69 @@ bx.legend(ncol=3, loc="upper center", bbox_to_anchor=(.5, -.15),
           frameon=False, columnspacing=1)
 save(fig, "overall_objects")
 
-fig, ax = plt.subplots(figsize=(3.45, 2.35), layout="constrained")
-order = [["ACT", "RGBQtoken"], ["segNoQtoken", "viewQtoken"]]
-values = np.array([[count(m) for m in row] for row in order])
-ax.imshow(values/96*100, vmin=0, vmax=100, cmap=RATE_MAP, aspect="auto")
-for y, x in np.ndindex(values.shape):
-    m = order[y][x]
-    text_color = "white" if values[y, x]/96 >= .7 else "#26343D"
-    ax.text(x, y-.12, NAMES[m], ha="center", va="center",
-            fontsize=10, fontweight="bold", color=text_color)
-    ax.text(x, y+.16, f"{values[y,x]}/96  ({values[y,x]/96*100:.2f}%)",
-            ha="center", va="center", fontsize=9.5, color=text_color)
-ax.set_xticks([0, 1], ["Without Q", "With Q"])
-ax.set_yticks([0, 1], ["Without S", "With S"])
-ax.tick_params(length=0)
-ax.set_title("Semantic inputs and supervised queries", pad=10)
+
+def overall_object_panel(methods, name):
+    fig, (ax, bx) = plt.subplots(
+        2, 1, figsize=(3.45, 4.25),
+        gridspec_kw={"height_ratios": [1, 1.35]}, layout="constrained")
+    values = np.array([A[m, "ALL"]["success_rate_pct"] for m in methods])
+    low = np.array([A[m, "ALL"]["wilson95_low_pct"] for m in methods])
+    high = np.array([A[m, "ALL"]["wilson95_high_pct"] for m in methods])
+    ax.barh(range(len(methods)), values, height=.58,
+            color=[COLORS[m] for m in methods],
+            xerr=[values-low, high-values],
+            error_kw={"lw": .8, "capsize": 2, "ecolor": "#26343D"})
+    ax.set_yticks(range(len(methods)), [NAMES[m] for m in methods])
+    ax.invert_yaxis()
+    ax.set_xlim(0, 125)
+    ax.set_xticks([0, 50, 100])
+    ax.set_xlabel("Success rate (%)")
+    ax.set_title("(a) Overall", loc="left")
+    for i, m in enumerate(methods):
+        ax.text(123, i, f"{count(m)}/96", ha="right", va="center",
+                fontsize=SMALL_SIZE)
+    x = np.arange(4)
+    width = .72 / len(methods)
+    for i, m in enumerate(methods):
+        bx.bar(x + (i-(len(methods)-1)/2)*width,
+               [100*count(m, o)/24 for o in OBJECTS], width*.94,
+               color=COLORS[m], label=NAMES[m])
+    bx.set_xticks(x, OBJECT_NAMES)
+    bx.set_ylim(0, 106)
+    bx.set_yticks([0, 25, 50, 75, 100])
+    bx.set_ylabel("Success rate (%)")
+    bx.set_title("(b) Object categories", loc="left")
+    bx.legend(ncol=2, loc="upper center", bbox_to_anchor=(.5, -.18),
+              frameon=False, columnspacing=.8)
+    save(fig, name)
+
+
+overall_object_panel(COMPARISON_METHODS, "comparison_objects")
+overall_object_panel(ABLATION_METHODS, "ablation_objects")
+
+fig, ax = plt.subplots(figsize=(3.45, 2.15), layout="constrained")
+order = ["ACT", "segNoQtoken", "RGBQtoken", "viewQtoken"]
+labels = ["ACT", "w/o task queries", "w/o semantics", "Ours"]
+values = np.array([100 * count(m) / 96 for m in order])
+y = np.arange(len(order))
+ax.barh(y, values, height=.58, color=[COLORS[m] for m in order])
+ax.set_yticks(y, labels)
+ax.invert_yaxis()
+ax.set_xlim(0, 108)
+ax.set_xticks([0, 25, 50, 75, 100])
+ax.set_xlabel("Complete-task success (%)")
+ax.grid(axis="x", color="#E4E8EB", lw=.65)
+ax.set_axisbelow(True)
+for i, m in enumerate(order):
+    ax.text(values[i] + 1.5, i, f"{count(m)}/96", va="center",
+            fontsize=SMALL_SIZE, fontweight="semibold" if m == "viewQtoken" else "normal")
 save(fig, "ablation")
 
 fig, axes = plt.subplots(2, 3, figsize=(7.16, 3.85), layout="constrained")
 for m, ax in zip(METHODS, axes.flat):
     values = [[count(m, x=x, y=y) for x in range(4)] for y in range(3)]
     im = rate_grid(ax, values, 8)
-    ax.set_title(NAMES[m], color=COLORS[m], fontweight="bold")
+    ax.set_title(NAMES[m], color="#26343D", fontweight="bold")
     ax.set_xlabel("Column x")
     ax.set_ylabel("Row y")
 ax = axes.flat[-1]
@@ -155,6 +205,22 @@ cb.set_ticks([0, 50, 100])
 cb.set_label("Success rate (%)", labelpad=3)
 save(fig, "position")
 
+fig, axes = plt.subplots(2, 2, figsize=(3.45, 3.35), layout="constrained")
+for m, ax in zip(COMPARISON_METHODS, axes.flat):
+    values = [[count(m, x=x, y=y) for x in range(4)] for y in range(3)]
+    im = rate_grid(ax, values, 8, fontsize=8.5)
+    ax.set_title(NAMES[m], color="#26343D", fontweight="bold")
+ax = axes.flat[-1]
+ax.axis("off")
+ax.text(.04, .90, "Each cell: 8 trials\n4 objects $\\times$ 2 repeats",
+        transform=ax.transAxes, va="top", fontsize=SMALL_SIZE, linespacing=1.45)
+cb = fig.colorbar(im, cax=ax.inset_axes([.08, .22, .84, .09]), orientation="horizontal")
+cb.set_ticks([0, 50, 100])
+cb.set_label("Success (%)", labelpad=2)
+fig.supxlabel("Grid column", fontsize=LABEL_SIZE)
+fig.supylabel("Grid row", fontsize=LABEL_SIZE)
+save(fig, "position_comparison")
+
 fig, axes = plt.subplots(5, 4, figsize=(7.16, 7.1), layout="constrained")
 for i, m in enumerate(METHODS):
     for j, o in enumerate(OBJECTS):
@@ -164,13 +230,40 @@ for i, m in enumerate(METHODS):
         if i == 0:
             ax.set_title(OBJECT_NAMES[j], fontweight="bold")
         if j == 0:
-            ax.set_ylabel(NAMES[m] + "\nRow y", color=COLORS[m], fontsize=LABEL_SIZE)
+            ax.set_ylabel(NAMES[m] + "\nRow y", color="#26343D", fontsize=LABEL_SIZE)
         if i == 4:
             ax.set_xlabel("Column x")
 cb = fig.colorbar(im, ax=axes, orientation="horizontal", fraction=.025, pad=.025, aspect=45)
 cb.set_ticks([0, 50, 100], labels=["0/2", "1/2", "2/2"])
 cb.set_label("Successful repeats per object-position condition")
 save(fig, "object_position")
+
+
+def object_position_panel(methods, name):
+    fig, axes = plt.subplots(len(methods), 4,
+                             figsize=(7.16, 1.22*len(methods)+.8),
+                             squeeze=False, layout="constrained")
+    for i, m in enumerate(methods):
+        for j, o in enumerate(OBJECTS):
+            ax = axes[i, j]
+            values = [[count(m, o, x, y) for x in range(4)] for y in range(3)]
+            im = rate_grid(ax, values, 2, DENSE_SIZE)
+            if i == 0:
+                ax.set_title(OBJECT_NAMES[j], fontweight="bold")
+            if j == 0:
+                ax.set_ylabel(NAMES[m] + "\nRow y", color="#26343D",
+                              fontsize=LABEL_SIZE)
+            if i == len(methods)-1:
+                ax.set_xlabel("Column x")
+    cb = fig.colorbar(im, ax=axes, orientation="horizontal",
+                      fraction=.03, pad=.035, aspect=42)
+    cb.set_ticks([0, 50, 100], labels=["0/2", "1/2", "2/2"])
+    cb.set_label("Successful repeats per object-position condition")
+    save(fig, name)
+
+
+object_position_panel(COMPARISON_METHODS, "object_position_comparison")
+object_position_panel(ABLATION_METHODS, "object_position_ablation")
 
 FAIL_KEYS = ["never_exposed", "exposed_never_separated",
              "separated_never_reached_region", "reached_region_final_failure"]
@@ -235,20 +328,29 @@ table("timing_rows", [
 table("failure_rows", [
     " & ".join([NAMES[m]] + [str(FAIL[m][key]) for key in FAIL_KEYS] + [str(FAIL[m]["failures"])]) + r"\\"
     for m in METHODS])
-lines = []
-for left, right in [("ACT", "segNoQtoken"), ("ACT", "RGBQtoken"), ("ACT", "viewQtoken"),
-                    ("DP", "viewQtoken"), ("RGBQtoken", "viewQtoken"), ("segNoQtoken", "viewQtoken")]:
-    row = next(r for r in S["method_tests"] if r["object"] == "ALL"
-               and r["left"] == left and r["right"] == right)
-    p = row["p_holm"]
-    if p < .001:
-        exponent = int(np.floor(np.log10(p)))
-        ptext = "$" + f"{p/10**exponent:.2f}" + r"\times10^{" + str(exponent) + "}$"
-    else:
-        ptext = f"{p:.4f}"
-    lines.append(f"{NAMES[right]} vs. {NAMES[left]} & +{(count(right)-count(left))/96*100:.2f}"
-                 f" & {ptext}" + r"\\")
+def contrast_lines(pairs):
+    lines = []
+    for left, right in pairs:
+        row = next(r for r in S["method_tests"] if r["object"] == "ALL"
+                   and r["left"] == left and r["right"] == right)
+        p = row["p_holm"]
+        if p < .001:
+            exponent = int(np.floor(np.log10(p)))
+            ptext = "$" + f"{p/10**exponent:.2f}" + r"\times10^{" + str(exponent) + "}$"
+        else:
+            ptext = f"{p:.4f}"
+        lines.append(f"{NAMES[right]} vs. {NAMES[left]} & +{(count(right)-count(left))/96*100:.2f}"
+                     f" & {ptext}" + r"\\")
+    return lines
+
+
+comparison_pairs = [("ACT", "viewQtoken"), ("DP", "viewQtoken")]
+ablation_pairs = [("ACT", "segNoQtoken"), ("ACT", "RGBQtoken"),
+                  ("RGBQtoken", "viewQtoken"), ("segNoQtoken", "viewQtoken")]
+lines = contrast_lines(comparison_pairs + ablation_pairs)
 table("contrast_rows", lines)
+table("comparison_contrast_rows", contrast_lines(comparison_pairs))
+table("ablation_contrast_rows", contrast_lines(ablation_pairs))
 
 
 def digest(path):

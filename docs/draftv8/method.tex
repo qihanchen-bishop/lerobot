@@ -1,138 +1,206 @@
-\begin{figure}[t]
- \centering
- \includegraphics[width=\columnwidth]{myfigure/image3.png}
- % 审核后得到种子；后续仅使用累积的合格伪标签训练。
- \caption{Quality-aware iterative annotation. Reviewed bidirectional SAM2 masks train the initial segmenter. Subsequent models learn from cumulative, quality-screened pseudo-labels; seed videos are retained for reference rather than further training.}
- \label{fig:iterative-semantic-annotation}
-\end{figure}
 \section{Method}
 \label{sec:method}
-% 理论将任务信息保留与双臂专家动作重构联系起来；方法以可见性和空间关系实现这一设计方向。
-Section~\ref{sec:analysis} motivates preserving visibility and interaction geometry that support expert bimanual action selection.
-Figure~\ref{fig:architecture} organizes this approach into two components.
-% 离线质量筛选迭代扩展少量人工审核标注。
-First, quality-aware iterative annotation expands a small manually reviewed seed set into semantic supervision.
-% RGB、语义和受监督查询共同支持基础动作块预测。
-Second, RGB observations, semantic maps, and supervised task-descriptor queries jointly support an action-chunk policy for coordinated exposure and execution.
+Section~\ref{sec:analysis} motivates a policy representation that preserves the task conditions needed for expert bimanual action selection.
+Our framework implements this principle through three connected components, as summarized in Fig.~\ref{fig:architecture}.
+First, a task-relation policy transformer combines RGB observations, semantic structure, proprioception, and supervised task queries to predict action chunks.
+Second, quality-aware iterative semantic supervision expands a small reviewed seed set without repeatedly invoking a video foundation model.
+Third, mask-derived task descriptors supervise the query representation according to the reliability of the semantic evidence from which each descriptor is computed.
+
+\subsection{Task-Relation Policy Transformer}
+\label{sec:methodpolicy}
+The policy assigns complementary roles to semantic inputs and task-query supervision.
+Semantic images expose object-level structure and changes in the deformable occluder to the visual encoder.
+Task queries directly supervise selected decision variables in the representation used for action generation.
+RGB and proprioception retain appearance, contact, deformation, and robot-configuration cues not captured by category masks.
+
+\subsubsection{Joint RGB-Semantic Encoding}
+For each camera view $v$, a frozen segmenter maps the RGB image $I_t^v$ to a class map containing the occluder, target object, goal region, tool, and two robot arms.
+Class-dependent component filtering removes small or excess connected components, after which a fixed color palette converts the class map into a three-channel semantic image $S_t^v$.
+Policy training uses offline semantic masks from the expanded semantic dataset, while deployment applies the frozen segmenters to the current RGB observations.
+
+Each RGB and semantic stream is processed independently by the shared ACT visual backbone~\cite{zhao2023act}.
+The resulting visual tokens are combined with the two-arm proprioceptive state and a set of learned task-query tokens in the transformer encoder.
+The ACT decoder attends to the complete encoder memory and predicts a coordinated action chunk.
+Thus, the semantic stream exposes changes such as target revelation, occluder displacement, and tool motion without replacing the appearance information in RGB.
+
+\subsubsection{Shared Task Queries and View-Specific Heads}
+We use one learned query for each of three task relations: target visibility, tool--target displacement, and target--goal-region distance.
+Let $z_t^{(j)}$ denote the encoder output of query $j$.
+The same query representation is read by independent heads for the front and side views,
+\begin{equation}
+ \widehat G_t^{(j,v)}=D_{j,v}\!\left(z_t^{(j)}\right).
+ \label{eq:viewqueryheads}
+\end{equation}
+The shared query integrates complementary evidence across views, while view-specific heads preserve quantities defined in different image coordinates.
+The encoded query tokens remain in the encoder memory attended by the action decoder.
+Descriptor predictions provide auxiliary supervision and are not appended to the policy input.
 
 \subsection{Quality-Aware Iterative Semantic Supervision}
 \label{sec:methodseg}
-% 语义掩码决定描述量标签的质量，因而需控制错误伪标签在迭代中的传播。
-Task-descriptor labels are derived from semantic masks, so segmentation errors can compromise the supervision used to preserve task information.
-% 从少量审核种子出发，视频级筛选控制扩展标注的可靠性。
-We combine reviewed seed annotations with video-level quality screening to limit error propagation as the labeled set expands (Fig.~\ref{fig:iterative-semantic-annotation}).
+The semantic images and descriptor targets both depend on mask quality.
+We therefore expand the mask annotations through cumulative self-training while screening transient segmentation failures at the video level.
 
-\subsubsection{Event-Guided Seeds and Iterative Expansion}
-% 从覆盖主要交互与遮挡变化的少量视频中选择关键帧。
-We select a small set of videos spanning the principal interaction and occlusion states, and annotate keyframes around events such as target exposure, contact, and placement.
-% 人工框与正负点经SAM2双向传播，检查分歧并人工修正后得到种子掩码。
-Bounding boxes and positive and negative point prompts guide bidirectional SAM2 propagation~\cite{ravi2024sam2}; consistency checks, class-dependent structural processing, and manual correction produce the seed masks.
-% 种子训练初始U-Net，后续在新视频上生成候选标注。
-The seeds train an initial U-Net segmenter, which predicts candidate masks on new unlabeled videos.
-% 质量合格的标注跨轮累积，每轮重新初始化训练，种子不再用于后续拟合。
-Accepted masks accumulate across iterations, and each subsequent segmenter is reinitialized and trained on this cumulative pool without the original seed videos.
-% 种子用于检查标签一致性，训练外保留视频用于监测异常。
-The seed videos provide a fixed reference for label agreement, while held-out videos monitor temporal anomalies.
-% 监测迭代过程而不预设扩大标签池必然提升质量。
-Both are tracked across iterations to assess whether expansion compromises annotation quality.
+\subsubsection{Reviewed Seeds and Cumulative Expansion}
+We first choose a small set of videos that spans key interaction states, including initial occlusion, target exposure, tool contact, placement, and covering restoration.
+Bounding boxes and positive and negative point prompts are placed on event-centered keyframes.
+Bidirectional Segment Anything Model 2 (SAM2) propagation~\cite{ravi2024sam2}, forward--backward consistency checks, and manual correction produce the reviewed seed mask videos.
+The remaining training episodes are task-stratified, randomized, and divided into three disjoint batches.
+Each round after the first introduces approximately twice as many new episodes as the preceding round.
+The seed episodes and a frozen episode-level benchmark are excluded from the pseudo-label pool.
+Algorithm~\ref{alg:iterative-semantic-annotation} summarizes the cumulative expansion.
+The benchmark tracks cross-generation segmentation performance.
+
+\begin{figure}[t]
+\refstepcounter{troalgorithm}
+\label{alg:iterative-semantic-annotation}
+\small
+\hrule
+\vspace{2pt}
+\noindent\textbf{Algorithm \thetroalgorithm: Quality-Aware Cumulative Annotation}
+\vspace{2pt}
+\hrule
+\vspace{2pt}
+\begin{tabular}{@{}l@{\ }>{\raggedright\arraybackslash}p{0.82\columnwidth}@{}}
+\textbf{Input:} & seed masks $\mathcal S_0$, video batches $\mathcal B_{1:K}$, and benchmark $\mathcal E_{\mathrm{seg}}$\\
+\textbf{Output:} & segmenter $f_K$ and quality records $\mathcal Q$\\
+\end{tabular}
+\begin{algorithmic}
+\STATE $f_0\leftarrow\operatorname{Train}_{\mathrm{ImageNet}}(\mathcal S_0)$, $\mathcal S\leftarrow\varnothing$, $\mathcal Q\leftarrow\varnothing$
+\FOR{$k=1,\ldots,K$}
+ \STATE $\widetilde{\mathcal M}_k\leftarrow\operatorname{Predict}(f_{k-1},\mathcal B_k)$
+ \STATE $(\bm\upsilon_k,\bm q_k)\leftarrow\operatorname{Quality}(\widetilde{\mathcal M}_k)$
+ \STATE $\mathcal A_k\leftarrow\{t:\exists c,v,\alpha_{t,c,v}=1\}$
+ \STATE $\mathcal R_k\leftarrow\operatorname{Dilate}\!\left(
+ \mathcal A_k\cup\operatorname{GateFail}(\widetilde{\mathcal M}_k)\right)$
+ \FOR{$t\in\mathcal B_k$}
+  \IF{$t\notin\mathcal R_k$}
+   \STATE $\mathcal S\leftarrow\mathcal S\cup\{\widetilde{\mathcal M}_{k,t}\}$, $\mathcal Q\leftarrow\mathcal Q\cup\{\bm q_{k,t}\}$
+  \ENDIF
+ \ENDFOR
+ \STATE $f_k\leftarrow\operatorname{Train}_{\mathrm{ImageNet}}(\mathcal S)$
+ \STATE $\operatorname{Evaluate}(f_k,\mathcal E_{\mathrm{seg}})$
+\ENDFOR
+\end{algorithmic}
+\hrule
+\end{figure}
+Here, $\operatorname{Train}_{\mathrm{ImageNet}}$ denotes training a per-view ResNet U-Net initialized with ImageNet-pretrained encoder weights.
+$\operatorname{GateFail}$ denotes excessive structural correction or insufficient foreground, while $\operatorname{Dilate}$ extends each rejected frame to a short temporal neighborhood.
 
 \subsubsection{Video-Level Quality Screening}
-% 质量评估需要区分真实任务变化与偶发分割异常。
-The screening procedure distinguishes sustained task changes from transient segmentation anomalies.
-% 按类别从完整视频提取规模、空间位置与拓扑轨迹，并进行分段鲁棒建模。
-For each class, we extract trajectories of mask area, spatial extent, centroid, and topology, and fit robust piecewise trends over the video.
-% 持续变化允许新的状态段，短时偏离作为异常证据，而不是直接惩罚帧间差异。
-Persistent changes can establish new segments, while short-lived departures provide anomaly evidence instead of penalizing every inter-frame change.
-% 通过可靠光流对应计算运动补偿后的掩码IoU。
-Motion-compensated mask IoU supplies additional temporal evidence on pixels with forward--backward-consistent optical-flow correspondences.
-% 四类证据分别反映规模、空间形状、拓扑与运动不一致。
-For class $c$ at frame $t$, we collect these diagnostics as
-\begin{equation}
- \bm\upsilon_{t,c}^{\mathrm{seg}}
- =(\upsilon_{t,c}^{\mathrm{area}},
-   \upsilon_{t,c}^{\mathrm{space}},
-   \upsilon_{t,c}^{\mathrm{topo}},
-   \upsilon_{t,c}^{\mathrm{motion}}).
- \label{eq:segevidence}
-\end{equation}
-% 多类证据共同识别异常，避免由单一面积或运动变化决定标签无效。
-Agreement across evidence groups identifies anomalous intervals; excessive changes introduced by structural processing also trigger exclusion.
-% 帧内相关类别均通过检查时才进入后续分割训练。
-A frame enters subsequent segmentation training only when its relevant classes pass these checks.
-% 人工参考用于发现时间上稳定的系统性误分。
-The manually reviewed reference set complements temporal screening by checking for persistent semantic errors that temporal consistency alone cannot detect.
-% 分割准入与描述量权重共享诊断来源，但依照各自监督对象使用。
-The same diagnostics also determine descriptor-specific supervision weights in Section~\ref{sec:methodrelations}.
-% 离线质量建模与在线分割明确分开，在线仅需当前图像。
-Quality assessment is performed offline; the final per-view segmenters are frozen and require only current images during policy execution.
+Framewise confidence alone conflates genuine task transitions with transient segmentation errors.
+For each semantic class $c$ and view $v$, we therefore analyze complete-video trajectories using four evidence groups:
+mask area, spatial shape from centroid and bounding-box changes, topology from connected components and holes, and motion consistency from flow-aligned mask overlap.
+Area reveals sudden disappearance or expansion.
+Centroid and bounding-box trajectories expose implausible location or extent jumps.
+Connected components, hole counts, and hole area reveal fragmentation or merging that area alone can miss.
+For motion, we compute $I_{t,c,v}$, the intersection over union between the current mask and the preceding mask warped through forward--backward-consistent optical flow.
+A drop below its robust expected value gives the motion deviation $d_{t,c,v}^{\mathrm{motion}}=[\widehat I_{t,c,v}-I_{t,c,v}]_+$.
+Missing or unreliable flow supplies no motion evidence.
 
-\subsection{Semantic Inputs and Task-Descriptor Queries}
+Each continuous diagnostic is compared with a piecewise robust temporal trend so that a persistent change, such as deliberate occluder displacement or target exposure, establishes a new state.
+Let $d_{t,c,v}^{g}$ be the resulting normalized deviation for evidence group $g$, and let $\rho_{t,c,v}^{g}$ be its local median absolute residual scaled by $1.4826$.
+The excess over the group-specific tolerance $\epsilon_g$ is
+\begin{equation}
+ \upsilon_{t,c,v}^{g}
+ =\left[
+ \frac{d_{t,c,v}^{g}}
+ {\max(\epsilon_g,\kappa\rho_{t,c,v}^{g})}-1
+ \right]_+,
+ \qquad \kappa=4,
+ \label{eq:qualityevidence}
+\end{equation}
+where $[u]_+=\max(0,u)$.
+Component- or hole-count mismatches directly contribute positive topology evidence.
+The four evidence magnitudes define the class-specific quality score
+\begin{equation}
+ q_{t,c,v}^{\mathrm{seg}}
+ =\exp\!\left[-\min\!\left(\tau,
+ \sum_g\upsilon_{t,c,v}^{g}\right)\right],
+ \qquad \tau=4.
+ \label{eq:segquality}
+\end{equation}
+The score equals one when no evidence departs from its expected trend and decreases as the combined deviation grows.
+The multi-evidence anomaly decision is $\alpha_{t,c,v}=\ind[\sum_g\ind[\upsilon_{t,c,v}^{g}>0]\ge2]$.
+The joint gate in Algorithm~\ref{alg:iterative-semantic-annotation} therefore prevents an isolated area or motion change from invalidating a label.
+The score provides a relative reliability weight rather than a calibrated probability of correctness.
+All quality assessment is performed offline.
+At deployment, the final frozen segmenters use only the current images.
+
+\subsection{Task Descriptors and Reliability-Aware Supervision}
 \label{sec:methodrelations}
-% 语义突出对象级结构，查询监督引导表示保留具体任务信息。
-Semantic maps emphasize object-level spatial structure, while supervised queries encourage the joint representation to retain task-relevant attributes and relationships.
-% RGB与本体信息保留类别图无法完整表达的决策线索。
-RGB and proprioception remain available for decision cues not captured by the semantic classes.
-% 这对应C中的描述量估计途径，而非声称增加输入自动改善覆盖。
-This design targets the descriptor-estimation term in~\eqref{eq:expertreconstruction} through the learned representation, rather than assuming that adding semantic channels improves coverage.
+The task queries retain information that is directly useful for deciding whether to continue exposure, approach the target, or complete placement.
+We instantiate this information using target visibility and two spatial relations.
+The more detailed occluder configuration remains available through the semantic stream rather than being compressed into an additional scalar descriptor.
 
-\subsubsection{Joint Visual-Semantic Encoding}
-% 冻结的各视角分割器输出类别概率，硬化并过滤后形成固定颜色语义图。
-For view $v$, a frozen segmenter predicts class probabilities $p_t^v(c,\xi)$ from image $I_t^v$.
-We form a semantic image from the filtered class labels:
+\subsubsection{Task-Descriptor Construction}
+Let $M_{O,t}^v$, $M_{T,t}^v$, and $M_{R,t}^v$ denote the target-object, tool, and goal-region masks in view $v$ at time $t$.
+For an image of width $W_I$ and height $H_I$, let $\bar c_{O,t}^v$ be the normalized target centroid, $\bar r_{T,t}^v$ a normalized tool reference point, $\mathcal P_v$ a fixed goal-region polygon estimated from reliable training masks, and $D_I=\sqrt{(W_I-1)^2+(H_I-1)^2}$.
+The descriptor targets are
 \begin{equation}
- \bar c_t^v=\mathcal T_v\!\left(\operatorname*{arg\,max}_{c\in\mathcal C_v}p_t^v(c,\cdot)\right),
- \qquad S_t^v(\xi)=e_{\bar c_t^v(\xi)}^{\mathrm{sem}},
- \label{eq:methodsoftsem}
+ \begin{aligned}
+ \widetilde G_{t}^{(\mathrm{vis},v)}
+ &=\frac{|M_{O,t}^v|}{W_IH_I},\\
+ \widetilde G_{t}^{(\mathrm{tool},v)}
+ &=\clip\!\left(\bar c_{O,t}^v-\bar r_{T,t}^v,-1,1\right),\\
+ \widetilde G_{t}^{(\mathrm{goal},v)}
+ &=\frac{1}{D_I}\max_{\xi\in M_{O,t}^v}
+   \operatorname{dist}(\xi,\mathcal P_v).
+ \end{aligned}
+ \label{eq:methodgeometry}
 \end{equation}
-% 定义类别集合、像素、结构过滤算子及固定颜色。
-Here, $\mathcal C_v$ is the view-specific class set, $\xi$ a pixel, $\mathcal T_v$ the class-dependent structural filter, and $e_c^{\mathrm{sem}}\in[0,1]^3$ a fixed class color.
-% 训练读取离线掩码，部署使用冻结分割器；两者均采用硬类别彩色图。
-Offline masks provide these images during policy training; frozen segmenters provide them at deployment.
-The fixed color representation allows RGB and semantics to share a three-channel visual encoder.
-% 各输入流分别编码后与本体信息和查询进入Transformer。
-The encoded streams from all views are combined with proprioceptive and query tokens in a transformer encoder.
-% ACT作为基础实例，不展开其标准生成结构。
-An ACT decoder~\cite{zhao2023act} reads this context to predict the base action chunk.
+The current goal-region mask determines descriptor validity and mask reliability, while the fixed polygon $\mathcal P_v$ provides a stable spatial reference.
+The visible-area ratio measures the degree of target exposure.
+The signed two-dimensional displacement preserves the direction from the execution end toward the target.
+In the front view, the tool reference is the left endpoint of the tool mask's principal-axis segment.
+In the side view, where endpoint orientation is not reliably identifiable, the tool centroid is used.
+Distance to $\mathcal P_v$ is zero inside the goal region, so the maximum in~\eqref{eq:methodgeometry} becomes zero only when all visible target pixels lie inside it.
+This retains completion-relevant information that a centroid distance could miss.
 
-\subsubsection{Supervised Descriptor Queries}
-% 按任务选择描述量组，组成理论中的向量G。
-We select $K_{\mathrm{rel}}$ descriptor groups $G^{(j)}\in\R^{d_j}$, such as visible area and relative position, which together form the task descriptor vector $G$.
-% 标签来自离线语义掩码，具体任务定义放在附录。
-Fixed geometric operators applied to the offline masks generate pseudo-labels $\widetilde G_t^{(j)}$; the task-specific definitions are given in Appendix~\ref{app:descriptorinstance}.
-% 每组共享一个查询，以各视角独立读出监督，查询输出同时用于动作解码。
-Each group has a shared learnable query whose encoded output $z_t^{(j)}$ supports view-specific heads,
-$\widehat G_t^{(j,v)}=D_{j,v}(z_t^{(j)})$, and remains available to the action decoder.
-The view-specific outputs are concatenated rather than averaging geometry across camera coordinates.
-% 约束的是可读出的任务信息，不是指定注意力图。
-Supervision therefore encourages task information to be recoverable from the policy representation without prescribing an attention map.
+A reliably empty target mask is a valid zero-visibility label.
+The two geometric relations are undefined when their required objects or reference geometry are unavailable, so they are masked rather than assigned a zero value.
+These descriptors encode observable image-plane task relations, while unobserved three-dimensional contact and deformation lie outside their scope.
 
-% 描述量权重依据自身有效性与相关类别的质量，避免无关异常影响监督。
-A weight $\varpi_{n,j,v}^{G}\in[0,1]$ combines descriptor validity with quality evidence from the relevant semantic classes.
-% 可信、存疑及异常标签分别全量、降权或停用。
-Reliable labels receive full weight, uncertain labels are downweighted, and undefined or anomalous labels receive zero weight.
-% 无定义距离与确认的零面积需要区分。
-In particular, missing objects invalidate geometric relations, while a zero-visible-area label remains eligible subject to quality screening.
-% 只停止辅助监督，不删除动作示范。
-Disabling a descriptor loss does not remove the sample's action supervision.
-% 将组内尺度归一化后的向量误差写为紧凑的辅助损失。
-With descriptors normalized to fixed scales, the training objective is
+\subsubsection{Descriptor Reliability and Joint Objective}
+Mask-derived descriptor targets inherit segmentation errors.
+We therefore weight each descriptor using the semantic classes required for its computation.
+Let $\mathcal C_j$ be those classes and $m_{t,j,v}^{G}$ indicate that the geometry is defined.
+We use
+\begin{equation}
+ \varpi_{t,j,v}^{G}
+ =m_{t,j,v}^{G}
+  \prod_{c\in\mathcal C_j}(1-\alpha_{t,c,v})
+  \min_{c\in\mathcal C_j}q_{t,c,v}^{\mathrm{seg}}.
+ \label{eq:relationadmission}
+\end{equation}
+Visibility uses target quality.
+Tool--target displacement uses the lower of target and tool quality, while target--goal distance uses the lower of target and goal-region quality.
+The weighting depends only on the classes required by each descriptor.
+Occluder changes therefore leave valid spatial labels active, while the semantic input retains the occluder structure.
+An anomaly or undefined relation gives zero auxiliary weight without removing the corresponding action demonstration.
+
+For action supervision, let $u_{n,h,d}^{\mathrm E}$ and $\widehat u_{n,h,d}$ denote the dataset-normalized expert and predicted joint-command components for sample $n$, prediction step $h$, and command dimension $d$.
+Let $p_{n,h}\in\{0,1\}$ mask padded steps, $H_a$ be the prediction horizon, $d_u$ be the joint-command dimension, and $N_b$ be the minibatch size.
+During training, the conditional variational encoder also represents each demonstrated action sequence by a Gaussian with mean $\mu_n$ and diagonal variance $\sigma_n^2$.
+
+With $V$ views, three descriptor groups, and component-averaged Smooth L1 loss $\ell_G$, the descriptor and complete training objectives are
 \begin{align}
  \mathcal L_{\mathrm{rel}}
- &=\frac{1}{K_{\mathrm{rel}}V}\sum_{j,v}
+ &=\frac{1}{3V}\sum_{j,v}
    \frac{\sum_n\varpi_{n,j,v}^{G}
-      \ell_G(\widehat G_n^{(j,v)}-\widetilde G_n^{(j,v)})}
+      \ell_G(\widehat G_n^{(j,v)},\widetilde G_n^{(j,v)})}
         {\max(1,\sum_n m_{n,j,v}^{G})},\nonumber\\
- \mathcal L_{\mathrm{base}}
- &=\mathcal L_{\mathrm{IL}}
-   +\lambda_{\mathrm{rel}}\mathcal L_{\mathrm{rel}}.
+ \mathcal L
+ &=\frac{1}{N_bH_ad_u}
+  \sum_{n=1}^{N_b}\sum_{h=1}^{H_a}\sum_{d=1}^{d_u}
+  p_{n,h}\left|\widehat u_{n,h,d}-u_{n,h,d}^{\mathrm E}\right|
+  \nonumber\\
+ &\quad+\frac{\beta_{\mathrm{KL}}}{2N_b}
+  \sum_{n=1}^{N_b}\sum_r
+  \left(\mu_{n,r}^{2}+\sigma_{n,r}^{2}
+  -\log\sigma_{n,r}^{2}-1\right)
+  +\lambda_{\mathrm{rel}}\mathcal L_{\mathrm{rel}}.
  \label{eq:methodbaseloss}
 \end{align}
-% 定义批索引、分量平均损失和ACT原有训练目标。
-Here, $n$ indexes minibatch samples, $V$ is the number of views, $m_{n,j,v}^{G}$ indicates geometric validity, and $\ell_G$ is the component-averaged Smooth L1 loss.
-The denominator counts geometrically valid labels rather than their quality weights, so poor-quality labels reduce the auxiliary supervision strength.
-$\mathcal L_{\mathrm{IL}}$ is the standard ACT training objective.
-% 质量权重仅用于监督，分割器始终冻结。
-The segmenters remain frozen, and quality weights affect auxiliary supervision rather than online policy inputs.
-% 附录仅补充标签准入及其与描述量误差的关系。
-Appendices~\ref{app:seguncertainty} and~\ref{app:pseudolabel} specify label admission and its connection to descriptor-estimation error.
-
+The denominator counts valid descriptor targets rather than the sum of their quality weights, so uniformly uncertain labels reduce the auxiliary gradient instead of being renormalized to full strength.
+The segmenters remain frozen during policy learning.
+Together, the shared queries, view-specific heads, and reliability-aware objective provide direct supervision for preserving the selected task information in the action-generating representation, as motivated by~\eqref{eq:expertreconstruction}.

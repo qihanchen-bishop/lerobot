@@ -169,19 +169,28 @@ def build(snapshot, rows):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    plt.rcParams.update({"font.family": "STIXGeneral", "font.size": 9, "axes.titlesize": 10,
-                         "axes.titleweight": "bold", "xtick.labelsize": 8.5, "ytick.labelsize": 8.5,
-                         "legend.fontsize": 8.5, "axes.spines.top": False, "axes.spines.right": False,
+    plt.rcParams.update({"font.family": "STIXGeneral", "font.size": 9.5, "axes.titlesize": 10.5,
+                         "axes.titleweight": "semibold", "xtick.labelsize": 9, "ytick.labelsize": 9,
+                         "legend.fontsize": 9, "axes.spines.top": False, "axes.spines.right": False,
                          "text.color": "#26343D", "axes.labelcolor": "#26343D", "axes.edgecolor": "#8C969E",
                          "pdf.fonttype": 42, "savefig.dpi": 300})
     FIG.mkdir(parents=True, exist_ok=True)
     outputs = []
-    fig, axes = plt.subplots(1, 3, figsize=(7.16, 2.35), layout="constrained")
-    for view, color in [("front", "#0072B2"), ("side", "#D99026")]:
+    fig = plt.figure(figsize=(3.45, 3.85), layout="constrained")
+    grid = fig.add_gridspec(2, 2, height_ratios=[1.05, 1])
+    axes = [fig.add_subplot(grid[0, :]),
+            fig.add_subplot(grid[1, 0]),
+            fig.add_subplot(grid[1, 1])]
+    for view, color, marker, linestyle in [
+            ("front", "#3A78A8", "o", "-"),
+            ("side", "#D8891C", "s", "--")]:
         rs = [r for r in rows if r["view"] == view]
-        axes[0].plot([1, 2, 3], [r["accepted_frames"] / 1000 for r in rs[1:]], "o-", color=color, label=view.title(), ms=4)
+        axes[0].plot([1, 2, 3], [r["accepted_frames"] / 1000 for r in rs[1:]],
+                     color=color, marker=marker, linestyle=linestyle,
+                     label=view.title(), ms=4.5, lw=1.5)
         for ax, key in zip(axes[1:], ["raw_anomaly_frames", "filtered_anomaly_frames"]):
-            ax.plot(range(4), [100 * r[key] / r["holdout_frames"] for r in rs], "o-", color=color, ms=4)
+            ax.plot(range(4), [100 * r[key] / r["holdout_frames"] for r in rs],
+                    color=color, marker=marker, linestyle=linestyle, ms=4.5, lw=1.5)
     for i, ax in enumerate(axes):
         ax.grid(axis="y", color="#E5E9EC", lw=.6)
         ax.set_axisbelow(True)
@@ -193,12 +202,12 @@ def build(snapshot, rows):
     axes[0].set_ylabel("Accepted frames (thousands)")
     axes[0].set_ylim(0, 55)
     axes[0].legend(frameon=False, loc="upper left")
-    axes[1].set_title("(b) Raw predictions", loc="left")
-    axes[2].set_title("(c) Structural filtering", loc="left")
+    axes[1].set_title("(b) Raw", loc="left")
+    axes[2].set_title("(c) Filtered", loc="left")
     for ax in axes[1:]:
-        ax.set_ylabel("Flagged frames (%)")
         ax.set_ylim(0, 14)
         ax.set_yticks([0, 4, 8, 12])
+    axes[1].set_ylabel("Flagged frames (%)")
     for ext in ["pdf", "png"]:
         path = FIG / f"annotation_iteration_en.{ext}"
         kw = {"metadata": {"CreationDate": None, "ModDate": None}} if ext == "pdf" else {}

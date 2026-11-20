@@ -1,199 +1,195 @@
 \section{Experiments}
 \label{sec:experiments}
-本节检验语义引导的任务信息表示能否改善有限示范下的实际任务完成表现。
-双臂暴露与执行要求机器人主动改变遮挡、建立工具接触并完成目标转移，能够同时考察感知变化与多阶段动作衔接。
-实验依次考察标注扩展过程的质量变化、完整方法的任务表现、语义输入与受监督查询的贡献，以及不同物体、位置和执行阶段上的收益。
-评价以实际任务结果而非训练误差为依据，对应第~\ref{sec:actionanalysis}节对模仿目标与任务目标的区分。
+We evaluate the proposed method in two bimanual sequential-manipulation settings.
+The surgical simulation requires tissue retraction, target exposure, grasping, and transfer on a dual-UR platform.
+The daily manipulation setting requires exposing an object beneath deformable cloth, moving it into a designated region, and restoring the cloth with two SO-ARM101 manipulators.
+The evaluation addresses three questions.
+First, can iterative annotation expand semantic supervision while maintaining label consistency?
+Second, do task-relevant representations improve complete-task reliability across task conditions, object categories, and initial positions?
+Third, how do semantic inputs and task-query supervision contribute to the improvement, and at which task stage do failures remain?
 
 \subsection{Experimental Setup}
 \label{sec:experimentalsetup}
-\subsubsection{任务与示范}
-平台由两台SO-ARM101机械臂及固定的前、侧视相机构成，图像分辨率为$640\times360$。
-机器人首先拨开遮挡布，使目标暴露并与布料分离，再使用末端工具将目标送入指定区域，最后恢复布料在前视画面中的覆盖面积。
-布料恢复不是重新遮盖目标物体。
-示范集包含方块、纸球和螺丝三类物体，共108条轨迹、61,740帧，以30 Hz记录双视角图像、10维关节状态和关节指令。
-所有方法使用这组动作示范，不增加策略交互训练数据。
 
-一次任务须在40 s内使目标完全位于指定区域内，并使布料在前视图中的像素占比恢复至0.32以上。
-统一前视评估器检查暴露、分离、入区与布料恢复条件，以最近7次评估中的至少4次成功票确认完成；最终结果采用操作者确认后保存的标签。
-这将第~\ref{sec:task}节的任务完成判据具体化为可由视觉检查的条件，但不要求场景的全部物理状态可观测。
+\subsubsection{Surgical Simulation}
+The surgical simulation uses a dual-UR system to manipulate tissue-mimicking material.
+One arm retracts the material to establish visibility and access, while the other grasps the exposed target and transfers it to the designated region.
+We evaluate four combinations of two target colors and two spatial layouts, with five independently reset trials per condition and 20 trials per policy.
+Each trial has a 180-s horizon, and the saved operator-confirmed outcome determines task success.
+All policies share the same robot interface, workspace limits, task-specific demonstrations, and right-gripper fallback configuration.
 
-\subsubsection{测试条件与评价指标}
-测试使用三类示范物体及一个未出现在动作示范中的蜡笔类别。
-每类物体在$4\times3$网格的12个初始位置各测试两次，共48个物体--位置条件、每方法96次试验。
-横坐标$x=0,\ldots,3$从图像左侧向右侧增加，纵坐标$y=0,\ldots,2$从上向下增加。
-五种方法合计480次有效试验；当前记录用于评价跨位置表现，不将未经核实的训练位置划分表述为未见位置泛化。
+\subsubsection{Daily Manipulation}
+The daily setting uses two SO-ARM101 manipulators and fixed front and side cameras with $640\times360$ images.
+The 108 demonstrations contain 61,740 synchronized frames recorded at 30 Hz with 10-dimensional joint states and commands.
+The demonstrated objects are a cube, paper ball, and screw.
+The test set adds a crayon category absent from the policy demonstrations.
+For each of the four objects, we test a $4\times3$ grid of initial positions twice, giving 96 trials per policy and 480 trials across five policies.
+A trial succeeds when the object is fully inside the goal region and front-view cloth coverage exceeds 0.32 within 40 s.
 
-主要指标为任务成功次数及成功率，辅助指标为完成时间、阶段到达次数与同条件重复成功情况。
-总体成功率报告Wilson 95\%区间；方法差异按物体--位置分区组检验，并对10个总体两两比较作Holm校正。
-原始记录审计、统计条件和详细区组结果见附录~\ref{app:evalaudit}。
+\begin{figure}[t]
+\centering
+\fbox{\parbox{0.92\columnwidth}{\centering\small
+\vspace{8pt}
+(a) Surgical simulation\\[4pt]
+(b) Daily manipulation
+\vspace{8pt}}}
+\caption{Experimental platforms and complete-task sequences. Platform images and representative task stages will replace this placeholder.}
+\label{fig:twosettings}
+\end{figure}
 
-\subsubsection{对照与模块配置}
-采用ACT~\cite{zhao2023act}和Diffusion Policy（DP）~\cite{chi2023diffusion}作为动作生成基线。
-在同一ACT骨干上，以$S$表示额外语义视觉输入，以$Q$表示受监督的任务描述量查询，构造表~\ref{tab:ablationdesign}的四格对照。
-所有配置均保留RGB与本体信息；ACT+$Q$只在训练时使用由语义标签构造的辅助监督，部署时不输入分割图。
-ACT+$S$与完整方法使用同一套冻结分割器。
+\subsubsection{Policies and Metrics}
+We compare Ours with Action Chunking with Transformers (ACT)~\cite{zhao2023act} and Diffusion Policy (DP)~\cite{chi2023diffusion} in both settings.
+The complete task-relation policy is denoted as Ours.
+Its controlled variants are named by the removed component: Ours w/o semantic inputs, Ours w/o task-query supervision, and Ours w/o both components, which recovers the ACT backbone.
+ACT provides an action-only comparison on the same policy backbone, while DP tests whether an alternative multimodal action-generation objective closes the complete-task gap.
+All policies within a setting use the same action demonstrations.
+Ours and its controlled variants additionally use the offline semantic supervision specified by their enabled components.
+
+The primary metric is complete-task success.
+We also report conditional completion time over successful trials and performance across task conditions, object categories, colors, and initial positions.
+Training and deployment configurations are detailed in Appendix~\ref{app:testedimplementation}.
+
+\subsection{Quality-Aware Iterative Annotation}
+\label{sec:annotationresults}
+\noindent\textbf{Surgical simulation.}
+Four reviewed seed videos initialize the front-view segmenter.
+Three cumulative generations then train on 8, 24, and 82 quality-screened videos.
+A fixed eight-video benchmark contains four anchor videos with reviewed pixel labels and four unseen videos excluded from all training generations.
+On the unseen videos, the raw multi-evidence flagged-frame rate decreases from 8.26\% to 3.29\%, while the filtered rate decreases from 2.18\% to 0.54\%.
+The anchor foreground mIoU remains stable at approximately 95.4\% across generations, showing that the expansion preserves seed-label agreement while improving temporal and structural consistency on unseen videos.
 
 \begin{table}[t]
 \centering
-\caption{Factorial ablation of semantic inputs ($S$) and supervised task-descriptor queries ($Q$). All variants retain RGB and proprioception.}
-\label{tab:ablationdesign}
+\caption{Surgical-simulation annotation results. Flagged-frame rates decrease on four unseen videos while foreground mIoU remains stable on four reviewed anchor videos.}
+\label{tab:surgicalannotation}
 \small
-\begin{tabular}{lcc}
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{lrrrr}
 \toprule
-Variant & Semantic input & Supervised queries\\
+Generation & Videos & Raw & Filtered & mIoU\\
 \midrule
-ACT & -- & --\\
-ACT+$S$ & Yes & --\\
-ACT+$Q$ & -- & Yes\\
-Ours ($S+Q$) & Yes & Yes\\
+G1 & 8 & 8.26\% & 2.18\% & 95.45\%\\
+G2 & 24 & 6.23\% & 1.12\% & 95.45\%\\
+G3 & 82 & 3.29\% & 0.54\% & 95.43\%\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-四种ACT配置均训练100,000步，batch size为8，学习率为$10^{-5}$，随机种子为1000。
-部署时每次预测60步、执行前30步后同步重新规划。
-DP使用100,000步checkpoint，预测64步、执行30步，采用异步推理；DDIM在三类示范物体上使用16步，在蜡笔上使用24步。
-因此，ACT四格对照用于分析表示模块的作用，DP比较反映其所用部署配置的系统表现。
-所有方法目标控制频率均为30 Hz，但不假定实际推理延迟完全相同。
+\noindent\textbf{Daily manipulation.}
+Three reviewed seed trajectories train the initial per-view segmenters, and three held-out trajectories track cross-generation performance.
+The three cumulative rounds add 15, 29, and 58 new trajectories, yielding 47,766 accepted front-view masks and 42,010 accepted side-view masks in the final pool.
 
-完整方法使用过滤后的硬语义彩色图，与RGB共享视觉编码器；训练读取离线标注，推理使用冻结U-Net。
-三个共享查询分别描述目标可见面积、工具--目标向量和目标--区域距离，并以独立的双视角读出头产生八维监督量。
-质量权重与查询监督共同启用；本轮未将其拆分为独立实验因素。
-具体几何、损失及记录名称映射见附录~\ref{app:testedimplementation}。
-
-\subsection{Quality-Aware Iterative Annotation}
-\label{sec:annotationresults}
-从少量审核种子出发，迭代流程扩展了可用语义监督，并降低了保留视频上原始预测的异常率，但改善并非逐轮单调。
-每类示范物体选取一条双视角轨迹作为人工种子，共3条轨迹，每个视角1,967帧；另保留3条轨迹、每视角1,878帧监测迭代，不参与分割训练。
-前、侧视角分别训练U-Net，种子仅用于初始模型R0；后续三轮累计覆盖15、44、102条非种子轨迹，旧轮准入标签与新轮标签共同训练下一模型。
-至R3，前、侧视角分别累积47,766和42,010帧准入伪标签，包含训练与内部验证划分（图~\ref{fig:annotationiteration}(a)）。
-
-\begin{figure*}[t]
+\begin{figure}[t]
 \centering
-\includegraphics[width=\textwidth]{figures/annotation_finaldata/annotation_iteration_en.pdf}
-\caption{Annotation expansion and held-out video diagnostics. (a) Cumulative accepted pseudo-label frames, including the internal validation split. (b, c) Automatically flagged frames before and after structural filtering, evaluated on the same three held-out trajectories (1,878 frames per view). R0 is the seed-trained model; R1--R3 use cumulative pseudo-labels. Filtering modifies masks, rather than removing frames from these evaluation denominators.}
+\includegraphics[width=\columnwidth]{figures/annotation_finaldata/annotation_iteration_en.pdf}
+\caption{Quality-aware annotation expansion. Accepted supervision increases across rounds, while held-out flagged-frame rates are lower at R3 than at R0 but are not monotonic across rounds.}
 \label{fig:annotationiteration}
-\end{figure*}
+\end{figure}
 
-在固定保留视频上，前视原始预测的异常率从R0的7.72\%降至R3的4.42\%，侧视从12.19\%降至9.53\%。
-这里的异常表示面积、空间形状、拓扑和运动一致性中的多类证据同时触发，并不等同于人工确认的分割错误。
-结构过滤后的侧视异常率从8.20\%降至6.34\%，但前视从1.81\%变为1.92\%，没有相同的改善（图~\ref{fig:annotationiteration}(b, c)）。
-两个视角的原始异常率均在R2低于R3，说明扩大伪标签池不保证所有质量指标持续改善。
+On the held-out trajectories, the raw flagged-frame rate decreases from 7.72\% to 4.42\% in the front view and from 12.19\% to 9.53\% in the side view between R0 and R3.
+Both views attain their lowest raw rate at R2 rather than R3.
+After structural filtering, the side-view rate decreases from 8.20\% to 6.34\%, while the front-view rate changes from 1.81\% to 1.92\%.
+The final seed-reference foreground mIoU is 97.87\% for the front view and 97.65\% for the side view.
+Across both settings, cumulative self-training expands semantic supervision while maintaining high seed agreement, but increasing the pseudo-label pool does not improve every held-out diagnostic monotonically.
 
-人工种子还用于检查像素标签一致性，逐轮结果见表~\ref{tab:annotationiterations}。
-R1--R3的前视前景mIoU为97.90\%--97.87\%，侧视约97.66\%--97.65\%；但侧视R0在自身训练种子上为99.06\%，至R3下降约1.41个百分点。
-种子受初始教师训练影响，而保留视频没有人工像素真值，因此这些结果分别反映种子参考一致性和无标签异常诊断，不能证明独立测试集上的精度不退化。
-后续策略使用已导出的R3分割器，不将其表述为各项指标均最优。
+\FloatBarrier
 
-这组记录展示了少量人工种子向大规模伪标签扩展的可行性及质量监测的必要性。
-它对应附录~\ref{app:pseudolabel}中对伪标签误差的关注，但异常率并非描述量标签误差的直接测量；质量筛选的独立贡献仍需无筛选对照。
-评价划分与门控口径见附录~\ref{app:annotationaudit}。
-
-\subsection{Overall Task Performance}
+\subsection{Task Evaluation Performance}
 \label{sec:overallresults}
-完整方法在96次试验中成功92次，成功率为95.83\%，相比ACT和DP分别提高39.58和43.75个百分点（表~\ref{tab:mainresults}）。
-总体区间及分类别可视化见附录图~\ref{fig:overallobjects}。
-按相同物体--位置条件比较，完整方法相对两种基线和两个单模块配置的总体差异均在Holm校正后达到$p<0.001$。
-详细效应量与检验值见表~\ref{tab:contrasts}。
 
-\begin{table*}[t]
+\subsubsection{Comparison in the Two Settings}
+\noindent\textbf{Surgical simulation.}
+Table~\ref{tab:surgicalcomparison} reports results for the two target colors and two spatial layouts.
+Ours succeeds in 19 of 20 trials (95.0\%), compared with 8 of 20 (40.0\%) for ACT and 11 of 20 (55.0\%) for DP.
+The improvement is consistent across all four evaluated conditions.
+Among successful trials, the mean execution time of Ours is 93.12 s, close to ACT at 89.33 s and below DP at 109.62 s.
+This conditional comparison evaluates the duration of successful executions rather than overall efficiency across failures.
+
+\begin{table}[t]
 \centering
-\caption{Real-robot task performance. Entries report successes/trials (percentage); crayon is absent from the policy demonstrations. Time is averaged over successful trials only.}
-\label{tab:mainresults}
-\small\setlength{\tabcolsep}{4pt}
-\begin{tabular}{lcccccc}
+\caption{Surgical-simulation comparison. Ours achieves the highest complete-task success in every color--layout condition. Each condition contains five trials.}
+\label{tab:surgicalcomparison}
+\small
+\setlength{\tabcolsep}{3.2pt}
+\begin{tabular}{lccccc}
 \toprule
-Method & Cube & Paper ball & Screw & Crayon (unseen) & Overall & Time (s)\\
+& \multicolumn{2}{c}{Layout A} & \multicolumn{2}{c}{Layout B} & \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Method & Orange & Green & Orange & Green & Overall\\
 \midrule
-\tableinput{results/main_table_rows_en.tex}
+ACT & 2/5 & 1/5 & 2/5 & 3/5 & 8/20\\
+DP & 3/5 & 2/5 & 4/5 & 2/5 & 11/20\\
+\textbf{Ours} & \textbf{5/5} & \textbf{5/5} & \textbf{5/5} & \textbf{4/5} & \textbf{19/20}\\
 \bottomrule
 \end{tabular}
-\end{table*}
+\end{table}
 
-这一比较表明，在相同动作示范和测试条件下，联合表示设计能够改善完整任务结果，而不仅是改变监督损失。
-不过，总体优势不能单独归因于语义输入或查询监督；下面通过四格消融分析两者的作用。
+\begin{figure}[t]
+\centering
+\fbox{\parbox{0.92\columnwidth}{\centering\small
+\vspace{7pt}
+(a) Surgical layout map\\[4pt]
+(b) Success by target color and location\\[4pt]
+(c) Completion-time distribution
+\vspace{7pt}}}
+\caption{Condition-level surgical results. The spatial layout, color-wise success, and completion-time plots will replace this placeholder.}
+\label{fig:surgicalconditions}
+\end{figure}
 
-\subsection{Contributions of Semantics and Supervised Queries}
-\label{sec:ablationresults}
-联合配置的收益大于任何一个单模块配置，但仅增加语义输入的改善有限（图~\ref{fig:ablation}）。
-ACT+$S$成功60/96次，相比ACT增加6次（6.25个百分点），总体差异未达到校正后0.05水平（$p=0.817$）。
-相比之下，ACT+$Q$成功72/96次，增加18次（18.75个百分点，$p=0.0188$）。
-这说明，受监督的任务查询模块在没有额外语义输入时也能带来收益；增加一个语义视觉流并不自动产生相同效果。
+\noindent\textbf{Daily manipulation.}
+Ours succeeds in 92 of 96 trials (95.8\%), improving over ACT and DP by 39.6 and 43.8 percentage points, respectively.
+It succeeds in 23 of 24 trials for every object category, including the crayon category absent from the demonstrations.
+Among successful trials, its mean completion time is 14.77 s, compared with 14.96 s for ACT and 15.28 s for DP.
+When failures are included, the mean control time is 15.82 s for Ours, compared with 25.92 s for ACT and 27.13 s for DP, because most baseline failures reach the 40-s horizon.
+This all-trial measure reflects reliability as well as execution speed.
+The blocked exact comparisons give Holm-adjusted $p=3.83\times10^{-10}$ against ACT and $p=8.57\times10^{-12}$ against DP.
+
+\begin{table}[t]
+\centering
+\caption{Daily-manipulation comparison. Ours achieves 23/24 successes in every object category, including the crayon category absent from the policy demonstrations.}
+\label{tab:mainresults}
+\small
+\setlength{\tabcolsep}{3.0pt}
+\begin{tabular}{lccccc}
+\toprule
+Method & Cube & Paper & Screw & Crayon & Overall\\
+\midrule
+ACT & 18/24 & 12/24 & 11/24 & 13/24 & 54/96\\
+DP & 12/24 & 16/24 & 13/24 & 9/24 & 50/96\\
+\textbf{Ours} & \textbf{23/24} & \textbf{23/24} & \textbf{23/24} & \textbf{23/24} & \textbf{92/96}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Figure~\ref{fig:comparisonpositions} shows the spatial distribution of task success for the comparison methods.
+Ours achieves at least 7/8 successes at every grid position, whereas the worst positions of ACT and DP reach only 1/8 and 0/8.
+The gains therefore extend across object categories and initial positions rather than concentrating in a small subset of conditions.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/results_20261023/position_comparison_en.pdf}
+\caption{Spatial comparison in daily manipulation. Ours achieves at least 7/8 successes at every position. Each cell contains eight trials from four objects and two repeats.}
+\label{fig:comparisonpositions}
+\end{figure}
+
+\subsubsection{Ablation in the Two Settings}
+\noindent\textbf{Surgical simulation.}
+\draftnote{Insert the surgical ablation results and color--layout analysis.}
+
+\noindent\textbf{Daily manipulation.}
+Removing both semantic inputs and task-query supervision gives 54/96 successes.
+Retaining only task-query supervision increases success to 72/96, while retaining only semantic inputs gives 60/96.
+Combining both components produces the strongest result at 92/96.
+Task-query supervision provides the larger standalone gain, increasing success from 54/96 to 72/96 compared with 60/96 from semantic inputs alone.
+The larger conditional gains in the combined configurations provide descriptive evidence that the two components are complementary.
+
+\noindent\textbf{Failure-stage analysis.}
+ACT and DP leave 34 and 43 trials, respectively, in the separated-but-not-in-region category, compared with 19 for Ours w/o semantics, 31 for Ours w/o task queries, and 4 for Ours.
+These labels describe the furthest observed task stage rather than the cause of failure, but show that the main improvement occurs when converting successful exposure and separation into complete transfer.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\columnwidth]{figures/results_20261023/ablation_en.pdf}
-\caption{The $2\times2$ ACT ablation. Each cell contains 96 trials. The query factor includes task-query tokens and their quality-weighted descriptor supervision.}
-\label{fig:ablation}
+\caption{Daily-manipulation factorial ablation. Task-query supervision provides the larger standalone gain, while combining both components yields the highest success.}
+\label{fig:dailyablation}
 \end{figure}
-
-当已有查询监督时，增加语义输入使成功次数从72提高到92；当已有语义输入时，增加查询模块使成功次数从60提高到92。
-两个单模块配置均未达到联合配置的表现。
-两条增益之差为14.58个百分点，作为描述性结果提示联合使用的价值，但本轮没有对该交互量进行独立显著性检验。
-
-这一现象与第~\ref{sec:representationanalysis}节的设计动机一致：有用的表示不仅需要突出对象结构，还应保留动作选择所需的任务信息。
-语义图提供对象级输入，而查询监督约束其联合表示中可读出的可见性和空间关系。
-四格结果支持这套联合设计，但不直接测量描述量误差$\delta_{G,\rho}$，也不将增加查询的效果等同于已经证明$D_\phi$下降。
-
-\subsection{Object and Position Variation}
-\label{sec:positionresults}
-完整方法的高成功率并非仅来自某一种物体或少数初始位置。
-四类物体均成功23/24次；三类示范物体合计69/72次，示范未见的蜡笔为23/24次。
-在蜡笔上，ACT、DP、ACT+$S$及ACT+$Q$分别成功13、9、17和19次。
-因此，当前证据支持向这个额外物体类别的迁移，但其范围不是任意未见物体或跨任务泛化。
-
-\begin{figure*}[!t]
-\centering
-\includegraphics[width=\textwidth]{figures/results_20261023/position_en.pdf}
-\caption{Success across the initial-position grid. Each cell pools four objects and two repeats ($n=8$); all panels share the same 0--100\% scale. Coordinates refer to the image grid, not physical depth.}
-\label{fig:positions}
-\end{figure*}
-
-图~\ref{fig:positions}显示，完整方法在12个位置均至少成功7/8次，而ACT和DP的最差位置分别为1/8和0/8。
-ACT+$S$与ACT+$Q$仍分别存在1/8和3/8的位置。
-完整方法相对ACT+$Q$新增的20次成功中，17次来自左侧两列；
-相对ACT+$S$新增的32次成功中，30次来自上方两行。
-这些空间分布表明，联合配置的改善主要补足了单模块方案表现较弱的区域，而非只在原本容易的位置重复获益。
-
-以每个物体--位置的两次重复为单位，完整方法在48个条件中的44个条件两次均成功，其余4个条件各成功一次，没有两次均失败的条件。
-ACT、DP、ACT+$S$和ACT+$Q$两次均成功的条件数分别为17、18、22和31。
-每条件仅两次重复不足以精确估计局部成功概率，但与空间分布一起支持完整方法在本测试网格上的一致性。
-完整物体--位置矩阵见附录图~\ref{fig:objectpositions}。
-这里检验的是部署行为在条件变化下的表现，不以网格成功率代替第~\ref{sec:representationcoverage}节的表示覆盖常数。
-
-\subsection{Execution Bottlenecks and Completion Time}
-\label{sec:executionresults}
-阶段记录将主要收益定位在目标分离后的入区过程，而非仅在初始暴露阶段。
-ACT在89次试验中曾使物体分离，但仅55次曾入区；ACT+$S$相应为93次和62次，ACT+$Q$为92次和73次。
-完整方法则在全部96次试验中达到分离，92次入区并最终成功。
-因此，相比只输入语义图，完整方法最明显的变化是减少了分离后未能完成目标转移的试验。
-
-\begin{figure*}[!t]
-\centering
-\includegraphics[width=\textwidth]{figures/results_20261023/time_failure_en.pdf}
-\caption{Completion and failure profiles. (a) Cumulative successful trials divided by all 96 trials; failures remain in the denominator. (b) Mutually exclusive failure categories based on the furthest automatically detected stage and the final reviewed label.}
-\label{fig:timefailure}
-\end{figure*}
-
-ACT+$S$的36次失败中，31次发生在已分离但未入区的情形；完整方法的4次失败也集中于此（图~\ref{fig:timefailure}及表~\ref{tab:failurecounts}）。
-工具--目标向量和目标--区域距离正是为这一过程选择的描述量。
-失败分布与这种设计意图相符，但由于三个查询一同启用，不能将收益分别归因于某个查询，或由阶段日志判断具体接触失效原因。
-
-完整方法在20 s内成功86/96次，30 s内完成全部92次成功试验；ACT和DP在20 s内分别成功48次和40次。
-这说明收益在统一时间预算内体现为更多完整任务，而不只是等待更久。
-成功试验平均耗时为14.77 s，与ACT的14.96 s和DP的15.28 s接近；
-ACT+$Q$和ACT+$S$分别为13.55 s和13.80 s，但各方法成功子集不同，不能据此建立公平的速度排名。
-所有试验均计入时，完整方法的平均控制时长为15.82 s，主要反映超时失败更少。
-
-这一收益伴随额外感知开销。
-完整方法的可训练参数比ACT增加7,176个（约0.014\%），冻结分割器使总参数量增至76.53 M；
-日志中的动作块推理流水线均时为79.24 ms，ACT为12.16 ms。
-这些值包含各自流水线开销，并非查询模块的独立耗时；完整部署配置和时间统计见附录~\ref{app:runtimeprofile}。
-
-\subsection{Connection to the Analysis}
-\label{sec:experimentalevidence}
-本轮实验提供了三个层面的证据：迭代记录展示语义监督的扩展及其质量变化，整体比较验证任务层面的收益，语义--查询四格对照与阶段分布支持任务信息表示的设计动机。
-它们与第~\ref{sec:relationtransfer}节从任务描述量到专家动作重构、再到条件误差迁移的分析相衔接，但不构成对其假设或上界数值的直接验证。
-当前没有独立测量$C_\phi$、$D_\phi$、部署描述量误差或专家选择近似误差，也没有拆分质量筛选与查询监督的贡献。
-因此，本文据此报告联合设计在所测任务上的有效性，而不声称已由实机成功率证明理论保证或标注流程的独立因果作用。

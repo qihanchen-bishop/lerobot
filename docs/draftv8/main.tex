@@ -26,6 +26,8 @@
 \newcommand{\inner}[2]{\langle#1,#2\rangle}
 \newcommand{\ind}{\mathbf 1}
 \DeclareMathOperator{\clip}{clip}
+\newcounter{troalgorithm}
+\renewcommand{\thetroalgorithm}{\arabic{troalgorithm}}
 % \newtheorem{proposition}{命题}
 \newtheorem{proposition}{Proposition}
 % \newtheorem{assumption}{假设}
@@ -33,14 +35,14 @@
 \renewcommand{\IEEEproofname}{证明}
 \renewcommand{\refname}{参考文献}
 \title{Bimanual Exposure and Execution via Task-Aware Imitation Learning}
-\author{}
+\author{XXX}
 \makeatletter
 \let\tableinput\@@input
 \makeatother
 \begin{document}
 \maketitle
 \begin{abstract}
-Bimanual exposure and execution under deformable occlusion require a robot to reveal an initially hidden target, manipulate it into a designated region, and restore the covering while adapting later actions to the outcomes of earlier interactions. Conventional visuomotor imitation learning primarily supervises action prediction and may therefore fail to preserve the task information needed to determine whether exposure is sufficient and how execution should proceed. We present a task-aware imitation learning framework that explicitly encourages the policy representation to retain target visibility and interaction geometry. A quality-aware iterative annotation procedure expands semantic supervision from a small set of reviewed videos. The resulting semantic maps provide object-level visual structure, while supervised query tokens encode task descriptors, including target visibility, tool--target displacement, and target--goal distance, jointly with action-chunk prediction. We further derive conditions linking imitation error and representation quality to complete-task failure. Our real-robot evaluation comprises 480 trials across five policies, four object types, and 12 initial positions using the same fixed demonstration set. The proposed method succeeds in 92 of 96 trials (95.8\%), compared with 54 of 96 (56.2\%) for ACT and 50 of 96 (52.1\%) for Diffusion Policy. Factorial ablations achieve 60 of 96 trials with semantic inputs alone and 72 of 96 with supervised queries alone, while their combination performs best. These results show that explicitly preserving task-relevant information can substantially improve complete-task execution from limited demonstrations.
+Bimanual exposure and execution under deformable occlusion require a robot to reveal an initially hidden target, manipulate it into a designated region, and restore the covering while adapting later actions to the outcomes of earlier interactions. Conventional visuomotor imitation learning primarily supervises action prediction and may therefore fail to preserve the task information needed to determine whether exposure is sufficient and how execution should proceed. We present a task-aware imitation learning framework that explicitly encourages the policy representation to retain target visibility and interaction geometry. A quality-aware iterative annotation procedure expands semantic supervision from a small set of reviewed videos. The resulting semantic maps provide object-level visual structure, while supervised query tokens encode task descriptors, including target visibility, tool--target displacement, and target--goal distance, jointly with action-chunk prediction. We further derive conditions linking imitation error and representation quality to complete-task failure. Our real-robot evaluation comprises 480 trials across five policies, four object types, and 12 initial positions using the same fixed demonstration set. The proposed method succeeds in 92 of 96 trials (95.8\%), compared with 54 of 96 (56.2\%) for Action Chunking with Transformers (ACT) and 50 of 96 (52.1\%) for Diffusion Policy. Factorial ablations achieve 60 of 96 trials with semantic inputs alone and 72 of 96 with supervised queries alone, while their combination performs best. These results show that explicitly preserving task-relevant information can substantially improve complete-task execution from limited demonstrations.
 \end{abstract}
 \begin{IEEEkeywords}
 Imitation learning, semantic representations, visuomotor control.
@@ -56,7 +58,6 @@ Imitation learning, semantic representations, visuomotor control.
 \appendices
 \input{action_analysis_proofs}
 \input{representation_feedback_proofs}
-\input{method_details}
 \input{evaluation_details}
 % 排完附录浮动体后再开始参考文献，避免跨栏图混入文献列表。
 \clearpage

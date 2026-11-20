@@ -1,6 +1,6 @@
 \begin{figure*}[!t]
 \centering
 \includegraphics[width=\textwidth]{myfigure/fig1.png}
-\caption{Method overview. Quality-aware iterative annotation provides a frozen segmenter and quality-weighted task-descriptor targets. RGB images and semantic masks share a visual encoder. Learnable task queries integrate visual and proprioceptive information, with view-specific descriptor heads providing auxiliary supervision. The action decoder uses the joint representation to predict an action chunk.}
+\caption{Method overview. Quality-aware cumulative annotation provides frozen per-view segmenters, task-descriptor targets, and reliability weights. A shared visual backbone encodes the RGB and semantic streams. One learned query per task relation integrates visual and proprioceptive information, is supervised by independent view-specific heads, and remains available to the action decoder for action-chunk prediction.}
 \label{fig:architecture}
 \end{figure*}

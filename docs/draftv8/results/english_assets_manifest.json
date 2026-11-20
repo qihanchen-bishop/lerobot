@@ -5,23 +5,23 @@
   "method_labels": {
     "ACT": "ACT",
     "DP": "DP",
-    "RGBQtoken": "ACT + Q",
-    "segNoQtoken": "ACT + S",
-    "viewQtoken": "Ours (S + Q)"
+    "RGBQtoken": "Ours w/o semantics",
+    "segNoQtoken": "Ours w/o task queries",
+    "viewQtoken": "Ours"
   },
   "method_colors": {
-    "ACT": "#7A8691",
-    "DP": "#D99026",
-    "RGBQtoken": "#0072B2",
-    "segNoQtoken": "#B76D9C",
-    "viewQtoken": "#009E73"
+    "ACT": "#6C757D",
+    "DP": "#D8891C",
+    "RGBQtoken": "#3A78A8",
+    "segNoQtoken": "#B5658C",
+    "viewQtoken": "#25866A"
   },
   "typography": {
     "family": "STIXGeneral",
     "title_pt": 10,
-    "label_pt": 9,
-    "tick_legend_pt": 8.5,
-    "dense_cell_pt": 8
+    "label_pt": 9.5,
+    "tick_legend_pt": 9,
+    "dense_cell_pt": 8.5
   },
   "source_sha256": {
     "results/ablation.csv": "b4dbb5b1a18454d9ef7408b48552ba8e3f534a917d92874d3a6fc13031befa6e",
@@ -45,19 +45,31 @@
     "results/summary.json": "c07ac20340330ca3180b49f3d0cd57aaaed01a50152d21c118df4c298b63718b"
   },
   "output_sha256": {
-    "figures/results_20261023/overall_objects_en.pdf": "51f2d143ecfb9cf1e2ceef83793493ee6b719f55b271b01fc765486d8a07eda3",
-    "figures/results_20261023/overall_objects_en.png": "5ee2342c0a572f0509a2da39980a6056a728576ef55bbac01f1dc72777b72f09",
-    "figures/results_20261023/ablation_en.pdf": "af9243bc6d8360f0771a6d56dddc55c3b59d44dd73a2cbd3fcd349435d39a48b",
-    "figures/results_20261023/ablation_en.png": "f247c9a7272a55212e3c4923e029908991b95193feb325f498022a57d071522d",
-    "figures/results_20261023/position_en.pdf": "9184eb8f663e99335439ad1ca251777212c0653994a1da743213ae0ad7d2a7b6",
-    "figures/results_20261023/position_en.png": "a0ccab22842e1b323b373d22aa4d63d9af29c3ba4c11747e3f23679d3b40fa29",
-    "figures/results_20261023/object_position_en.pdf": "6748fc98dbfb31341ad058e9949d52473f14cf3cb024965e957e3fe101e61817",
-    "figures/results_20261023/object_position_en.png": "6b69e42d14c67d1fd0cb0bb4c140abb5b5d766140d430a410dabcbee046def7a",
-    "figures/results_20261023/time_failure_en.pdf": "2729ce9d2569e6fd2fc41344308a1b8bb5264615c3b6364013c5be6c6fbabc75",
-    "figures/results_20261023/time_failure_en.png": "cd9d71404ee98c29903e7c8951e74371fa71687bb59d1b97707f4bd58edb4eee",
-    "results/main_table_rows_en.tex": "1509525729929e658661d4c8a8477a278e34e27e14deb0f93caffd7532388335",
-    "results/timing_rows_en.tex": "6122d7f9d8574958afada1d8ed4216ef73c7c5d35cd402a5ced1a8c7e47552a0",
-    "results/failure_rows_en.tex": "9469a20b0881552adb0866b633352e9b9f0c4f9eb9409c0b2ec2775e71791403",
-    "results/contrast_rows_en.tex": "8a33ed7e179eb5d83446f322d4b98ad2c191a47470a39f245e52700119875b68"
+    "figures/results_20261023/overall_objects_en.pdf": "fc14b6577ed222d583d504f4720b27c8c1c701fac1d935a60695a4664d439060",
+    "figures/results_20261023/overall_objects_en.png": "af6dff39f3a03ae3847ee83de10611e5e3147fa55ab22ffd78f01158fbcdcc2a",
+    "figures/results_20261023/comparison_objects_en.pdf": "0b310ed437afe7d08afda395e07f929dcb603a9218e3b873af0c95f70b611b58",
+    "figures/results_20261023/comparison_objects_en.png": "3d429c1e65e9c41abd4476aef9822e404481a07ed3f05f404794f3eb8fc08660",
+    "figures/results_20261023/ablation_objects_en.pdf": "802fdf06f9d1ea4959df4dc3618fc75e0f37cfc4595b05ab88b92719f1d4dc6a",
+    "figures/results_20261023/ablation_objects_en.png": "532374d803ff93dffed4c56e94591818e13ffd4f50658fdb32f6616d116fa9bd",
+    "figures/results_20261023/ablation_en.pdf": "4ce6f1df5b87c65cbd7e062772ea2ce355006aa08454c6e1ed15cfb7fe75a7cd",
+    "figures/results_20261023/ablation_en.png": "1165645f834bd80eeb518a8da0d0007198c68c0bb607a58821861df413052ea9",
+    "figures/results_20261023/position_en.pdf": "14bc04a620ad464cba615392321ef311da69c601963d7cf589b8bbc6621c192a",
+    "figures/results_20261023/position_en.png": "28114547a63e68d9ba08d0a7691c44f420561df035b892134a948fbf9e15f2b1",
+    "figures/results_20261023/position_comparison_en.pdf": "b0c71910d6f63baae46e192841b971313d24145570c924ee66b7646227e2b5e9",
+    "figures/results_20261023/position_comparison_en.png": "aa7c03aea6fb9596904b0e9b46bb1b85df10d6f4b8194882756c4b045121c618",
+    "figures/results_20261023/object_position_en.pdf": "80678f2b519e8a82cc068bdcdb4abdad01e83cb237dc9abee86ee41525f7b8db",
+    "figures/results_20261023/object_position_en.png": "7ffa31a054ae2ff529c02d7dc65ae6c4cc479652686e70b7fb97123aef838bcc",
+    "figures/results_20261023/object_position_comparison_en.pdf": "52a8238bd027c5f2672252933d6397d5673283cf8e96715ee8f043f2557716b3",
+    "figures/results_20261023/object_position_comparison_en.png": "320a91e776661d00716911ff3551a57a7b84596412b3f6522f10b0263afea9bd",
+    "figures/results_20261023/object_position_ablation_en.pdf": "1e627d46296802a795ee60e09c456a9c867b78b71acee9af4e0467f2873cd59d",
+    "figures/results_20261023/object_position_ablation_en.png": "414ce447a920fe9d87520d544072b6ef7b77b80f797446c2e708027f34074ec1",
+    "figures/results_20261023/time_failure_en.pdf": "fa1a2ff571fef04ca76cd2f65688d195c2f785b89296f296769826f152211573",
+    "figures/results_20261023/time_failure_en.png": "30a5fd7b07834050fde7e7430e75e1dd9c77a035bc15b20ad3c95f21d7b294e9",
+    "results/main_table_rows_en.tex": "80148896ba4f383b74bf6b5a1b11af4214cd5a7a176f6735b9a22f2bccdebe52",
+    "results/timing_rows_en.tex": "87272322dddbe27ee96977578eda81c36da3ced3b489a2ba5dbdf08925d91e68",
+    "results/failure_rows_en.tex": "a53bfd07a807939f836581e509b2ee87fe8d868446eacdb55ceee080f53d4135",
+    "results/contrast_rows_en.tex": "6f71534c0ed2fe23bf55dd0da2f1a21d3cf4ddb8981028cdb7d5873a46a61aba",
+    "results/comparison_contrast_rows_en.tex": "4c79759b57fc85b0364f545a702c413b1682d1421c3e975f13b2000fdfcf8cf7",
+    "results/ablation_contrast_rows_en.tex": "aa35ef25171218c31d9ebaecf173298036375545e89d625ed585ae4a10924351"
   }
 }

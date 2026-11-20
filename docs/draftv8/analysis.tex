@@ -1,13 +1,9 @@
 \section{Problem Formulation and Theoretical Analysis}
 \label{sec:analysis}
-% 本章分析有限示范下双臂暴露与执行任务的改进条件。
-This section studies conditions for improving bimanual exposure and execution from limited demonstrations.
-% 暴露动作改变后续操作条件，因此以完整任务后果分析双臂动作偏差。
-Because interactions with an occluder change the conditions for subsequent execution, we relate deviations in coordinated actions to failure of the complete task.
-% 先由动作误差得到任务界，再说明表示覆盖本身不足以控制该界。
-We first derive a task-failure bound under coverage and action-sensitivity conditions, then show why improved representation-level coverage alone is insufficient.
-% 再分析可见性与空间关系何时保留专家选择依据，并通过动作重构约束误差迁移。
-We next examine when visibility and spatial relationships preserve information needed for expert choices, linking their estimation accuracy to expert-action reconstruction and conditional error transfer.
+Our analysis proceeds in three steps.
+We first relate deployment action error to complete-task failure.
+We then transfer imitation risk through a learned representation by separating representation coverage from conditional-error discrepancy.
+Finally, we bound this discrepancy through expert-action reconstruction from task descriptors.
 \input{formulation}
 \input{action_analysis}
 \input{representation_analysis}
