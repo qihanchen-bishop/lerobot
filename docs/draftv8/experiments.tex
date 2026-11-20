@@ -1,25 +1,28 @@
 \section{Experiments}
 \label{sec:experiments}
-We evaluate the proposed method in two bimanual sequential-manipulation settings.
-The surgical simulation requires tissue retraction, target exposure, grasping, and transfer on a dual-UR platform.
-The daily manipulation setting requires exposing an object beneath deformable cloth, moving it into a designated region, and restoring the cloth with two SO-ARM101 manipulators.
-The evaluation addresses three questions.
-First, can iterative annotation expand semantic supervision while maintaining label consistency?
-Second, do task-relevant representations improve complete-task reliability across task conditions, object categories, and initial positions?
-Third, how do semantic inputs and task-query supervision contribute to the improvement, and at which task stage do failures remain?
+We evaluate the proposed method in two real-robot bimanual expose--execute--restore tasks: the Surgical-Task Setup and the Daily-Task Setup.
+In both setups, the robot must retract a deformable occluder to expose the target, 
+execute the target-directed manipulation, and restore the occluder.
+To evaluate the proposed framework, our experiments study the following questions.
+\begin{enumerate}
+    \item Can quality-aware iterative annotation produce large-scale, reliable semantic masks with only a few manual annotations?
+    \item Does the proposed method improve complete-task performance over the baselines?
+    \item Do these improvements generalize across variations in objects, scenes, and spatial configurations?
+    \item How do semantic inputs and task-query supervision each contribute to complete-task performance?
+\end{enumerate}
 
 \subsection{Experimental Setup}
 \label{sec:experimentalsetup}
 
-\subsubsection{Surgical Simulation}
-The surgical simulation uses a dual-UR system to manipulate tissue-mimicking material.
+\subsubsection{Surgical-Task Setup}
+The surgical setup (Fig.~\ref{fig:twosettings}a) uses a dual-UR system to manipulate tissue-mimicking material.
 One arm retracts the material to establish visibility and access, while the other grasps the exposed target and transfers it to the designated region.
 We evaluate four combinations of two target colors and two spatial layouts, with five independently reset trials per condition and 20 trials per policy.
 Each trial has a 180-s horizon, and the saved operator-confirmed outcome determines task success.
 All policies share the same robot interface, workspace limits, task-specific demonstrations, and right-gripper fallback configuration.
 
-\subsubsection{Daily Manipulation}
-The daily setting uses two SO-ARM101 manipulators and fixed front and side cameras with $640\times360$ images.
+\subsubsection{Daily-Task Setup}
+The daily setting (Fig.~\ref{fig:twosettings}b) uses two SO-ARM101 manipulators and fixed front and side cameras with $640\times360$ images.
 The 108 demonstrations contain 61,740 synchronized frames recorded at 30 Hz with 10-dimensional joint states and commands.
 The demonstrated objects are a cube, paper ball, and screw.
 The test set adds a crayon category absent from the policy demonstrations.
@@ -28,12 +31,12 @@ A trial succeeds when the object is fully inside the goal region and front-view 
 
 \begin{figure}[t]
 \centering
-\fbox{\parbox{0.92\columnwidth}{\centering\small
-\vspace{8pt}
-(a) Surgical simulation\\[4pt]
-(b) Daily manipulation
-\vspace{8pt}}}
-\caption{Experimental platforms and complete-task sequences. Platform images and representative task stages will replace this placeholder.}
+\includegraphics[width=\columnwidth]{myfigure/surgical-task-with-camera-views-v2.png}\par
+{\footnotesize (a) Surgical-Task Setup\par}
+\vspace{4pt}
+\includegraphics[width=\columnwidth]{myfigure/daily-task-with-camera-views.png}\par
+{\footnotesize (b) Daily-Task Setup\par}
+\caption{Real-robot experimental setups. (a) Surgical-task setup with two target regions, two colored objects, and RGB and depth views. (b) Daily-task setup with four object categories and top and side views. The crayon category is absent from the policy demonstrations.}
 \label{fig:twosettings}
 \end{figure}
 
