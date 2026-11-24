@@ -86,7 +86,7 @@ VIOLA 每个新观测预测一个动作，因此预测长度和重规划间隔�
 新机器首次配置可运行：
 
 ```bash
-BASE_PYTHON="$(which python)" bash mycode/setup_viola_baseline.sh
+BASE_PYTHON="$(which python)" bash local_scripts/setup_viola_baseline.sh
 ```
 
 本机离线接入验证位于 `result/viola_gui_verification_20261023/`，只回放已有数据，
@@ -97,7 +97,7 @@ BASE_PYTHON="$(which python)" bash mycode/setup_viola_baseline.sh
 
 旧Torch1.10不适合当前Blackwell显卡，因此保持算法实现不变而适配依赖。Detectron2编译其CPU扩展，所用标准GPU运算由Torch/torchvision执行；当前R50候选网络不需要额外的自定义CUDA算子。孤立环境可能因继承未使用的主环境包出现pip依赖提示，不能据此将它用于其他策略训练。
 
-重建入口：`bash mycode/setup_viola_baseline.sh`。源码及权重下载到忽略目录，不提交第三方权重或修改官方源码。
+重建入口：`bash local_scripts/setup_viola_baseline.sh`。源码及权重下载到忽略目录，不提交第三方权重或修改官方源码。
 
 兼容处理还包括为旧 robomimic 的 padding mask 恢复 `np.bool` 别名，以及避免其全局 cuDNN benchmark 开关改变候选框计算。两项均不改变网络结构、监督或候选筛选规则。
 
@@ -125,7 +125,7 @@ BASE_PYTHON="$(which python)" bash mycode/setup_viola_baseline.sh
 - `outputs/train/baselines/VIOLA-finaldata-FS-pilot/train.log`、`metrics.jsonl`、`summary.json`。
 - 同目录 `checkpoint-001000.pt`、`inference-verification.json`、`inference.log`、`tests.log`、`environment.txt`。
 
-用户随后授权的全量训练已于2026-10-22 16:35（UTC+8）完成。运行入口为 `mycode/run_viola_finaldata_fs.sh`，会话为 `tmux task1`（GPU 1）。流程日志位于 `outputs/logs/VIOLA-finaldata-FS/`，训练输出位于 `outputs/train/baselines/VIOLA-finaldata-FS/`。
+用户随后授权的全量训练已于2026-10-22 16:35（UTC+8）完成。运行入口为 `local_scripts/run_viola_finaldata_fs.sh`，会话为 `tmux task1`（GPU 1）。流程日志位于 `outputs/logs/VIOLA-finaldata-FS/`，训练输出位于 `outputs/train/baselines/VIOLA-finaldata-FS/`。
 
 2026-10-23复核：108条示范、51epochs、196,809步全部完成，纯训练及结束验证约107.8分钟；40个checkpoint齐全。3,937条训练指标记录的NLL和梯度范数均为有限值。最初5,000步的日志窗口平均NLL为-13.68，190,000步之后为-32.05；最后一条NLL为-34.28，连续密度的负NLL是允许的，不代表错误。
 

@@ -459,20 +459,20 @@ SemQ 将语义与 SQtoken 作为一组一起加入，不分别消融。
 
 ```bash
 cd /home/qihan/data/lerobot
-bash run_final_viewqtoken_residuals.sh all
+bash local_scripts/run_final_viewqtoken_residuals.sh all
 ```
 
 单独运行任意一组，也可在不同 tmux 中执行：
 
 ```bash
-bash run_final_viewqtoken_residuals.sh mlp-rgb
-bash run_final_viewqtoken_residuals.sh mlp-semquery
-bash run_final_viewqtoken_residuals.sh gru-rgb
-bash run_final_viewqtoken_residuals.sh gru-semquery
+bash local_scripts/run_final_viewqtoken_residuals.sh mlp-rgb
+bash local_scripts/run_final_viewqtoken_residuals.sh mlp-semquery
+bash local_scripts/run_final_viewqtoken_residuals.sh gru-rgb
+bash local_scripts/run_final_viewqtoken_residuals.sh gru-semquery
 ```
 
-恢复已有训练用 `RESUME=1 bash run_final_viewqtoken_residuals.sh <组名>`；
-只打印命令用 `DRY_RUN=1 bash run_final_viewqtoken_residuals.sh all`。
+恢复已有训练用 `RESUME=1 bash local_scripts/run_final_viewqtoken_residuals.sh <组名>`；
+只打印命令用 `DRY_RUN=1 bash local_scripts/run_final_viewqtoken_residuals.sh all`。
 输出：`outputs/train/residual/<实验名>/{best.pt,last.pt,metrics.jsonl,result.json,shadow_result.json}`；
 日志：`outputs/logs/<实验名>.log`。实机需搭配原始完整的 `final-ViewQtoken` 运行目录，
 选择对应 MLP/GRU 残差 `best.pt`，不可搭配另一个 ACT checkpoint。
@@ -504,11 +504,11 @@ DP 保持原有 DDPM 100/50 步与 `[-1,1]` 去噪裁剪，因此不强制改成
 ```bash
 # task1: MLP-RGBOnly-FS -> MLP-SemQ-FS -> ACT-finaldata-seg-FS-DatasetNorm
 cd /home/qihan/data/lerobot
-bash run_final_mlp_act.sh
+bash local_scripts/run_final_mlp_act.sh
 
 # task2: GRU-RGBOnly-FS -> GRU-SemQ-FS -> DP-1F-Full-finaldata-seg-FS-DatasetNorm
 cd /home/qihan/data/lerobot
-bash run_final_gru_dp.sh
+bash local_scripts/run_final_gru_dp.sh
 ```
 
 完整参数在脚本内；`DRY_RUN=1 bash <脚本名>` 可打印实际命令。
@@ -633,7 +633,7 @@ front 提供候选区域和全局特征，side 接入原版第二相机分支；
 输入是 follower `observation.state`，监督仍是原始数据 `action`，不是 follower delta。
 具体适配和复现边界见 [VIOLA_BASELINE.md](mycode/VIOLA_BASELINE.md)。
 
-使用独立环境 `.cache/viola/venv/bin/python`，当前已经配置。重建时执行 `bash mycode/setup_viola_baseline.sh`。
+使用独立环境 `.cache/viola/venv/bin/python`，当前已经配置。重建时执行 `bash local_scripts/setup_viola_baseline.sh`。
 不强制指定 GPU；需要分配时在命令前添加 `CUDA_VISIBLE_DEVICES=0` 或 `1`。
 
 ### 短程链路验证
@@ -688,7 +688,7 @@ cd /data/qihan/lerobot
 
 ```bash
 cd /data/qihan/lerobot
-bash mycode/run_viola_finaldata_fs.sh
+bash local_scripts/run_viola_finaldata_fs.sh
 ```
 
 此次在 `tmux task1` 使用 `CUDA_VISIBLE_DEVICES=1` 启动上述流程；日志分别为

@@ -70,7 +70,7 @@ def validate_runtime(configuration):
             or not configuration.get("lock_grippers")):
         raise ValueError("VIOLA requires synchronous single-step prediction/replanning, no fusion/auto-replan/AMP, and locked grippers")
     if not PYTHON.is_file():
-        raise ValueError("VIOLA environment is missing. Run: BASE_PYTHON=$(which python) bash mycode/setup_viola_baseline.sh")
+        raise ValueError("VIOLA environment is missing. Run: BASE_PYTHON=$(which python) bash local_scripts/setup_viola_baseline.sh")
 
 
 class IdentityProcessor:

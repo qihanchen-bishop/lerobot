@@ -20,9 +20,9 @@
 ```bash
 cd /home/qihan/data/lerobot
 # task1：RGBD + 语义，无Qtoken
-CUDA_VISIBLE_DEVICES=0 bash run_ur_semq_ablations_v1.sh semantic-no-query rgbd
+CUDA_VISIBLE_DEVICES=0 bash local_scripts/run_ur_semq_ablations_v1.sh semantic-no-query rgbd
 # task2：RGBD + Qtoken，无语义视觉输入
-CUDA_VISIBLE_DEVICES=1 bash run_ur_semq_ablations_v1.sh rgb-query rgbd
+CUDA_VISIBLE_DEVICES=1 bash local_scripts/run_ur_semq_ablations_v1.sh rgb-query rgbd
 ```
 
 省略脚本第二参数时仍为原来的 `rgb`，旧命令保持不变。日志与模型位于
@@ -62,9 +62,9 @@ RGBD真实数据预检（3步短训、归一化一致性、输入隔离、checkp
 ```bash
 cd /home/qihan/data/lerobot
 # task1：RGB + 语义，无Qtoken
-CUDA_VISIBLE_DEVICES=0 bash run_ur_semq_ablations_v1.sh semantic-no-query
+CUDA_VISIBLE_DEVICES=0 bash local_scripts/run_ur_semq_ablations_v1.sh semantic-no-query
 # task2：RGB + Qtoken，无语义视觉输入；可与上组并行
-CUDA_VISIBLE_DEVICES=1 bash run_ur_semq_ablations_v1.sh rgb-query
+CUDA_VISIBLE_DEVICES=1 bash local_scripts/run_ur_semq_ablations_v1.sh rgb-query
 ```
 
 GPU编号仅用于本机分配，可省略或按空闲情况调整。脚本拒绝覆盖已有输出并带独占锁。
@@ -123,9 +123,9 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 /home/qihan/miniconda3/envs/lerobot/bin
   --root data/realsense_rgbd_merged4_seg --output-dir outputs/cache/ur_semq_v1_merged4 --workers 12
 
 # task1，RGB组
-bash run_ur_semq_v1.sh rgb
+bash local_scripts/run_ur_semq_v1.sh rgb
 # task2，RGBD组；可与上一组同时运行
-bash run_ur_semq_v1.sh rgbd
+bash local_scripts/run_ur_semq_v1.sh rgbd
 ```
 
 两个模式共享只读无损类别缓存（约90GB十进制），但拥有独立派生训练视图、模型、优化器和日志。
@@ -173,16 +173,16 @@ RGBD 指同一 RealSense 相机的 RGB + TURBO 深度伪彩图，不是两个相
 ```bash
 # task1: ACT RGB -> ACT RGBD
 cd /home/qihan/data/lerobot
-bash run_ur_merged4_act.sh
+bash local_scripts/run_ur_merged4_act.sh
 ```
 
 ```bash
 # task2: DP RGB -> DP RGBD
 cd /home/qihan/data/lerobot
-bash run_ur_merged4_dp.sh
+bash local_scripts/run_ur_merged4_dp.sh
 ```
 
-用 `DRY_RUN=1 bash run_ur_merged4_act.sh` 或 `DRY_RUN=1 bash run_ur_merged4_dp.sh` 查看完整独立命令。
+用 `DRY_RUN=1 bash local_scripts/run_ur_merged4_act.sh` 或 `DRY_RUN=1 bash local_scripts/run_ur_merged4_dp.sh` 查看完整独立命令。
 脚本使用锁防止重复启动，拒绝覆盖任何已有实验输出；前一个实验失败时队列停止。没有自动续训或删除数据。
 脚本本身不固定GPU；本次tmux启动分别设置 `CUDA_VISIBLE_DEVICES=0`（ACT）和 `1`（DP）。
 实时日志：`outputs/logs/<实验名称>.log`；checkpoint：`outputs/train/<实验名称>/checkpoints/last/pretrained_model`。
@@ -362,7 +362,7 @@ conda run --no-capture-output -n lerobot python -u mycode/train_lerobot_policy.p
 一键串行运行四个实验：
 
 ```bash
-./run_ur_test1_fdelta_gripper_ft.sh
+./local_scripts/run_ur_test1_fdelta_gripper_ft.sh
 ```
 
 ## test1_full 双视角 follower delta + 独立夹爪头

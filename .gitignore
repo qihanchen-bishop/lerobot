@@ -137,8 +137,6 @@ instance/
 profile_default/
 ipython_config.py
 
-# Sphinx
-docs/_build/
 
 # MkDocs
 /site
@@ -189,3 +187,8 @@ wandb/
 *.xml
 *.part
 usefulcommand.md
+
+### Local-only documentation and shell scripts ###
+/docs/
+/local_scripts/
+*.sh

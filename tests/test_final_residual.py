@@ -28,7 +28,10 @@ def config(variant):
 
 def test_launcher_four_runs_and_two_caches():
     root = Path(__file__).resolve().parents[1]
-    result = subprocess.run(["bash", "run_final_viewqtoken_residuals.sh", "all"], cwd=root,
+    script = root / "local_scripts" / "run_final_viewqtoken_residuals.sh"
+    if not script.is_file():
+        pytest.skip("Local training scripts are not distributed with the repository")
+    result = subprocess.run(["bash", str(script), "all"], cwd=root,
                             env={**os.environ, "DRY_RUN": "1"}, text=True, capture_output=True, check=True)
     lines = result.stdout.splitlines()
     assert len(lines) == 12

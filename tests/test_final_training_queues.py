@@ -16,7 +16,10 @@ from mycode import train_lerobot_policy as runner
 ])
 def test_queue_order_and_normalization(script, policy, residual, monkeypatch, tmp_path):
     root = Path(__file__).resolve().parents[1]
-    result = subprocess.run(["bash", script], cwd=root, env={**os.environ, "DRY_RUN": "1"},
+    script_path = root / "local_scripts" / script
+    if not script_path.is_file():
+        pytest.skip("Local training scripts are not distributed with the repository")
+    result = subprocess.run(["bash", str(script_path)], cwd=root, env={**os.environ, "DRY_RUN": "1"},
                             capture_output=True, text=True, check=True)
     lines = result.stdout.splitlines()
     assert len(lines) == 7
