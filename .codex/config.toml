@@ -1,0 +1,7 @@
+# Project default selected after gpt-6-astra returned a capacity error.
+model = "gpt-6.2-sol"
+
+# Keep long LeRobot sessions bounded.
+# These limits apply when Codex loads this project's configuration.
+model_auto_compact_token_limit = 100000
+tool_output_token_limit = 6000
